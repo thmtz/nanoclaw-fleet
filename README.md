@@ -4,6 +4,8 @@
 
 This fork turns NanoClaw into a **fleet manager for isolated coding agents**, all controlled from Discord. Send a message in a master channel to spin up a new agent. It gets its own Discord channel, Docker container, and pre-configured dev environment (cloned repos, tools, credentials). Tear it down when you're done. Workers are fully isolated from each other and can run on Claude or open-source models, with live model switching and per-worker usage tracking.
 
+![Status dashboard showing master and five workers](assets/screenshot-status.png)
+
 ## Quick Start
 
 Full guide: [docs/guides/setup.md](docs/guides/setup.md)
@@ -35,6 +37,8 @@ Workers default to Claude (Opus). To use open-source models, start the translati
 The master can discover available models by name ("kimi fast", "qwen coder") without memorizing identifiers. Models within Neuralwatt can be switched live. Switching between Anthropic and Neuralwatt requires recreating the worker (workspace is preserved).
 
 See [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md) and [docs/architecture/model-discovery.md](docs/architecture/model-discovery.md).
+
+![Worker investigating CI regression runs](assets/screenshot-worker.png)
 
 ## Usage & Energy Tracking
 
