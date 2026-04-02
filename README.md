@@ -4,7 +4,7 @@
 
 This fork turns NanoClaw into a **fleet manager for isolated coding agents**, all controlled from Discord. Send a message in a master channel to spin up a new agent. It gets its own Discord channel, Docker container, and pre-configured dev environment (cloned repos, tools, credentials). Tear it down when you're done. Workers are fully isolated from each other and can run on Claude or open-source models, with live model switching and per-worker usage tracking.
 
-![Status dashboard showing master and five workers](assets/screenshot-status.png)
+<img src="assets/screenshot-status.png" alt="Status dashboard showing master and five workers" width="700">
 
 ## Quick Start
 
@@ -38,7 +38,7 @@ The master can discover available models by name ("kimi fast", "qwen coder") wit
 
 See [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md) and [docs/architecture/model-discovery.md](docs/architecture/model-discovery.md).
 
-![Worker investigating CI regression runs](assets/screenshot-worker.png)
+<img src="assets/screenshot-worker.png" alt="Worker investigating CI regression runs" width="700">
 
 ## Usage & Energy Tracking
 
