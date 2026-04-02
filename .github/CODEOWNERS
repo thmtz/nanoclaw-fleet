@@ -1,0 +1,10 @@
+# Core code
+/src/
+/container/
+/groups/
+/launchd/
+/package.json
+/package-lock.json
+
+# Skills - open to contributors
+/.claude/skills/

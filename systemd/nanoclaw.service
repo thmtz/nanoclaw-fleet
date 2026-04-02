@@ -1,0 +1,20 @@
+[Unit]
+Description=NanoClaw - Dynamic Worker Agent Manager
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory={{PROJECT_ROOT}}
+ExecStart={{NODE_PATH}} {{PROJECT_ROOT}}/dist/index.js
+Restart=always
+RestartSec=5
+
+Environment=HOME={{HOME}}
+Environment=PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=ASSISTANT_NAME=NanoClaw
+# EnvironmentFile={{PROJECT_ROOT}}/.env
+# Environment=NANOCLAW_GITHUB_TOKEN_PATH={{HOME}}/.config/nanoclaw/github_token
+
+[Install]
+WantedBy=default.target

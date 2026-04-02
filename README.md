@@ -1,0 +1,72 @@
+# NanoClaw (Agent Fleet Manager)
+
+> Fork of [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw) — a lightweight, secure personal assistant that runs Claude agents in containers, connected to messaging channels.
+
+This fork turns NanoClaw into a **fleet manager for isolated coding agents**, all controlled from Discord. Send a message in a master channel to spin up a new agent. It gets its own Discord channel, Docker container, and pre-configured dev environment (cloned repos, tools, credentials). Tear it down when you're done. Workers are fully isolated from each other and can run on Claude or open-source models, with live model switching and per-worker usage tracking.
+
+## Quick Start
+
+Full guide: [docs/guides/setup.md](docs/guides/setup.md)
+
+1. Fork and clone this repo
+2. Create a Discord server + bot with Manage Channels permission
+3. Configure `.env` (bot token, guild ID, model, GitHub PAT path)
+4. Set up worker profiles in `~/.config/nanoclaw/worker-profiles/`
+5. `npm run build && systemctl --user start nanoclaw`
+6. In `#master`: "create a worker named my-task"
+
+## Architecture
+
+```
+Discord Server
+  #master          <-->  NanoClaw host  <-->  Master agent (lifecycle only)
+  #worker-alpha    <-->       |         <-->  Container A (Claude or Neuralwatt)
+  #worker-beta     <-->       |         <-->  Container B (Claude or Neuralwatt)
+```
+
+One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master does minimal thinking: it calls MCP tools (create, destroy, list, switch) with the right arguments. Workers handle all the real work.
+
+For goals, design principles, and detailed architecture, see [docs/architecture/overview.md](docs/architecture/overview.md).
+
+## Inference Backends
+
+Workers default to Claude (Opus). To use open-source models, start the translation shim and create a worker with `backend: neuralwatt`. The shim translates between Anthropic and OpenAI API formats, including streaming SSE.
+
+The master can discover available models by name ("kimi fast", "qwen coder") without memorizing identifiers. Models within Neuralwatt can be switched live. Switching between Anthropic and Neuralwatt requires recreating the worker (workspace is preserved).
+
+See [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md) and [docs/architecture/model-discovery.md](docs/architecture/model-discovery.md).
+
+## Restart Behavior
+
+Containers run with `--rm` and are destroyed on NanoClaw restart. Everything else persists: Discord channels, SQLite registrations, repos (bind-mounted workspace), and session IDs. On restart, workers respawn on next message with full context.
+
+See [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md).
+
+## Documentation
+
+| Section | What's in it |
+|-|-|
+| [docs/architecture/](docs/architecture/) | How the system works (overview, routing, lifecycle, streaming) |
+| [docs/guides/](docs/guides/) | Setup, testing, troubleshooting |
+| [docs/reference/](docs/reference/) | SDK internals |
+| [design/](design/) | Design history and archived proposals |
+
+Full index: [docs/README.md](docs/README.md)
+
+## Development
+
+```bash
+npm run dev          # Run with hot reload
+npm run build        # Compile TypeScript
+./container/build.sh # Rebuild agent container image
+
+# Service management (Linux)
+systemctl --user start nanoclaw
+systemctl --user restart nanoclaw
+```
+
+Pre-push hook runs prettier, tsc, and tests. Enable with `git config core.hooksPath .githooks`.
+
+## Upstream
+
+This fork tracks [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw). Pull updates with `git fetch upstream main && git merge upstream/main`, or use the `/update-nanoclaw` skill for guided cherry-picking.

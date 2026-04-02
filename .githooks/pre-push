@@ -1,0 +1,30 @@
+#!/bin/bash
+# Pre-push hook: run prettier + tsc before pushing
+
+echo "[pre-push] Checking formatting..."
+npm run format:check 2>&1
+if [ $? -ne 0 ]; then
+  echo "[pre-push] ❌ Formatting issues. Run: npm run format"
+  exit 1
+fi
+
+echo "[pre-push] Type-checking (host)..."
+npx tsc --noEmit 2>&1
+if [ $? -ne 0 ]; then
+  echo "[pre-push] ❌ Type errors in src/."
+  exit 1
+fi
+
+echo "[pre-push] Type-checking (agent-runner)..."
+if [ -d container/agent-runner/node_modules ]; then
+  (cd container/agent-runner && npx tsc --noEmit 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "[pre-push] ❌ Type errors in container/agent-runner/."
+    echo "[pre-push] This code runs inside containers — type errors crash workers at startup."
+    exit 1
+  fi
+else
+  echo "[pre-push] ⚠ Skipping agent-runner check (run: cd container/agent-runner && npm install)"
+fi
+
+echo "[pre-push] ✅ All checks passed."
