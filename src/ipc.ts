@@ -3,11 +3,130 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  BACKEND_NEURALWATT,
+  DATA_DIR,
+  type InferenceBackend,
+  IPC_POLL_INTERVAL,
+  NEURALWATT_PROXY_PORT,
+  TIMEZONE,
+  WORKER_BACKENDS_FILENAME,
+} from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { sanitizeFolderName } from './container-runtime.js';
+import { readEnvFile } from './env.js';
+
+/** Read-modify-write worker-backends.json. Atomic via temp file. */
+function updateWorkerBackends(
+  folder: string,
+  backend: string | null,
+  model?: string,
+): void {
+  const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
+  let backends: Record<string, { backend: string; model?: string }> = {};
+  try {
+    if (fs.existsSync(backendsPath)) {
+      backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+    }
+  } catch {
+    /* corrupt file — start fresh */
+  }
+
+  if (backend === BACKEND_NEURALWATT) {
+    backends[folder] = {
+      backend: BACKEND_NEURALWATT,
+      ...(model ? { model } : {}),
+    };
+  } else {
+    delete backends[folder];
+  }
+
+  fs.mkdirSync(path.dirname(backendsPath), { recursive: true });
+  const tmpPath = `${backendsPath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(backends, null, 2));
+  fs.renameSync(tmpPath, backendsPath);
+}
+
+/** Update NANOCLAW_BACKEND in worker.env so container-runner routes correctly on next spawn. */
+export function updateWorkerEnvBackend(
+  folder: string,
+  backend: InferenceBackend | string,
+): void {
+  const envPath = path.join(DATA_DIR, 'sessions', folder, 'worker.env');
+  if (!fs.existsSync(envPath)) {
+    logger.warn({ folder }, 'updateWorkerEnvBackend: worker.env not found');
+    return;
+  }
+  const content = fs.readFileSync(envPath, 'utf-8');
+  const lines = content
+    .split('\n')
+    .filter((l) => !l.startsWith('NANOCLAW_BACKEND='));
+  if (backend === BACKEND_NEURALWATT) {
+    lines.push(`NANOCLAW_BACKEND=${BACKEND_NEURALWATT}`);
+  }
+  // Preserve trailing newline if the original file had one
+  const result = lines.join('\n');
+  fs.writeFileSync(envPath, content.endsWith('\n') ? result + '\n' : result);
+}
+
+/** Format a usage stats object into a human-readable string. */
+function formatUsageStats(stats: {
+  requests?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  energy_joules?: number;
+  energy_kwh?: number;
+}): string {
+  const parts: string[] = [];
+  if (stats.requests) parts.push(`${stats.requests} requests`);
+  if (stats.total_tokens) {
+    const t = stats.total_tokens;
+    parts.push(t >= 1000 ? `${(t / 1000).toFixed(1)}k tokens` : `${t} tokens`);
+  }
+  if (stats.energy_joules) {
+    const j = stats.energy_joules;
+    if (j >= 1000) parts.push(`${(j / 1000).toFixed(2)} kJ`);
+    else parts.push(`${j.toFixed(1)} J`);
+  }
+  if (stats.energy_kwh) {
+    const kwh = stats.energy_kwh;
+    if (kwh >= 0.001) parts.push(`${(kwh * 1000).toFixed(1)} Wh`);
+    else parts.push(`${(kwh * 1e6).toFixed(1)} mWh`);
+  }
+  return parts.join(', ') || 'no usage data';
+}
+
+/** Fetch usage stats for a worker from the shim. Returns null if unavailable. */
+async function fetchWorkerUsage(
+  folder: string,
+): Promise<Record<string, number> | null> {
+  try {
+    const resp = await fetch(
+      `http://localhost:${NEURALWATT_PROXY_PORT}/usage/${folder}`,
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if ((data as any).error) return null;
+    return data as Record<string, number>;
+  } catch {
+    return null;
+  }
+}
+import {
+  createTask,
+  deleteRegisteredGroup,
+  deleteSession,
+  deleteTask,
+  getSession,
+  getTaskById,
+  getTasksForGroup,
+  setSession,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { loadWorkerProfile } from './profile-sync.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -22,9 +141,38 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  // Optional: create/delete Discord channels for dynamic workers
+  createDiscordChannel?: (
+    guildId: string,
+    name: string,
+    categoryId?: string,
+  ) => Promise<string>;
+  deleteDiscordChannel?: (channelId: string) => Promise<void>;
+  // Optional: stop a group's running container
+  stopGroupContainer?: (jid: string) => void;
+  // Container stats for capacity warnings
+  getContainerStats?: () => { active: number; max: number };
 }
 
 let ipcWatcherRunning = false;
+
+/**
+ * Tracks groups that sent IPC messages (send_message) during the current agent turn.
+ * The output callback in index.ts checks this to suppress duplicate SDK output.
+ */
+const groupsSentMessage = new Set<string>();
+
+export function markGroupSentMessage(sourceGroup: string): void {
+  groupsSentMessage.add(sourceGroup);
+}
+
+export function didGroupSendMessage(sourceGroup: string): boolean {
+  return groupsSentMessage.has(sourceGroup);
+}
+
+export function clearGroupSentMessage(sourceGroup: string): void {
+  groupsSentMessage.delete(sourceGroup);
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -81,6 +229,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
+                  markGroupSentMessage(sourceGroup);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -124,8 +273,8 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(tasksDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              // Pass source group identity to processTaskIpc for authorization
-              await processTaskIpc(data, sourceGroup, isMain, deps);
+              // Pass source group identity and filename for response files
+              await processTaskIpc(data, sourceGroup, isMain, deps, file);
               fs.unlinkSync(filePath);
             } catch (err) {
               logger.error(
@@ -153,6 +302,17 @@ export function startIpcWatcher(deps: IpcDeps): void {
   logger.info('IPC watcher started (per-group namespaces)');
 }
 
+/** Refresh the available_groups.json snapshot for the master's IPC directory. */
+function refreshGroupsSnapshot(deps: IpcDeps, sourceGroup: string): void {
+  const groups = deps.getAvailableGroups();
+  deps.writeGroupsSnapshot(
+    sourceGroup,
+    true,
+    groups,
+    new Set(Object.keys(deps.registeredGroups())),
+  );
+}
+
 export async function processTaskIpc(
   data: {
     type: string;
@@ -171,11 +331,35 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For create_worker / destroy_worker
+    guild_id?: string;
+    channel_name?: string;
+    category_id?: string;
+    reply_jid?: string;
+    profile?: string;
+    backend?: string;
+    model?: string;
+    worker_name?: string;
+    reuse?: 'resume' | 'fresh';
+    // For transfer_worker
+    source_worker?: string;
+    target_name?: string;
+    target_backend?: string;
+    target_model?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
   deps: IpcDeps,
+  taskFilename?: string, // For writing response files back to the agent
 ): Promise<void> {
+  // Write a response file that the agent can poll for
+  const writeResponse = (success: boolean, message: string) => {
+    if (!taskFilename) return;
+    const responsesDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+    fs.mkdirSync(responsesDir, { recursive: true });
+    const responsePath = path.join(responsesDir, taskFilename);
+    fs.writeFileSync(responsePath, JSON.stringify({ success, message }));
+  };
   const registeredGroups = deps.registeredGroups();
 
   switch (data.type) {
@@ -399,14 +583,7 @@ export async function processTaskIpc(
           'Group metadata refresh requested via IPC',
         );
         await deps.syncGroups(true);
-        // Write updated snapshot immediately
-        const availableGroups = deps.getAvailableGroups();
-        deps.writeGroupsSnapshot(
-          sourceGroup,
-          true,
-          availableGroups,
-          new Set(Object.keys(registeredGroups)),
-        );
+        refreshGroupsSnapshot(deps, sourceGroup);
       } else {
         logger.warn(
           { sourceGroup },
@@ -448,6 +625,646 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'create_worker':
+      // Create a Discord channel and register a new group for it.
+      // Main group only.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized create_worker attempt blocked',
+        );
+        break;
+      }
+      if (!deps.createDiscordChannel) {
+        logger.warn('create_worker: no createDiscordChannel handler available');
+        break;
+      }
+      if (data.guild_id && data.channel_name && data.folder && data.trigger) {
+        if (!isValidGroupFolder(data.folder)) {
+          logger.warn(
+            { folder: data.folder },
+            'create_worker: invalid folder name',
+          );
+          break;
+        }
+        // Check for duplicate worker name (live worker)
+        const existingGroups = deps.registeredGroups();
+        const duplicate = Object.values(existingGroups).find(
+          (g) => g.folder === data.folder,
+        );
+        if (duplicate) {
+          logger.warn(
+            { folder: data.folder },
+            'create_worker: duplicate folder name',
+          );
+          writeResponse(
+            false,
+            `Worker "${data.channel_name}" already exists. Destroy it first or use a different name.`,
+          );
+          if (data.reply_jid) {
+            await deps.sendMessage(
+              data.reply_jid,
+              `Worker "${data.channel_name}" already exists. Destroy it first or use a different name.`,
+            );
+          }
+          break;
+        }
+
+        // Check for leftover workspace from a previously destroyed worker
+        const leftoverGroupDir = path.join(
+          process.cwd(),
+          'groups',
+          data.folder,
+        );
+        const hasLeftover = fs.existsSync(leftoverGroupDir);
+        if (hasLeftover && data.reuse !== 'resume' && data.reuse !== 'fresh') {
+          const hasSession = !!getSession(data.folder);
+          writeResponse(
+            false,
+            `NAME COLLISION: Workspace for "${data.channel_name}" already exists from a previous session${hasSession ? ' (with conversation history)' : ''}. ` +
+              `You MUST ask the user whether to resume or start fresh. ` +
+              `Then call create_worker again with reuse: "resume" (keep old workspace + session) or reuse: "fresh" (wipe and start clean). ` +
+              `Do NOT pick one without asking.`,
+          );
+          if (data.reply_jid) {
+            await deps.sendMessage(
+              data.reply_jid,
+              `Previous workspace found for **${data.channel_name}**${hasSession ? ' (with conversation history)' : ''}. Resume the old session, or start fresh?`,
+            );
+          }
+          break;
+        }
+
+        // Handle reuse=fresh: wipe old workspace and session
+        if (hasLeftover && data.reuse === 'fresh') {
+          fs.rmSync(leftoverGroupDir, { recursive: true, force: true });
+          const leftoverSessionDir = path.join(
+            DATA_DIR,
+            'sessions',
+            data.folder,
+          );
+          if (fs.existsSync(leftoverSessionDir)) {
+            fs.rmSync(leftoverSessionDir, { recursive: true, force: true });
+          }
+          // deleteSession handled by unconditional cleanup below
+          logger.info(
+            { folder: data.folder },
+            'create_worker: wiped leftover workspace (fresh start)',
+          );
+        }
+
+        // Clear stale session data so a new/recreated worker starts fresh.
+        // Stale .claude/ dirs (with old debug logs, skills symlinks, etc.) cause the
+        // SDK to crash with exit code 1 before making any API call.
+        // Skip when resuming — preserve the existing session ID and .claude/ dir.
+        if (data.reuse !== 'resume') {
+          deleteSession(data.folder);
+          const staleClaudeDir = path.join(
+            DATA_DIR,
+            'sessions',
+            data.folder,
+            '.claude',
+          );
+          if (fs.existsSync(staleClaudeDir)) {
+            fs.rmSync(staleClaudeDir, { recursive: true, force: true });
+            logger.info(
+              { folder: data.folder },
+              'create_worker: cleared stale .claude session data',
+            );
+          }
+        }
+        // Always clear cached agent-runner source (even on resume) — it's a
+        // build cache, not user data. container-runner re-syncs it on spawn.
+        const staleRunnerDir = path.join(
+          DATA_DIR,
+          'sessions',
+          data.folder,
+          'agent-runner-src',
+        );
+        if (fs.existsSync(staleRunnerDir)) {
+          fs.rmSync(staleRunnerDir, { recursive: true, force: true });
+        }
+
+        try {
+          const profileName = (data.profile as string) || 'default';
+          const { profile, profilePath } = loadWorkerProfile(profileName);
+          if (fs.existsSync(profilePath)) {
+            logger.info({ profileName, profilePath }, 'Loaded worker profile');
+          } else {
+            logger.warn(
+              { profileName },
+              'Worker profile not found, using empty defaults',
+            );
+          }
+
+          const channelId = await deps.createDiscordChannel(
+            data.guild_id,
+            data.channel_name,
+            data.category_id,
+          );
+          const jid = `dc:${channelId}`;
+
+          // Set up group directory with worker CLAUDE.md
+          const groupDir = path.join(process.cwd(), 'groups', data.folder);
+          fs.mkdirSync(groupDir, { recursive: true });
+          if (profile.claude_md) {
+            // Resolve relative to profile directory
+            const profileDir = path.dirname(profilePath);
+            const claudeMdSrc = path.join(profileDir, profile.claude_md);
+            if (fs.existsSync(claudeMdSrc)) {
+              fs.copyFileSync(claudeMdSrc, path.join(groupDir, 'CLAUDE.md'));
+            }
+          }
+
+          // Write worker env file for init script (repos + tools + skills)
+          // Use | as separator — newlines break docker -e parsing
+          const workerEnv: Record<string, string> = {};
+          if (profile.repos?.length) {
+            workerEnv.WORKER_REPOS = profile.repos.map((r) => r.url).join('|');
+          }
+          if (profile.tools?.length) {
+            workerEnv.WORKER_TOOLS = profile.tools.join('|');
+          }
+          if (profile.skills_repo) {
+            workerEnv.WORKER_SKILLS_REPO = profile.skills_repo;
+          }
+          // Backend selection: 'anthropic' (default) or 'neuralwatt'
+          if (data.backend === BACKEND_NEURALWATT) {
+            workerEnv.NANOCLAW_BACKEND = BACKEND_NEURALWATT;
+            updateWorkerBackends(data.folder, BACKEND_NEURALWATT, data.model);
+          }
+          const envDir = path.join(DATA_DIR, 'sessions', data.folder);
+          fs.mkdirSync(envDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(envDir, 'worker.env'),
+            Object.entries(workerEnv)
+              .map(([k, v]) => `${k}=${v}`)
+              .join('\n'),
+          );
+
+          deps.registerGroup(jid, {
+            name: data.channel_name,
+            folder: data.folder,
+            trigger: data.trigger,
+            added_at: new Date().toISOString(),
+            containerConfig: {
+              additionalMounts: profile.mounts || [],
+              disableIdleTimeout: true, // Workers stay alive until explicitly destroyed
+            },
+            requiresTrigger: false, // Workers have dedicated channels — no trigger needed
+          });
+          // Notify the master channel that the worker was created
+          if (data.reply_jid) {
+            await deps.sendMessage(
+              data.reply_jid,
+              `Worker created: **#${data.channel_name}** (channel <#${channelId}>)`,
+            );
+          }
+          logger.info({ channelId, folder: data.folder }, 'Worker created');
+
+          // Refresh snapshot so master can immediately resolve by name
+          refreshGroupsSnapshot(deps, sourceGroup);
+
+          // Warn if at or near container capacity.
+          // active count doesn't include this new worker yet (spawns on first message),
+          // so compare active+1 against max.
+          const stats = deps.getContainerStats?.();
+          const capacityNote =
+            stats && stats.active + 1 > stats.max
+              ? `\n⚠️ All container slots are full (${stats.active}/${stats.max}). The worker won't start until a slot frees up.`
+              : stats && stats.active + 1 >= stats.max
+                ? `\n⚠️ Container slots will be full after this worker starts (${stats.active + 1}/${stats.max}).`
+                : '';
+
+          writeResponse(
+            true,
+            `Worker created: #${data.channel_name} (channel <#${channelId}>)${capacityNote}`,
+          );
+          if (capacityNote && data.reply_jid) {
+            await deps.sendMessage(data.reply_jid, capacityNote.trim());
+          }
+        } catch (err) {
+          logger.error({ err, data }, 'Failed to create worker');
+          writeResponse(false, `Failed to create worker: ${err}`);
+          if (data.reply_jid) {
+            await deps.sendMessage(
+              data.reply_jid,
+              `Failed to create worker: ${err}`,
+            );
+          }
+        }
+      } else {
+        logger.warn(
+          { data },
+          'create_worker: missing required fields (guild_id, channel_name, folder, trigger)',
+        );
+      }
+      break;
+
+    case 'destroy_worker':
+      // Delete a Discord channel and unregister the group.
+      // Main group only.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized destroy_worker attempt blocked',
+        );
+        break;
+      }
+      if (!deps.deleteDiscordChannel) {
+        logger.warn(
+          'destroy_worker: no deleteDiscordChannel handler available',
+        );
+        break;
+      }
+      if (data.jid) {
+        // Guard against self-destruction
+        const groups = deps.registeredGroups();
+        const targetGroup = groups[data.jid];
+        if (targetGroup?.isMain) {
+          logger.warn(
+            { jid: data.jid },
+            'destroy_worker: refusing to destroy main group',
+          );
+          if (data.reply_jid) {
+            await deps.sendMessage(
+              data.reply_jid,
+              `Refused: cannot destroy the master group.`,
+            );
+          }
+          break;
+        }
+        try {
+          // Stop the container first, then wait briefly for it to wind down
+          // before deleting the channel (avoids race where container tries to
+          // send to a deleted channel).
+          if (deps.stopGroupContainer) {
+            deps.stopGroupContainer(data.jid);
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          const channelId = data.jid.replace(/^dc:/, '');
+          try {
+            await deps.deleteDiscordChannel(channelId);
+          } catch (channelErr: unknown) {
+            // Treat "Unknown Channel" (already deleted) as success —
+            // proceed with unregistration cleanup regardless.
+            const msg = channelErr instanceof Error ? channelErr.message : '';
+            if (!msg.includes('Unknown Channel')) {
+              throw channelErr;
+            }
+            logger.info(
+              { jid: data.jid },
+              'Discord channel already deleted, proceeding with cleanup',
+            );
+          }
+          // Remove from registered groups (memory + DB)
+          if (groups[data.jid]) {
+            delete groups[data.jid];
+          }
+          // Fetch usage stats before removing from DB
+          const destroyedFolder = targetGroup?.folder;
+          let usageReport = '';
+          if (destroyedFolder) {
+            const usage = await fetchWorkerUsage(destroyedFolder);
+            if (usage && usage.requests > 0) {
+              usageReport = `\n📊 Lifetime usage: ${formatUsageStats(usage)}`;
+            }
+          }
+
+          deleteRegisteredGroup(data.jid);
+          if (destroyedFolder) {
+            // Keep session ID in the DB so create_worker with reuse="resume"
+            // can look it up and pass it to the Claude SDK for continuation.
+            // deleteSession is intentionally NOT called here.
+
+            // Preserve session dir (.claude/ with conversation history) so
+            // create_worker with reuse="resume" can restore the full session.
+            // Only clear the cached agent-runner source — it's a build cache
+            // that container-runner re-syncs on spawn anyway.
+            const staleRunnerDir = path.join(
+              DATA_DIR,
+              'sessions',
+              destroyedFolder,
+              'agent-runner-src',
+            );
+            if (fs.existsSync(staleRunnerDir)) {
+              fs.rmSync(staleRunnerDir, { recursive: true, force: true });
+            }
+
+            // Clean up worker-backends.json entry (prevents unbounded growth)
+            updateWorkerBackends(destroyedFolder, null);
+
+            // Clean up IPC directory for this worker
+            const ipcDir = path.join(DATA_DIR, 'ipc', destroyedFolder);
+            if (fs.existsSync(ipcDir)) {
+              fs.rmSync(ipcDir, { recursive: true, force: true });
+            }
+
+            // Cancel scheduled tasks for this worker
+            const workerTasks = getTasksForGroup(destroyedFolder);
+            for (const task of workerTasks) {
+              deleteTask(task.id);
+            }
+            if (workerTasks.length > 0) {
+              logger.info(
+                { folder: destroyedFolder, count: workerTasks.length },
+                'Cleaned up scheduled tasks for destroyed worker',
+              );
+            }
+          }
+          const destroyMsg = `Worker destroyed: ${targetGroup?.name || data.jid}${usageReport}`;
+          if (data.reply_jid) {
+            await deps.sendMessage(data.reply_jid, destroyMsg);
+          }
+          logger.info({ jid: data.jid }, 'Worker destroyed');
+
+          // Refresh snapshot so master no longer resolves this worker
+          refreshGroupsSnapshot(deps, sourceGroup);
+
+          writeResponse(true, destroyMsg);
+        } catch (err) {
+          logger.error({ err, data }, 'Failed to destroy worker');
+          writeResponse(false, `Failed to destroy worker: ${err}`);
+          if (data.reply_jid) {
+            await deps.sendMessage(
+              data.reply_jid,
+              `Failed to destroy worker: ${err}`,
+            );
+          }
+        }
+      } else {
+        logger.warn({ data }, 'destroy_worker: missing jid');
+      }
+      break;
+
+    case 'cleanup_workers': {
+      // Kill orphaned containers and remove stale registrations.
+      // Main group only.
+      if (!isMain) break;
+      try {
+        const cleaned: string[] = [];
+
+        // 1. Stop orphaned containers (nanoclaw-* that aren't the master)
+        const { execSync } = await import('child_process');
+        const containerOutput = execSync(
+          `docker ps --filter name=nanoclaw- --format '{{.Names}}'`,
+          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+        ).trim();
+        const runningContainers = containerOutput
+          ? containerOutput.split('\n')
+          : [];
+        const groups = deps.registeredGroups();
+        // Container names sanitize folder names (see sanitizeFolderName),
+        // so we apply the same transform to match correctly.
+        const groupValues = Object.values(groups);
+        const registeredFolders = new Set(
+          groupValues.map((g) => sanitizeFolderName(g.folder)),
+        );
+        const mainFolders = new Set(
+          groupValues
+            .filter((g) => g.isMain)
+            .map((g) => sanitizeFolderName(g.folder)),
+        );
+        for (const name of runningContainers) {
+          // Extract folder from container name: nanoclaw-<folder>-<timestamp>
+          const match = name.match(/^nanoclaw-(.+)-\d+$/);
+          if (!match) continue;
+          const folder = match[1];
+          // Keep master container
+          if (mainFolders.has(folder)) continue;
+          // Kill if not registered
+          if (!registeredFolders.has(folder)) {
+            try {
+              execSync(`docker stop ${name}`, { stdio: 'pipe' });
+              cleaned.push(`stopped orphan container: ${name}`);
+            } catch {
+              /* already stopped */
+            }
+          }
+        }
+
+        // 2. Count remaining containers
+        const remainingOutput = execSync(
+          `docker ps --filter name=nanoclaw- --format '{{.Names}}'`,
+          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+        ).trim();
+        const remaining = remainingOutput
+          ? remainingOutput.split('\n').length
+          : 0;
+
+        const msg =
+          cleaned.length > 0
+            ? `Cleaned up ${cleaned.length} items:\n${cleaned.map((c) => `• ${c}`).join('\n')}\n\n${remaining} container(s) running.`
+            : `Nothing to clean up. ${remaining} container(s) running.`;
+        writeResponse(true, msg);
+        if (data.reply_jid) {
+          await deps.sendMessage(data.reply_jid, msg);
+        }
+        logger.info(
+          { cleaned: cleaned.length, remaining },
+          'cleanup_workers completed',
+        );
+      } catch (err) {
+        const msg = `Cleanup failed: ${err}`;
+        writeResponse(false, msg);
+        if (data.reply_jid) {
+          await deps.sendMessage(data.reply_jid, msg);
+        }
+      }
+      break;
+    }
+
+    case 'switch_backend': {
+      if (!isMain) break;
+      const workerName = data.worker_name as string;
+      if (!workerName || !data.backend) {
+        writeResponse(false, 'switch_backend: missing worker_name or backend');
+        break;
+      }
+
+      // Find the worker by name or folder
+      const groups = deps.registeredGroups();
+      const folder = workerName.startsWith('discord_')
+        ? workerName
+        : `discord_${workerName}`;
+      const workerEntry = Object.entries(groups).find(
+        ([, g]) => g.folder === folder || g.name === workerName,
+      );
+
+      if (!workerEntry) {
+        writeResponse(false, `Worker "${workerName}" not found.`);
+        break;
+      }
+
+      const [workerJid, workerGroup] = workerEntry;
+
+      updateWorkerBackends(
+        workerGroup.folder,
+        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : null,
+        data.model as string | undefined,
+      );
+
+      // Also update worker.env so the next container spawn routes correctly.
+      // Without this, container-runner reads the stale worker.env and routes
+      // to the wrong proxy (e.g. still Anthropic after switching to NW).
+      updateWorkerEnvBackend(workerGroup.folder, data.backend as string);
+
+      // Notify the worker's channel
+      const modelDesc =
+        data.backend === BACKEND_NEURALWATT
+          ? `${data.model || 'default Neuralwatt model'}`
+          : 'Claude (Anthropic)';
+      await deps.sendMessage(
+        workerJid,
+        `⚙️ Your inference backend was switched to **${modelDesc}**. This takes effect on your next response.`,
+      );
+
+      const msg = `Switched ${workerGroup.name} to ${modelDesc}.`;
+      logger.info(
+        { worker: workerGroup.name, backend: data.backend, model: data.model },
+        msg,
+      );
+      writeResponse(true, msg);
+      if (data.reply_jid) {
+        await deps.sendMessage(data.reply_jid as string, msg);
+      }
+      break;
+    }
+
+    case 'transfer_worker': {
+      if (!isMain) break;
+      const srcName = data.source_worker as string;
+      const tgtName = data.target_name as string;
+      if (!srcName || !tgtName) {
+        writeResponse(
+          false,
+          'transfer_worker: missing source_worker or target_name',
+        );
+        break;
+      }
+
+      // Resolve source worker
+      const allGroups = deps.registeredGroups();
+      const srcFolder = srcName.startsWith('discord_')
+        ? srcName
+        : `discord_${srcName}`;
+      const srcEntry = Object.entries(allGroups).find(
+        ([, g]) => g.folder === srcFolder || g.name === srcName,
+      );
+      if (!srcEntry) {
+        writeResponse(false, `Source worker "${srcName}" not found.`);
+        break;
+      }
+
+      const [srcJid, srcGroup] = srcEntry;
+      const srcSessionId = getSession(srcGroup.folder);
+
+      // Copy session data BEFORE creating the new worker
+      // (create_worker will make the target dirs)
+      const tgtFolder = `discord_${tgtName}`;
+      const srcSessionDir = path.join(DATA_DIR, 'sessions', srcGroup.folder);
+      const tgtSessionDir = path.join(DATA_DIR, 'sessions', tgtFolder);
+
+      try {
+        // Create new worker channel via the same flow as create_worker
+        // We need guild_id — get from env or existing group
+        const { DISCORD_GUILD_ID } = readEnvFile(['DISCORD_GUILD_ID']);
+        if (!DISCORD_GUILD_ID || !deps.createDiscordChannel) {
+          writeResponse(
+            false,
+            'transfer_worker: no guild ID or channel handler',
+          );
+          break;
+        }
+
+        // Stop source container first
+        if (deps.stopGroupContainer) {
+          deps.stopGroupContainer(srcJid);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+
+        // Create target channel
+        const channelId = await deps.createDiscordChannel(
+          DISCORD_GUILD_ID,
+          tgtName,
+        );
+        const tgtJid = `dc:${channelId}`;
+
+        // Copy group dir (workspace — repos, files)
+        const srcGroupDir = path.join(process.cwd(), 'groups', srcGroup.folder);
+        const tgtGroupDir = path.join(process.cwd(), 'groups', tgtFolder);
+        if (fs.existsSync(srcGroupDir)) {
+          fs.cpSync(srcGroupDir, tgtGroupDir, { recursive: true });
+        }
+
+        // Copy session dir (.claude/ sessions, settings)
+        if (fs.existsSync(srcSessionDir)) {
+          fs.cpSync(srcSessionDir, tgtSessionDir, { recursive: true });
+        }
+
+        // Copy session ID
+        if (srcSessionId) {
+          setSession(tgtFolder, srcSessionId);
+        }
+
+        // Register the new group with target backend config
+        const srcConfig = srcGroup.containerConfig || {};
+        deps.registerGroup(tgtJid, {
+          name: tgtName,
+          folder: tgtFolder,
+          trigger:
+            srcGroup.trigger || `@${process.env.ASSISTANT_NAME || 'Andy'}`,
+          added_at: new Date().toISOString(),
+          containerConfig: {
+            ...srcConfig,
+            disableIdleTimeout: true,
+          },
+          requiresTrigger: false,
+        });
+
+        // Set up backend for target if specified
+        const tgtBackend = (data.target_backend as string) || 'anthropic';
+        updateWorkerEnvBackend(tgtFolder, tgtBackend);
+        updateWorkerBackends(
+          tgtFolder,
+          tgtBackend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : null,
+          data.target_model as string | undefined,
+        );
+
+        // Destroy source
+        const channelIdSrc = srcJid.replace(/^dc:/, '');
+        if (deps.deleteDiscordChannel) {
+          await deps.deleteDiscordChannel(channelIdSrc);
+        }
+        delete allGroups[srcJid];
+        deleteRegisteredGroup(srcJid);
+
+        // Fetch usage for report
+        const usage = await fetchWorkerUsage(srcGroup.folder);
+        const usageStr =
+          usage && usage.requests > 0
+            ? ` Source usage: ${formatUsageStats(usage)}.`
+            : '';
+
+        const transferMsg = `Transferred **${srcGroup.name}** → **${tgtName}** (${data.target_backend || 'anthropic'}).${usageStr}`;
+        logger.info({ source: srcGroup.name, target: tgtName }, transferMsg);
+        writeResponse(true, transferMsg);
+        if (data.reply_jid) {
+          await deps.sendMessage(data.reply_jid as string, transferMsg);
+        }
+      } catch (err) {
+        logger.error({ err }, 'transfer_worker failed');
+        writeResponse(false, `Transfer failed: ${err}`);
+        if (data.reply_jid) {
+          await deps.sendMessage(
+            data.reply_jid as string,
+            `Transfer failed: ${err}`,
+          );
+        }
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

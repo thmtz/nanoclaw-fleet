@@ -1,10 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 
+import { syncMasterProfile, syncWorkerProfiles } from './profile-sync.js';
+import { startResourceMonitor } from './resource-monitor.js';
+
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
+  MAX_CONCURRENT_CONTAINERS,
   POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
@@ -38,13 +42,18 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { startIpcWatcher } from './ipc.js';
+import {
+  clearGroupSentMessage,
+  didGroupSendMessage,
+  startIpcWatcher,
+} from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   isSenderAllowed,
@@ -52,6 +61,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  extractSessionCommand,
+  handleSessionCommand,
+  isSessionCommandAllowed,
+} from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -120,16 +134,32 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
  */
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
   const chats = getAllChats();
+  const chatJids = new Set(chats.map((c) => c.jid));
   const registeredJids = new Set(Object.keys(registeredGroups));
 
-  return chats
+  const fromChats = chats
     .filter((c) => c.jid !== '__group_sync__' && c.is_group)
     .map((c) => ({
       jid: c.jid,
       name: c.name,
       lastActivity: c.last_message_time,
       isRegistered: registeredJids.has(c.jid),
+      folder: registeredGroups[c.jid]?.folder,
     }));
+
+  // Include registered groups that haven't had any messages yet
+  // (e.g. just-created workers whose Discord channel hasn't been messaged).
+  const fromRegistered = Object.entries(registeredGroups)
+    .filter(([jid]) => !chatJids.has(jid))
+    .map(([jid, group]) => ({
+      jid,
+      name: group.name,
+      lastActivity: group.added_at || new Date().toISOString(),
+      isRegistered: true,
+      folder: group.folder,
+    }));
+
+  return [...fromChats, ...fromRegistered];
 }
 
 /** @internal - exported for testing */
@@ -164,6 +194,41 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // --- Session command interception (before trigger check) ---
+  const cmdResult = await handleSessionCommand({
+    missedMessages,
+    isMainGroup,
+    groupName: group.name,
+    triggerPattern: TRIGGER_PATTERN,
+    timezone: TIMEZONE,
+    deps: {
+      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      setTyping: (typing) =>
+        channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) =>
+        runAgent(group, prompt, chatJid, onOutput),
+      closeStdin: () => queue.closeStdin(chatJid),
+      advanceCursor: (ts) => {
+        lastAgentTimestamp[chatJid] = ts;
+        saveState();
+      },
+      formatMessages,
+      canSenderInteract: (msg) => {
+        const hasTrigger = TRIGGER_PATTERN.test(msg.content.trim());
+        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        return (
+          isMainGroup ||
+          !reqTrigger ||
+          (hasTrigger &&
+            (msg.is_from_me ||
+              isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())))
+        );
+      },
+    },
+  });
+  if (cmdResult.handled) return cmdResult.success;
+  // --- End session command interception ---
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
@@ -172,7 +237,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         TRIGGER_PATTERN.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
-    if (!hasTrigger) return true;
+    if (!hasTrigger) {
+      return true;
+    }
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -193,6 +260,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = () => {
+    if (group.containerConfig?.disableIdleTimeout) return; // Long-lived worker — no idle reaping
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       logger.debug(
@@ -217,7 +285,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
+      // Suppress SDK output if the agent already sent messages via send_message
+      // (prevents duplicate Discord messages)
+      if (text && !didGroupSendMessage(group.folder)) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -236,6 +306,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+  clearGroupSentMessage(group.folder);
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -294,13 +365,23 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Update session tracking from container output. On error, clear the
+  // session so retries start fresh instead of resuming a broken session.
+  const applySessionResult = (output: ContainerOutput) => {
+    if (!output.newSessionId) return;
+    if (output.status === 'error') {
+      delete sessions[group.folder];
+      deleteSession(group.folder);
+    } else {
+      sessions[group.folder] = output.newSessionId;
+      setSession(group.folder, output.newSessionId);
+    }
+  };
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
-        }
+        applySessionResult(output);
         await onOutput(output);
       }
     : undefined;
@@ -321,10 +402,7 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    }
+    applySessionResult(output);
 
     if (output.status === 'error') {
       logger.error(
@@ -349,6 +427,21 @@ async function startMessageLoop(): Promise<void> {
   messageLoopRunning = true;
 
   logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
+
+  // Write groups snapshot on startup so the master has current data
+  // immediately (not just after processing the first message).
+  const startupGroups = getAvailableGroups();
+  const startupRegisteredJids = new Set(Object.keys(registeredGroups));
+  for (const [, group] of Object.entries(registeredGroups)) {
+    if (group.isMain) {
+      writeGroupsSnapshot(
+        group.folder,
+        true,
+        startupGroups,
+        startupRegisteredJids,
+      );
+    }
+  }
 
   while (true) {
     try {
@@ -388,6 +481,33 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.isMain === true;
+
+          // --- Session command interception (message loop) ---
+          // Scan ALL messages in the batch for a session command.
+          const loopCmdMsg = groupMessages.find(
+            (m) => extractSessionCommand(m.content, TRIGGER_PATTERN) !== null,
+          );
+
+          if (loopCmdMsg) {
+            // Only close active container if the sender is authorized — otherwise an
+            // untrusted user could kill in-flight work by sending /compact (DoS).
+            // closeStdin no-ops internally when no container is active.
+            if (
+              isSessionCommandAllowed(
+                isMainGroup,
+                loopCmdMsg.is_from_me === true,
+              )
+            ) {
+              queue.closeStdin(chatJid);
+            }
+            // Enqueue so processGroupMessages handles auth + cursor advancement.
+            // Don't pipe via IPC — slash commands need a fresh container with
+            // string prompt (not MessageStream) for SDK recognition.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          // --- End session command interception ---
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
@@ -416,6 +536,11 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
+            // Reset the send_message suppression flag for this group.
+            // Without this, if the previous message used send_message,
+            // the flag stays set and suppresses direct output for all
+            // subsequent piped messages in the same container session.
+            clearGroupSentMessage(group.folder);
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -557,6 +682,9 @@ async function main(): Promise<void> {
       if (text) await channel.sendMessage(jid, text);
     },
   });
+  // Find the Discord channel instance for dynamic worker operations
+  const discordChannel = channels.find((ch) => ch.name === 'discord');
+
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
@@ -575,9 +703,47 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    createDiscordChannel: discordChannel?.createChannel
+      ? (guildId, name, categoryId) =>
+          discordChannel.createChannel!(guildId, name, categoryId)
+      : undefined,
+    deleteDiscordChannel: discordChannel?.deleteChannel
+      ? (channelId) => discordChannel.deleteChannel!(channelId)
+      : undefined,
+    stopGroupContainer: (jid: string) => {
+      queue.closeStdin(jid);
+    },
+    getContainerStats: () => ({
+      active: queue.getActiveCount(),
+      max: MAX_CONCURRENT_CONTAINERS,
+    }),
   });
   queue.setProcessMessagesFn(processGroupMessages);
+
+  // Sync profiles: propagate profile changes to existing workers + master
+  syncWorkerProfiles();
+  syncMasterProfile();
+
   recoverPendingMessages();
+
+  // Auto-respawn reverted: spawning all workers on restart causes Discord spam
+  // (each worker responds to the synthetic message). Workers spawn lazily on
+  // first real message instead. The CONTAINER RESTARTED notice in agent-runner's
+  // system prompt provides restart context when they do spawn.
+
+  // Start resource monitor — alerts #master on high memory/disk/containers
+  const mainGroup = Object.entries(registeredGroups).find(([, g]) => g.isMain);
+  if (mainGroup) {
+    const mainChannel = findChannel(channels, mainGroup[0]);
+    if (mainChannel) {
+      startResourceMonitor(
+        mainGroup[0],
+        (jid, text) => mainChannel.sendMessage(jid, text),
+        () => queue.getActiveCount(),
+      );
+    }
+  }
+
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);

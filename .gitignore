@@ -25,6 +25,9 @@ groups/global/*
 # Temp files
 .tmp-*
 
+# Local overrides (per-machine, not shared)
+CLAUDE.local.md
+
 # OS
 .DS_Store
 
@@ -36,3 +39,7 @@ groups/global/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

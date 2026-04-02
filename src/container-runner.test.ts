@@ -13,6 +13,7 @@ vi.mock('./config.js', () => ({
   CONTAINER_TIMEOUT: 1800000, // 30min
   CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/nanoclaw-test-data',
+  GITHUB_TOKEN_PATH: null,
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   TIMEZONE: 'America/Los_Angeles',

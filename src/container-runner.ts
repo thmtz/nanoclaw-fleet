@@ -10,11 +10,15 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  BACKEND_NEURALWATT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  GITHUB_TOKEN_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  NEURALWATT_PROXY_PORT,
   TIMEZONE,
+  WORKER_API_KEY_PREFIX,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -23,9 +27,11 @@ import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
+  sanitizeFolderName,
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -65,15 +71,21 @@ function buildVolumeMounts(
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
+    // Main gets full host home directory — same trust level as a direct
+    // Claude Code session. This lets the master agent edit nanoclaw code,
+    // worker profiles, other repos, dotfiles, etc.
+    const homeDir = process.env.HOME || '/home/node';
+    mounts.push({
+      hostPath: homeDir,
+      containerPath: '/home/host',
+      readonly: false,
+    });
+
+    // Also mount the project root at the familiar /workspace/project path
     mounts.push({
       hostPath: projectRoot,
       containerPath: '/workspace/project',
-      readonly: true,
+      readonly: false,
     });
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
@@ -122,6 +134,17 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  // Clear known-problematic SDK state dirs from previous runs. These accumulate
+  // from crashed containers and can confuse the SDK on startup. Only remove
+  // debug/ and backups/ — leave everything else (projects/, plugins/, todos.json,
+  // etc.) intact so the SDK can resume session/project state properly.
+  const clearDirs = ['debug', 'backups'];
+  for (const dir of clearDirs) {
+    const target = path.join(groupSessionsDir, dir);
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  }
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -190,14 +213,54 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  // Always sync agent-runner source — compares mtime to detect changes.
+  // Previously only copied on first run, causing stale MCP tools.
+  if (fs.existsSync(agentRunnerSrc)) {
+    const srcMtime = Math.max(
+      ...fs
+        .readdirSync(agentRunnerSrc)
+        .map((f) => fs.statSync(path.join(agentRunnerSrc, f)).mtimeMs),
+    );
+    const dstExists = fs.existsSync(groupAgentRunnerDir);
+    const dstMtime = dstExists
+      ? Math.max(
+          ...fs
+            .readdirSync(groupAgentRunnerDir)
+            .map((f) => fs.statSync(path.join(groupAgentRunnerDir, f)).mtimeMs),
+        )
+      : 0;
+    if (!dstExists || srcMtime > dstMtime) {
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+      logger.debug({ group: group.folder }, 'Agent-runner source synced');
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
     containerPath: '/app/src',
     readonly: false,
   });
+
+  // Tailscale socket mount — lets containers use `tailscale ssh` via host's daemon
+  const tailscaleSock = '/var/run/tailscale/tailscaled.sock';
+  if (fs.existsSync(tailscaleSock)) {
+    mounts.push({
+      hostPath: tailscaleSock,
+      containerPath: '/var/run/tailscale/tailscaled.sock',
+      readonly: false,
+    });
+  }
+
+  // Docker socket mount (main group only, gated behind NANOCLAW_ENABLE_DOCKER)
+  if (isMain && process.env.NANOCLAW_ENABLE_DOCKER === 'true') {
+    const dockerSock = '/var/run/docker.sock';
+    if (fs.existsSync(dockerSock)) {
+      mounts.push({
+        hostPath: dockerSock,
+        containerPath: '/var/run/docker.sock',
+        readonly: false,
+      });
+    }
+  }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
@@ -209,37 +272,151 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
+  // Mount worker init script — check user config first, fall back to repo
+  if (!isMain) {
+    const userInit = path.join(
+      process.env.HOME || '/root',
+      '.config',
+      'nanoclaw',
+      'worker-profiles',
+      'init.sh',
+    );
+    const repoInit = path.join(process.cwd(), 'worker-profiles', 'init.sh');
+    const initScript = fs.existsSync(userInit) ? userInit : repoInit;
+    if (fs.existsSync(initScript)) {
+      mounts.push({
+        hostPath: initScript,
+        containerPath: '/workspace/init.sh',
+        readonly: true,
+      });
+    }
+  }
+
   return mounts;
 }
 
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  groupFolder?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  // Use Tailscale DNS for MagicDNS hostnames, with public fallback.
+  // 100.100.100.100 resolves Tailscale names; 1.1.1.1 handles public DNS.
+  // Without the fallback, pypi.org/github.com/etc. fail.
+  if (fs.existsSync('/var/run/tailscale/tailscaled.sock')) {
+    args.push('--dns', '100.100.100.100', '--dns', '1.1.1.1');
+  }
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
+  // Pass model selection to the container agent
+  const { NANOCLAW_MODEL, DISCORD_GUILD_ID } = readEnvFile([
+    'NANOCLAW_MODEL',
+    'DISCORD_GUILD_ID',
+  ]);
+  if (NANOCLAW_MODEL) {
+    args.push('-e', `NANOCLAW_MODEL=${NANOCLAW_MODEL}`);
+  }
 
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  // Pass Discord guild ID for dynamic worker creation
+  if (DISCORD_GUILD_ID) {
+    args.push('-e', `DISCORD_GUILD_ID=${DISCORD_GUILD_ID}`);
+  }
+
+  // Pass worker profile env vars and detect backend setting (single read).
+  let useNeuralwatt = false;
+  if (groupFolder) {
+    const workerEnvPath = path.join(
+      DATA_DIR,
+      'sessions',
+      groupFolder,
+      'worker.env',
+    );
+    if (fs.existsSync(workerEnvPath)) {
+      const envContent = fs.readFileSync(workerEnvPath, 'utf-8');
+      for (const line of envContent.split('\n')) {
+        if (line.trim() && !line.startsWith('#')) {
+          args.push('-e', line);
+          if (
+            line.startsWith('NANOCLAW_BACKEND=') &&
+            line.includes(BACKEND_NEURALWATT)
+          ) {
+            useNeuralwatt = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Route based on backend: Anthropic workers go directly to credential proxy,
+  // Neuralwatt workers go through the translation shim.
+  if (useNeuralwatt) {
+    const workerPath = groupFolder ? `/w/${groupFolder}` : '';
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}${workerPath}`,
+    );
+    // Fake API key with valid format — the SDK validates key format locally.
+    // "placeholder" gets rejected; this passes format checks.
+    // The shim handles real auth for Neuralwatt.
+    args.push(
+      '-e',
+      'ANTHROPIC_API_KEY=sk-ant-api03-neuralwatt-shim-placeholder-000000000000000000000000000000000000000000000000-000000000000',
+    );
+    // Redirect SDK init checks (oauth/profile, usage, etc.) to the shim
+    // instead of api.anthropic.com. Without this, the SDK tries to validate
+    // the fake API key against Anthropic's real API and crashes with 401.
+    args.push(
+      '-e',
+      `CLAUDE_CODE_API_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}`,
+    );
   } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
   }
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // Inject GitHub token so the container can push over HTTPS.
+  // The host reads the token file — it never appears as a mount inside the container.
+  if (GITHUB_TOKEN_PATH) {
+    try {
+      const token = fs.readFileSync(GITHUB_TOKEN_PATH, 'utf-8').trim();
+      if (token) {
+        args.push('-e', `GITHUB_TOKEN=${token}`);
+      }
+    } catch {
+      // Token file missing or unreadable — git push will just fail without auth
+    }
+  }
+
+  // Inject Slack user token for slack-mcp-server (read-only access to conversations).
+  const { SLACK_USER_TOKEN } = readEnvFile(['SLACK_USER_TOKEN']);
+  if (SLACK_USER_TOKEN) {
+    args.push('-e', `SLACK_USER_TOKEN=${SLACK_USER_TOKEN}`);
+  }
+
+  // Add docker group so container can access the Docker socket
+  if (process.env.NANOCLAW_ENABLE_DOCKER === 'true') {
+    try {
+      const stat = fs.statSync('/var/run/docker.sock');
+      args.push('--group-add', String(stat.gid));
+    } catch {
+      // Socket doesn't exist, skip
+    }
+  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
@@ -276,9 +453,9 @@ export async function runContainerAgent(
   fs.mkdirSync(groupDir, { recursive: true });
 
   const mounts = buildVolumeMounts(group, input.isMain);
-  const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
+  const safeName = sanitizeFolderName(group.folder);
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, group.folder);
 
   logger.debug(
     {
@@ -318,6 +495,7 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
+    const containerSpawnTime = Date.now();
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
 
@@ -325,6 +503,7 @@ export async function runContainerAgent(
     let parseBuffer = '';
     let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
+    let firstOutputLogged = false;
 
     container.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -363,6 +542,14 @@ export async function runContainerAgent(
               newSessionId = parsed.newSessionId;
             }
             hadStreamingOutput = true;
+            if (!firstOutputLogged) {
+              firstOutputLogged = true;
+              const startupMs = Date.now() - containerSpawnTime;
+              logger.info(
+                { group: group.name, containerName, startupMs },
+                'Container first output',
+              );
+            }
             // Activity detected — reset the hard timeout
             resetTimeout();
             // Call onOutput for all markers (including null results)
@@ -403,9 +590,13 @@ export async function runContainerAgent(
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+    // Long-lived workers: set hard timeout to 24 hours (effectively infinite)
+    const effectiveTimeout = group.containerConfig?.disableIdleTimeout
+      ? 24 * 60 * 60 * 1000
+      : configTimeout;
     // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
     // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    const timeoutMs = Math.max(effectiveTimeout, IDLE_TIMEOUT + 30_000);
 
     const killOnTimeout = () => {
       timedOut = true;
@@ -673,6 +864,7 @@ export interface AvailableGroup {
   name: string;
   lastActivity: string;
   isRegistered: boolean;
+  folder?: string;
 }
 
 /**

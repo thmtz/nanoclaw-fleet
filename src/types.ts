@@ -30,6 +30,7 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  disableIdleTimeout?: boolean; // If true, worker stays alive until explicitly destroyed
 }
 
 export interface RegisteredGroup {
@@ -90,6 +91,14 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: create a new channel on the platform (e.g., Discord guild channel).
+  createChannel?(
+    guildId: string,
+    name: string,
+    categoryId?: string,
+  ): Promise<string>;
+  // Optional: delete a channel on the platform.
+  deleteChannel?(channelId: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

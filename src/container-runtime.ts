@@ -57,6 +57,15 @@ export function readonlyMountArgs(
   return ['-v', `${hostPath}:${containerPath}:ro`];
 }
 
+/**
+ * Sanitize a group folder name for use in container names.
+ * Replaces non-alphanumeric characters (except hyphens) with hyphens.
+ * Must be used consistently wherever container names are matched to folders.
+ */
+export function sanitizeFolderName(folder: string): string {
+  return folder.replace(/[^a-zA-Z0-9-]/g, '-');
+}
+
 /** Returns the shell command to stop a container by name. */
 export function stopContainer(name: string): string {
   return `${CONTAINER_RUNTIME_BIN} stop ${name}`;
