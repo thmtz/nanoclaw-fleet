@@ -36,6 +36,12 @@ The master can discover available models by name ("kimi fast", "qwen coder") wit
 
 See [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md) and [docs/architecture/model-discovery.md](docs/architecture/model-discovery.md).
 
+## Usage & Energy Tracking
+
+Neuralwatt workers report per-request energy metrics (tokens, joules, watt-hours). The translation shim accumulates these per-worker, and the `/status` command shows a live dashboard with container states, slot usage, and cumulative energy stats. Lifetime usage is also reported when a worker is destroyed.
+
+See [docs/architecture/energy-tracking.md](docs/architecture/energy-tracking.md) for the design.
+
 ## Restart Behavior
 
 Containers run with `--rm` and are destroyed on NanoClaw restart. Everything else persists: Discord channels, SQLite registrations, repos (bind-mounted workspace), and session IDs. On restart, workers respawn on next message with full context.
