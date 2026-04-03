@@ -62,6 +62,21 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+/**
+ * Resolve a path within the worker-profiles directory.
+ * Checks ~/.config/nanoclaw/worker-profiles/ first, falls back to repo's
+ * worker-profiles/. Returns null if neither location exists.
+ */
+function resolveWorkerProfilePath(subPath?: string): string | null {
+  const homeDir = process.env.HOME || '/root';
+  const segments = ['worker-profiles', ...(subPath ? [subPath] : [])];
+  const candidates = [
+    path.join(homeDir, '.config', 'nanoclaw', ...segments),
+    path.join(process.cwd(), ...segments),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
@@ -272,22 +287,24 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
-  // Mount worker init script — check user config first, fall back to repo
+  // Mount worker-specific config (init script + profiles directory)
   if (!isMain) {
-    const userInit = path.join(
-      process.env.HOME || '/root',
-      '.config',
-      'nanoclaw',
-      'worker-profiles',
-      'init.sh',
-    );
-    const repoInit = path.join(process.cwd(), 'worker-profiles', 'init.sh');
-    const initScript = fs.existsSync(userInit) ? userInit : repoInit;
-    if (fs.existsSync(initScript)) {
+    const initScript = resolveWorkerProfilePath('init.sh');
+    if (initScript) {
       mounts.push({
         hostPath: initScript,
         containerPath: '/workspace/init.sh',
         readonly: true,
+      });
+    }
+
+    // Workers can view and edit profiles directly at /workspace/worker-profiles/
+    const profilesDir = resolveWorkerProfilePath();
+    if (profilesDir) {
+      mounts.push({
+        hostPath: profilesDir,
+        containerPath: '/workspace/worker-profiles',
+        readonly: false,
       });
     }
   }
