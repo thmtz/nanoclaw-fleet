@@ -1,5 +1,25 @@
 #!/bin/bash
-# Pre-push hook: run prettier + tsc before pushing
+# Pre-push hook: block direct push to main, then run prettier + tsc
+
+# --- Block direct push to main ---
+protected_branches="main"
+current_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+for branch in $protected_branches; do
+    if [ "$current_branch" = "$branch" ]; then
+        if [ "$ALLOW_MAIN" = "1" ]; then
+            echo "⚠️  ALLOW_MAIN=1 set — bypassing push protection for $branch"
+        else
+            echo "🚫 Direct push to '$branch' is blocked."
+            echo "   Use a feature branch and open a PR instead."
+            echo ""
+            echo "   To override in an emergency:"
+            echo "     ALLOW_MAIN=1 git push"
+            exit 1
+        fi
+    fi
+done
+# --- End block direct push to main ---
 
 echo "[pre-push] Checking formatting..."
 npm run format:check 2>&1
