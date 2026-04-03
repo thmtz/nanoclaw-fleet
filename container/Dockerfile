@@ -78,13 +78,10 @@ ENV CARGO_HOME=/usr/local/cargo
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser, claude-code, and beads globally
+# Install agent-browser and claude-code globally
 # Cached — only re-runs if this line changes
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g agent-browser @anthropic-ai/claude-code @beads/bd
-
-# Install dolt (beads backend) — static binary
-RUN curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
+    npm install -g agent-browser @anthropic-ai/claude-code
 
 # Install ruff (Python linter/formatter) to a shared location
 RUN uv tool install ruff && cp /root/.local/bin/ruff /usr/local/bin/ruff
