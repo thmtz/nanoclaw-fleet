@@ -29,6 +29,7 @@ export interface AllowedRoot {
 
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
+  ports?: string[]; // Docker port mappings (e.g., ["8080:8080", "8090:8090/tcp"])
   timeout?: number; // Default: 300000 (5 minutes)
   disableIdleTimeout?: boolean; // If true, worker stays alive until explicitly destroyed
 }
