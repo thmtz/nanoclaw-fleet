@@ -46,6 +46,7 @@ When the first message arrives in a worker channel:
    - Bind mount: `data/sessions/{folder}/` → session state dirs
    - Env vars: `ANTHROPIC_BASE_URL` pointing to the correct proxy (`:3001` for Anthropic, `:3003/w/{folder}/` for Neuralwatt)
    - `NANOCLAW_MODEL`, `NANOCLAW_IS_MAIN=0`, `DISCORD_GUILD_ID`, etc.
+   - Port mappings from worker profile (`-p` flags), if configured
 3. **init.sh runs** from the worker profile. This clones repos (skipping already-cloned), installs tools, symlinks skills. Runs every time a container spawns.
 4. **Agent runner starts** with the Claude Agent SDK. If a session ID exists in SQLite, it resumes that session.
 

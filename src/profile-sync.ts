@@ -21,6 +21,7 @@ export interface WorkerProfile {
     containerPath: string;
     readonly: boolean;
   }[];
+  ports?: string[]; // Docker port mappings (e.g., ["8080:8080", "8090:8090/tcp"])
   claude_md?: string;
   skills_repo?: string;
 }
@@ -70,10 +71,11 @@ export function syncWorkerProfiles(): number {
   for (const [jid, group] of Object.entries(groups)) {
     if (group.isMain) continue;
 
-    // Update container_config with current profile mounts
+    // Update container_config with current profile mounts and ports
     const newConfig = {
       ...group.containerConfig,
       additionalMounts: profile.mounts || [],
+      ports: profile.ports || [],
       disableIdleTimeout: true,
     };
 
