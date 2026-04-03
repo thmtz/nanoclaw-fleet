@@ -42,6 +42,7 @@ Run `bash setup.sh` and parse the status block.
 Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
 - Record DOCKER value for step 3
+- If HAS_ENV=true: `.env` already exists — step 4 should check it for existing credentials before asking
 - If HAS_REGISTERED_GROUPS=true: note existing config, offer to skip or reconfigure
 
 ## 3. Docker Setup
