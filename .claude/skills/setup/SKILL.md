@@ -60,7 +60,7 @@ This fork uses Docker for worker containers (Apple Container is not supported fo
 ./container/build.sh
 ```
 
-If BUILD_OK=false: read the error. Try `docker builder prune -f` and retry.
+If the build fails, read the error output. Try `docker builder prune -f` and retry.
 
 ## 4. Claude Authentication
 
@@ -134,13 +134,23 @@ Also ask about `CLAUDE.worker.md`: "Do you want to customize the worker agent in
 
 The master agent's behavior is defined in `groups/discord_main/CLAUDE.md`. This file is gitignored (per-installation).
 
-If `groups/discord_main/CLAUDE.md` doesn't exist or is the generic template, copy the example:
+If `groups/discord_main/CLAUDE.md` doesn't exist or is the generic upstream template:
 
 ```bash
 mkdir -p groups/discord_main
 ```
 
-The master CLAUDE.md should describe worker management tools (create_worker, destroy_worker, list_workers, etc.) and communication style. A good starting template is in the setup guide.
+Check if `~/.config/nanoclaw/master-profile/CLAUDE.md` exists. If so, copy it:
+```bash
+cp ~/.config/nanoclaw/master-profile/CLAUDE.md groups/discord_main/CLAUDE.md
+```
+
+If not, help the user create one. The master CLAUDE.md should describe:
+- Worker management tools (create_worker, destroy_worker, list_workers, switch_backend, cleanup_workers)
+- Communication style (brief responses, acknowledge messages immediately)
+- How to access the host filesystem and Docker
+
+See `docs/guides/setup.md` step 6 for a minimal example.
 
 ## 9. Optional: Open-Weight Model Support
 
