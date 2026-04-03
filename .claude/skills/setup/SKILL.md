@@ -11,16 +11,16 @@ This is a fork of NanoClaw customized for Discord-based fleet management. Setup 
 
 **UX Note:** Use `AskUserQuestion` for all user-facing questions.
 
-## Before You Start — What We'll Set Up
+## Before You Start
 
-Tell the user upfront what setup will walk them through. If they already have any of these, great — if not, each step explains how to create them:
+Tell the user what setup will walk them through. If they already have some of these, each step can reuse existing credentials instead of asking again.
 
-1. **Claude auth** — OAuth token (`claude setup-token`) or Anthropic API key
-2. **Discord bot token** — from the Discord Developer Portal
-3. **Discord Guild (Server) ID** — copied from Discord with Developer Mode
-4. **Discord Channel ID** for the `#master` channel — copied from Discord
-5. **GitHub PAT** *(optional)* — for workers that clone private repos
-6. **OpenAI-compatible API key** *(optional)* — for open-weight models (e.g. Neuralwatt API)
+1. **Claude auth**: OAuth token (via `claude setup-token`) or Anthropic API key
+2. **Discord bot token**: from the Discord Developer Portal
+3. **Discord Guild (Server) ID**: right-click server name in Discord
+4. **Discord Channel ID** for `#master`: right-click the channel in Discord
+5. **GitHub PAT** *(optional)*: only needed if workers clone private repos
+6. **OpenAI-compatible API key** *(optional)*: only if using open-weight models
 
 ## 0. Git Remote Setup
 
