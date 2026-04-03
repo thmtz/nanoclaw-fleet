@@ -161,12 +161,12 @@ Check if `~/.config/nanoclaw/master-profile/CLAUDE.md` exists. If so, copy it:
 cp ~/.config/nanoclaw/master-profile/CLAUDE.md groups/discord_main/CLAUDE.md
 ```
 
-If not, help the user create one. The master CLAUDE.md should describe:
-- Worker management tools (create_worker, destroy_worker, list_workers, switch_backend, cleanup_workers)
-- Communication style (brief responses, acknowledge messages immediately)
-- How to access the host filesystem and Docker
+If not, copy the example template from the repo:
+```bash
+cp master-profiles/CLAUDE.master.example.md groups/discord_main/CLAUDE.md
+```
 
-See `docs/guides/setup.md` step 6 for a minimal example.
+Ask the user if they want to customize it (add org-specific repos, tools, workflows). If yes, help them edit. If no, the example template covers worker management, inference backends with model discovery, Docker access, and communication style.
 
 ## 9. Optional: Open-Weight Model Support
 
