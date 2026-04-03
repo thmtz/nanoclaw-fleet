@@ -46,13 +46,13 @@ The master resolves fuzzy model names automatically — "kimi fast", "qwen coder
 
 ### Switching Models
 
-For Neuralwatt workers, you can switch models live without losing your workspace or conversation:
+**Within Neuralwatt** — model switches are instant, no restart needed. The translation shim re-reads the model config on every request:
 
 ```
 switch my-task to qwen 3.5
 ```
 
-Switching between Anthropic and Neuralwatt requires recreating the worker. The master handles this with `transfer_worker` — your workspace and chat history are preserved:
+**Between Anthropic and Neuralwatt** — requires a container restart because `ANTHROPIC_BASE_URL` is set at container start (Anthropic workers talk to the credential proxy on :3001, Neuralwatt workers talk to the translation shim on :3003). Use `transfer_worker`, which destroys the old container and creates a new one — workspace and chat history are preserved:
 
 ```
 transfer my-task to neuralwatt kimi k2.5
