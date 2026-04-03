@@ -150,19 +150,10 @@ Also ask about `CLAUDE.worker.md`: "Do you want to customize the worker agent in
 
 The master agent's behavior is defined in `groups/discord_main/CLAUDE.md`. This file is gitignored (per-installation).
 
-If `groups/discord_main/CLAUDE.md` doesn't exist or is the generic upstream template:
+If `groups/discord_main/CLAUDE.md` doesn't exist, copy the example template:
 
 ```bash
 mkdir -p groups/discord_main
-```
-
-Check if `~/.config/nanoclaw/master-profile/CLAUDE.md` exists. If so, copy it:
-```bash
-cp ~/.config/nanoclaw/master-profile/CLAUDE.md groups/discord_main/CLAUDE.md
-```
-
-If not, copy the example template from the repo:
-```bash
 cp master-profiles/CLAUDE.master.example.md groups/discord_main/CLAUDE.md
 ```
 
