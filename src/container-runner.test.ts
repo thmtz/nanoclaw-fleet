@@ -11,12 +11,13 @@ vi.mock('./config.js', () => ({
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
-  CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GITHUB_TOKEN_PATH: null,
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
+  NEURALWATT_PROXY_PORT: 3003,
   TIMEZONE: 'America/Los_Angeles',
+  WORKER_API_KEY_PREFIX: 'sk-ant-worker-',
 }));
 
 // Mock logger

@@ -10,8 +10,6 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
-  BACKEND_NEURALWATT,
-  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GITHUB_TOKEN_PATH,
   GROUPS_DIR,
@@ -30,7 +28,6 @@ import {
   sanitizeFolderName,
   stopContainer,
 } from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
@@ -355,8 +352,8 @@ function buildContainerArgs(
     args.push('-e', `DISCORD_GUILD_ID=${DISCORD_GUILD_ID}`);
   }
 
-  // Pass worker profile env vars and detect backend setting (single read).
-  let useNeuralwatt = false;
+  // Pass worker profile env vars (backend detection is no longer needed here —
+  // all workers route through the shim which reads worker-backends.json per-request).
   if (groupFolder) {
     const workerEnvPath = path.join(
       DATA_DIR,
@@ -369,51 +366,46 @@ function buildContainerArgs(
       for (const line of envContent.split('\n')) {
         if (line.trim() && !line.startsWith('#')) {
           args.push('-e', line);
-          if (
-            line.startsWith('NANOCLAW_BACKEND=') &&
-            line.includes(BACKEND_NEURALWATT)
-          ) {
-            useNeuralwatt = true;
-          }
         }
       }
     }
   }
 
-  // Route based on backend: Anthropic workers go directly to credential proxy,
-  // Neuralwatt workers go through the translation shim.
-  if (useNeuralwatt) {
-    const workerPath = groupFolder ? `/w/${groupFolder}` : '';
-    args.push(
-      '-e',
-      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}${workerPath}`,
-    );
-    // Fake API key with valid format — the SDK validates key format locally.
-    // "placeholder" gets rejected; this passes format checks.
-    // The shim handles real auth for Neuralwatt.
-    args.push(
-      '-e',
-      'ANTHROPIC_API_KEY=sk-ant-api03-neuralwatt-shim-placeholder-000000000000000000000000000000000000000000000000-000000000000',
-    );
-    // Redirect SDK init checks (oauth/profile, usage, etc.) to the shim
-    // instead of api.anthropic.com. Without this, the SDK tries to validate
-    // the fake API key against Anthropic's real API and crashes with 401.
-    args.push(
-      '-e',
-      `CLAUDE_CODE_API_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}`,
-    );
-  } else {
-    args.push(
-      '-e',
-      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    );
-    const authMode = detectAuthMode();
-    if (authMode === 'api-key') {
-      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-    } else {
-      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
-    }
-  }
+  // Unified routing: ALL workers go through the shim (port 3003).
+  //
+  // Previously, Anthropic workers went directly to the credential proxy (:3001)
+  // and Neuralwatt workers went to the shim (:3003). This meant switching
+  // backends required a container restart because ANTHROPIC_BASE_URL was baked
+  // into the container's env at spawn time.
+  //
+  // Now the shim handles both backends and reads worker-backends.json per-request
+  // (mtime-cached). switch_backend updates that file, so changes take effect
+  // immediately on the next API call — no container restart needed.
+  //
+  // For Anthropic workers, the shim forwards to the credential proxy which
+  // injects real credentials. For Neuralwatt workers, the shim translates
+  // Anthropic→OpenAI format and forwards to the Neuralwatt API.
+  const workerPath = groupFolder ? `/w/${groupFolder}` : '';
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}${workerPath}`,
+  );
+  // Per-worker API key encodes the worker folder so the shim can identify
+  // the worker on init requests (which don't use the /w/ URL prefix).
+  // The SDK validates key format locally — this passes format checks.
+  // Real auth is handled downstream (credential proxy for Anthropic,
+  // Neuralwatt API key for open-source models).
+  const workerKey = groupFolder
+    ? `${WORKER_API_KEY_PREFIX}${groupFolder}`.padEnd(60, '0')
+    : 'sk-ant-api03-placeholder-000000000000000000000000000000';
+  args.push('-e', `ANTHROPIC_API_KEY=${workerKey}`);
+  // Redirect SDK init checks (oauth/profile, usage, model access) to the shim.
+  // The shim stubs these for Neuralwatt workers and forwards to the credential
+  // proxy for Anthropic workers.
+  args.push(
+    '-e',
+    `CLAUDE_CODE_API_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}`,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

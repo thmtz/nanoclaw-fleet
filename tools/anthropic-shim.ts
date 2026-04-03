@@ -201,6 +201,24 @@ function getWorkerConfig(workerFolder: string): WorkerBackendConfig {
   return config[workerFolder] || { backend: 'anthropic' };
 }
 
+// ── Worker identification ────────────────────────────────────────
+// Extract worker folder from the API key or Authorization header.
+// Container-runner gives each worker a key like "sk-ant-worker-discord_foo000...".
+// This lets the shim identify the worker on init requests (which don't use
+// the /w/{folder} URL prefix).
+
+function extractWorkerFolder(request: Request): string {
+  const apiKey =
+    request.headers.get('x-api-key') ||
+    request.headers.get('authorization')?.replace('Bearer ', '') ||
+    '';
+  if (apiKey.startsWith(WORKER_API_KEY_PREFIX)) {
+    // Strip prefix and trailing zero-padding
+    return apiKey.slice(WORKER_API_KEY_PREFIX.length).replace(/0+$/, '');
+  }
+  return '';
+}
+
 // ── Model mapping (Neuralwatt) ─────────────────────────────────
 
 const NEURALWATT_MODEL_MAP: Record<string, string> = {
@@ -408,26 +426,9 @@ const server = Bun.serve({
     // Log ALL requests for debugging
     console.log(`[proxy:req] ${request.method} ${url.pathname}`);
 
-    // Claude Code SDK v2.1+ checks model access before starting a session.
-    // Return has_access: true so NW workers don't get rejected.
-    if (url.pathname === '/api/check_model_access') {
-      return Response.json({ has_access: true });
-    }
-
-    // Stub out SDK init endpoints that try to reach CLAUDE_CODE_API_BASE_URL.
-    // For NW workers, this points to the shim. Return empty 200s so the SDK's
-    // oauth/profile, fast-mode, usage checks don't crash with 401/404.
-    // Only /v1/messages (via /w/<folder>/) needs real handling.
-    if (
-      url.pathname.startsWith('/api/') ||
-      url.pathname.startsWith('/v1/organizations') ||
-      url.pathname.startsWith('/v1/sessions') ||
-      (request.method === 'GET' && !url.pathname.startsWith('/w/') && !url.pathname.startsWith('/usage') && !url.pathname.startsWith('/health') && !url.pathname.startsWith('/models'))
-    ) {
-      return Response.json({});
-    }
-
-    // Health + usage + config endpoints
+    // ── Fast paths (health, usage, config) ──────────────────────
+    // Handle these before the init endpoint check to avoid unnecessary
+    // header parsing and config lookups on frequent monitoring requests.
     if (url.pathname === '/health') {
       return Response.json({ status: 'ok' });
     }
@@ -440,6 +441,49 @@ const server = Bun.serve({
     if (url.pathname.startsWith('/usage/')) {
       const folder = url.pathname.slice('/usage/'.length);
       return Response.json(workerUsage[folder] || { error: 'no data' });
+    }
+
+    // ── SDK init endpoints ──────────────────────────────────────
+    // CLAUDE_CODE_API_BASE_URL points here for ALL workers (both Anthropic
+    // and Neuralwatt). The SDK hits these endpoints during startup for
+    // OAuth exchange, model access checks, profile/usage queries, etc.
+    //
+    // - Neuralwatt workers use fake credentials → stub with empty 200s
+    // - Anthropic workers need real API responses → forward to credential
+    //   proxy which injects real auth and proxies to api.anthropic.com
+    //
+    // Worker identification: the API key encodes the worker folder as
+    // "sk-ant-worker-{folder}000...". Extract it from the x-api-key or
+    // Authorization header to look up the worker's backend config.
+    const isInitEndpoint =
+      url.pathname.startsWith('/api/') ||
+      url.pathname.startsWith('/v1/organizations') ||
+      url.pathname.startsWith('/v1/sessions') ||
+      (request.method === 'GET' &&
+        !url.pathname.startsWith('/w/') &&
+        !url.pathname.startsWith('/models'));
+
+    if (isInitEndpoint) {
+      const workerFolder = extractWorkerFolder(request);
+      const config = workerFolder
+        ? getWorkerConfig(workerFolder)
+        : { backend: 'anthropic' as const };
+
+      if (config.backend === BACKEND_NEURALWATT) {
+        // Neuralwatt: stub init endpoints. Fake credentials can't authenticate
+        // against Anthropic's API, so return minimal valid responses.
+        if (url.pathname === '/api/check_model_access') {
+          return Response.json({ has_access: true });
+        }
+        return Response.json({});
+      } else {
+        // Anthropic: forward to credential proxy for real API responses.
+        // The proxy injects real OAuth/API-key credentials before forwarding
+        // to api.anthropic.com. This enables OAuth token exchange, model
+        // access checks, and other init flows that require real auth.
+        const bodyBuffer = Buffer.from(await request.arrayBuffer());
+        return forwardToAnthropic(request, bodyBuffer);
+      }
     }
     // Resolve a fuzzy model name to the best matching model ID
     if (url.pathname.startsWith('/models/resolve/')) {
