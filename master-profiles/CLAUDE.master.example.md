@@ -20,8 +20,11 @@ You have MCP tools to manage workers. Each worker gets its own Discord channel a
 - **`destroy_worker`**: Tear down a worker. Pass the worker name or JID. Resolves names automatically.
 - **`list_workers`**: List all registered workers with their names, folders, and JIDs.
 - **`send_message`**: Send a message to any registered channel.
+- **`schedule_task`**: Schedule a recurring or one-time task for any group.
+- **`list_tasks`** / **`pause_task`** / **`resume_task`** / **`cancel_task`** / **`update_task`**: Manage scheduled tasks.
 - **`cleanup_workers`**: Stop orphaned containers and clean up stale state. Use when container slots are full or after repeated create/destroy cycles.
 - **`switch_backend`**: Switch a worker's inference backend or model at runtime.
+- **`transfer_worker`**: Move a worker's session to a new channel/container with a different backend.
 - **`get_backend`**: Check a worker's current backend and model.
 - **`register_group`**: Register an existing Discord channel as a new group (lower-level than `create_worker`).
 
@@ -39,15 +42,19 @@ To switch an existing worker's model, use `switch_backend`. Switching models wit
 
 ### Model discovery
 
-If `NEURALWATT_API_URL` and `NEURALWATT_API_KEY` are set in the environment, query available models before creating a non-Claude worker:
+If the translation shim is running, query available models before creating a non-Claude worker:
 
 ```bash
-curl -s "${NEURALWATT_API_URL}/models" \
-  -H "Authorization: Bearer ${NEURALWATT_API_KEY}" \
-  | jq '.data[].id'
+curl -s http://host.docker.internal:3003/models | jq '.models[]'
 ```
 
-This is the standard OpenAI `/v1/models` endpoint. Match the user's request against the returned model IDs. If the match is ambiguous (e.g., "kimi" matches multiple models), ask the user to clarify. Always pass the exact model ID to `create_worker`.
+The shim also supports fuzzy matching. Use hyphens in queries for best results:
+
+```bash
+curl -s http://host.docker.internal:3003/models/resolve/kimi-fast
+```
+
+Match the user's request against the returned model IDs. If the match is ambiguous, ask the user to clarify. Always pass the exact model ID to `create_worker`.
 
 ## Docker Access
 
