@@ -11,6 +11,17 @@ This is a fork of NanoClaw customized for Discord-based fleet management. Setup 
 
 **UX Note:** Use `AskUserQuestion` for all user-facing questions.
 
+## Before You Start — What We'll Set Up
+
+Tell the user upfront what setup will walk them through. If they already have any of these, great — if not, each step explains how to create them:
+
+1. **Claude auth** — OAuth token (`claude setup-token`) or Anthropic API key
+2. **Discord bot token** — from the Discord Developer Portal
+3. **Discord Guild (Server) ID** — copied from Discord with Developer Mode
+4. **Discord Channel ID** for the `#master` channel — copied from Discord
+5. **GitHub PAT** *(optional)* — for workers that clone private repos
+6. **OpenAI-compatible API key** *(optional)* — for open-weight models (e.g. Neuralwatt API)
+
 ## 0. Git Remote Setup
 
 This fork uses `thmtz/nanoclaw-fleet` as `origin`. Upstream NanoClaw (`qwibitai/nanoclaw`) should be configured as `upstream` for pulling updates.
@@ -65,12 +76,16 @@ If the build fails, read the error output. Try `docker builder prune -f` and ret
 
 ## 4. Claude Authentication
 
-Check `.env` for `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. If present, confirm with user.
+Check `.env` for `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
+
+**If credentials already exist** (HAS_ENV=true from step 2 and a token/key is set): Tell the user what's configured and AskUserQuestion: "Keep existing Claude credentials, or reconfigure?" If keeping, skip to step 5.
+
+**If no credentials exist:**
 
 AskUserQuestion: "Claude subscription (Pro/Max) or Anthropic API key?"
 
-- **Subscription:** Tell user to run `claude setup-token` in another terminal, copy the token, add `CLAUDE_CODE_OAUTH_TOKEN=<token>` to `.env`.
-- **API key:** Tell user to add `ANTHROPIC_API_KEY=<key>` to `.env`.
+- **Subscription:** Tell user to run `claude setup-token` in another terminal, then paste the token as a chat message. Write `CLAUDE_CODE_OAUTH_TOKEN=<token>` to `.env`.
+- **API key:** Tell user to paste their API key as a chat message. Write `ANTHROPIC_API_KEY=<key>` to `.env`.
 
 ## 5. Discord Setup
 
