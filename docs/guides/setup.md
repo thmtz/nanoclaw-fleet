@@ -45,9 +45,9 @@ NanoClaw separates generic code from per-installation configuration. The repo co
 |-|-|
 | `src/` | Host process (message routing, container lifecycle, IPC) |
 | `container/` | Dockerfile, agent runner, MCP tools, skills |
-| `worker-profiles/` | Example profiles — templates you copy and customize |
+| `worker-profiles/` | Example worker profiles — templates you copy and customize |
+| `master-profiles/` | Example master agent instructions — copy to `groups/discord_main/` |
 | `tools/` | Utility scripts (status dashboard, shims, injection helpers) |
-| `groups/discord_main/CLAUDE.md` | Default master agent instructions (generic) |
 | `docs/` | Architecture docs, setup guides, testing procedures |
 | `.env.example` | Template for required environment variables |
 
@@ -143,16 +143,14 @@ Set `requires_trigger = 0` so the master responds to all messages (no @mention n
 
 ## 6. Update Master Agent Instructions
 
-Edit `groups/discord_main/CLAUDE.md` to tell the master agent about its worker management tools:
+Copy the example template and customize it for your setup:
 
-```markdown
-## Worker Management
-
-You have MCP tools to manage workers:
-
-- **create_worker** — Create a new worker (Discord channel + container). Pass channel_name.
-- **destroy_worker** — Tear down a worker by its JID.
+```bash
+mkdir -p groups/discord_main
+cp master-profiles/CLAUDE.master.example.md groups/discord_main/CLAUDE.md
 ```
+
+The template covers worker management tools, inference backend switching with model discovery, Docker access, and communication style. Edit it to add your org-specific repos, tools, and workflows.
 
 ## 7. Set Up Worker Profiles
 
