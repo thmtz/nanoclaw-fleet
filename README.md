@@ -11,7 +11,7 @@ This fork turns NanoClaw into a **fleet manager for isolated coding agents**, al
 The intended setup procedure is to let an AI agent do it for you:
 
 ```bash
-gh repo fork thmtz/nanoclaw-fleet --clone && cd nanoclaw-fleet
+git clone https://github.com/thmtz/nanoclaw-fleet.git && cd nanoclaw-fleet
 claude   # or your coding agent of choice
 ```
 
