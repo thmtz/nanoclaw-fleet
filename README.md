@@ -8,14 +8,12 @@ This fork turns NanoClaw into a **fleet manager for isolated coding agents**, al
 
 ## Quick Start
 
-The intended setup procedure is to let an AI agent do it for you:
-
 ```bash
 git clone https://github.com/thmtz/nanoclaw-fleet.git && cd nanoclaw-fleet
 claude   # or your coding agent of choice
 ```
 
-Then tell it: "I want to set up NanoClaw with Discord. Help me configure everything." It will read the codebase, walk you through creating a Discord bot, configure your `.env`, set up worker profiles, and get you to a running instance.
+Then run `/setup`. The setup skill walks you through everything: dependencies, Docker, Discord bot, worker profiles, and service configuration. It handles the work automatically and only pauses when it needs your input (creating a Discord bot, pasting tokens, etc.).
 
 If you prefer to set things up manually, the [full setup guide](docs/guides/setup.md) has step-by-step instructions. The short version:
 
