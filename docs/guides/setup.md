@@ -25,13 +25,15 @@ If you prefer to set things up by hand, follow the steps below.
 
 ### What Setup Covers
 
-The `/setup` skill (or manual steps below) will walk you through configuring each of these. If you don't have them yet, each step explains how to create them:
+Whether you use `/setup` or follow the manual steps below, you'll configure:
 
-1. **Claude auth** — OAuth token or Anthropic API key
-2. **Discord bot token** — from the Developer Portal
-3. **Discord Guild ID + Channel ID** — copied from Discord
-4. **GitHub PAT** *(optional)* — for workers that clone private repos
-5. **OpenAI-compatible API key** *(optional)* — for open-weight models
+1. **Claude auth**: OAuth token or Anthropic API key
+2. **Discord bot token**: from the Developer Portal
+3. **Discord Guild ID + Channel ID**: copied from Discord
+4. **GitHub PAT** *(optional)*: for workers that clone private repos
+5. **OpenAI-compatible API key** *(optional)*: for open-weight models
+
+Each step explains how to create these if you don't have them yet.
 
 ## Repo vs. User Config
 
