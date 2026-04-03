@@ -8,8 +8,8 @@
 #
 # The watchdog will:
 #   1. Detect the signal file
-#   2. Run npm run build
-#   3. Restart the nanoclaw service
+#   2. Clean tsc cache and run npm run build
+#   3. Restart nanoclaw + nanoclaw-shim services
 #   4. Remove the signal file
 #
 # Optional: write a reason to the signal file for logging:
@@ -37,9 +37,15 @@ while true; do
 
     cd "$NANOCLAW_DIR"
 
+    # Remove tsc incremental cache to force a full rebuild.
+    # Without this, tsc may skip recompilation after git merges/rebases
+    # because its .tsbuildinfo hash cache says "already compiled" even
+    # though the source files changed.
+    rm -f tsconfig.tsbuildinfo
+
     if npm run build 2>&1; then
-      log "Build succeeded, restarting nanoclaw..."
-      systemctl --user restart nanoclaw
+      log "Build succeeded, restarting nanoclaw + shim..."
+      systemctl --user restart nanoclaw nanoclaw-shim
       log "Restart complete"
     else
       log "ERROR: Build failed, not restarting"

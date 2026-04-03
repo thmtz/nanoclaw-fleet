@@ -270,8 +270,20 @@ When you modify `src/`, `tools/`, or other host code:
 ```bash
 npm run build
 npx vitest run
-systemctl --user restart nanoclaw
+systemctl --user restart nanoclaw nanoclaw-shim
 ./tools/nc-inject.sh --wait test-e2e "say hi" && tail -10 logs/nanoclaw.log
+```
+
+**From inside a container** (e.g., master agent), trigger via the restart watchdog:
+```bash
+echo "reason" > /home/host/.nanoclaw-restart
+```
+The watchdog runs `npm run build` then `systemctl --user restart nanoclaw nanoclaw-shim`.
+
+**Note:** `tsc` uses incremental compilation. If the build appears to no-op after
+a git merge/rebase, delete `.tsbuildinfo` and rebuild:
+```bash
+rm -f tsconfig.tsbuildinfo && npm run build
 ```
 
 ## After Container-Side Changes
@@ -281,7 +293,7 @@ When you modify `container/`, `worker-profiles/`, or agent-runner source:
 ```bash
 npm run build
 ./container/build.sh
-systemctl --user restart nanoclaw
+systemctl --user restart nanoclaw nanoclaw-shim
 # Agent-runner source auto-syncs by mtime; containers respawn on next message
 ./tools/nc-inject.sh --wait test-e2e "say hi"
 ```
@@ -291,6 +303,7 @@ systemctl --user restart nanoclaw
 When you modify `tools/anthropic-shim.ts`:
 
 ```bash
+# Restart just the shim (doesn't kill worker containers)
 systemctl --user restart nanoclaw-shim
 # Test non-streaming
 curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
@@ -302,6 +315,9 @@ curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
 # Check logs
 tail logs/shim.error.log
 ```
+
+**Note:** The shim runs as a separate systemd service (`nanoclaw-shim`). Restarting
+nanoclaw alone does NOT restart the shim. The restart watchdog now restarts both.
 
 ## Reading Logs
 
@@ -327,5 +343,8 @@ docker logs $(docker ps -q --filter name=test-e2e) 2>&1 | tail -50
 | "create_worker: missing required fields" | `DISCORD_GUILD_ID` not in container env | Check `.env` and container-runner.ts |
 | Agent doesn't know about MCP tools | Agent-runner auto-sync failed or container hasn't restarted | Kill container, message worker again (auto-syncs by mtime) |
 | Container builds don't pick up changes | Docker layer caching | `./container/build.sh` (uses `--no-cache`) |
+| Host code changes not taking effect | tsc incremental cache stale | `rm -f tsconfig.tsbuildinfo && npm run build` |
+| Shim still running old code after restart | Only nanoclaw was restarted, not the shim | `systemctl --user restart nanoclaw-shim` (or use watchdog which restarts both) |
 | Worker stuck in crash loop | Stale session state | Delete `.claude/` for that worker, restart |
 | Shim returns 500 | Neuralwatt API key invalid or model not found | Check your Neuralwatt API key file, test with curl |
+| Multiple workers crash with "port already allocated" | Hardcoded port mappings in worker profile | Remove `ports` from default.json, use per-worker profiles for ports |
