@@ -53,6 +53,8 @@ git config core.hooksPath .githooks
 ```
 This is a per-clone setting and must be re-run after cloning to a new machine.
 
+**Pre-push hook** — blocks direct pushes to `main`. Override in an emergency with `ALLOW_MAIN=1 git push`.
+
 ## Quick Context
 
 Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
