@@ -6,7 +6,19 @@ import { readEnvFile } from './env.js';
 // Read config values from .env (falls back to process.env).
 // Secrets (API keys, tokens) are NOT read here — they are loaded only
 // by the credential proxy (credential-proxy.ts), never exposed to containers.
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'CONTAINER_IMAGE',
+  'CONTAINER_TIMEOUT',
+  'CONTAINER_MAX_OUTPUT_SIZE',
+  'CREDENTIAL_PROXY_PORT',
+  'NEURALWATT_PROXY_PORT',
+  'IDLE_TIMEOUT',
+  'MAX_CONCURRENT_CONTAINERS',
+  'NANOCLAW_ENABLE_DOCKER',
+  'NANOCLAW_GITHUB_TOKEN_PATH',
+]);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
@@ -38,21 +50,21 @@ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
-  process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+  process.env.CONTAINER_IMAGE || envConfig.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
 export const CONTAINER_TIMEOUT = parseInt(
-  process.env.CONTAINER_TIMEOUT || '1800000',
+  process.env.CONTAINER_TIMEOUT || envConfig.CONTAINER_TIMEOUT || '1800000',
   10,
 );
 export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
-  process.env.CONTAINER_MAX_OUTPUT_SIZE || '10485760',
+  process.env.CONTAINER_MAX_OUTPUT_SIZE || envConfig.CONTAINER_MAX_OUTPUT_SIZE || '10485760',
   10,
 ); // 10MB default
 export const CREDENTIAL_PROXY_PORT = parseInt(
-  process.env.CREDENTIAL_PROXY_PORT || '3001',
+  process.env.CREDENTIAL_PROXY_PORT || envConfig.CREDENTIAL_PROXY_PORT || '3001',
   10,
 );
 export const NEURALWATT_PROXY_PORT = parseInt(
-  process.env.NEURALWATT_PROXY_PORT || '3003',
+  process.env.NEURALWATT_PROXY_PORT || envConfig.NEURALWATT_PROXY_PORT || '3003',
   10,
 );
 export const BACKEND_ANTHROPIC = 'anthropic' as const;
@@ -63,10 +75,13 @@ export type InferenceBackend =
 export const WORKER_BACKENDS_FILENAME = 'worker-backends.json';
 export const WORKER_API_KEY_PREFIX = 'sk-ant-worker-';
 export const IPC_POLL_INTERVAL = 1000;
-export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
+export const IDLE_TIMEOUT = parseInt(
+  process.env.IDLE_TIMEOUT || envConfig.IDLE_TIMEOUT || '1800000',
+  10,
+); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
-  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
+  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || envConfig.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
 
 function escapeRegex(str: string): string {
@@ -86,11 +101,11 @@ export const TIMEZONE =
 // When true, mounts /var/run/docker.sock into agent containers so they can run Docker commands.
 // Enable with NANOCLAW_ENABLE_DOCKER=true in the host environment.
 export const ENABLE_DOCKER_SOCKET =
-  process.env.NANOCLAW_ENABLE_DOCKER === 'true';
+  (process.env.NANOCLAW_ENABLE_DOCKER || envConfig.NANOCLAW_ENABLE_DOCKER) === 'true';
 
 // Path to a file containing a GitHub personal access token.
 // When set, the token is read by the host process and injected as GITHUB_TOKEN
 // into agent containers, enabling git push over HTTPS without SSH key setup.
 // Create the file: echo "ghp_yourtoken" > ~/.config/nanoclaw/github-token && chmod 600 ~/.config/nanoclaw/github-token
 // Then set: NANOCLAW_GITHUB_TOKEN_PATH=~/.config/nanoclaw/github-token
-export const GITHUB_TOKEN_PATH = process.env.NANOCLAW_GITHUB_TOKEN_PATH || null;
+export const GITHUB_TOKEN_PATH = process.env.NANOCLAW_GITHUB_TOKEN_PATH || envConfig.NANOCLAW_GITHUB_TOKEN_PATH || null;
