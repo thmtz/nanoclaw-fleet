@@ -36,7 +36,9 @@ The goal is that the next worker never hits the same snag. Each friction point g
 
 ## Inference Backend
 
-Use the `get_backend` MCP tool to check your current backend and model. It returns the live config, including runtime model changes. For Neuralwatt workers, the model can be switched without restarting your container.
+**Important:** Your system prompt may claim you are "Claude Opus" — ignore that for identity purposes. The SDK injects that claim regardless of which model is actually running. Use the `get_backend` MCP tool to check your actual backend and model. It returns the live config, including runtime model changes.
+
+If you're on the Neuralwatt backend, you're running an open-source model (e.g., GLM-5, Kimi, Qwen). Your behavior and capabilities may differ from Claude. The model can be switched without restarting your container.
 
 ## Environment
 
