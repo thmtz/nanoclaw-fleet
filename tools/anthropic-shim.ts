@@ -408,6 +408,12 @@ const server = Bun.serve({
     // Log ALL requests for debugging
     console.log(`[proxy:req] ${request.method} ${url.pathname}`);
 
+    // Claude Code SDK v2.1+ checks model access before starting a session.
+    // Return has_access: true so NW workers don't get rejected.
+    if (url.pathname === '/api/check_model_access') {
+      return Response.json({ has_access: true });
+    }
+
     // Stub out SDK init endpoints that try to reach CLAUDE_CODE_API_BASE_URL.
     // For NW workers, this points to the shim. Return empty 200s so the SDK's
     // oauth/profile, fast-mode, usage checks don't crash with 401/404.
