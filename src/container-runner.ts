@@ -299,6 +299,7 @@ function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   groupFolder?: string,
+  ports?: string[],
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -307,6 +308,17 @@ function buildContainerArgs(
   // Without the fallback, pypi.org/github.com/etc. fail.
   if (fs.existsSync('/var/run/tailscale/tailscaled.sock')) {
     args.push('--dns', '100.100.100.100', '--dns', '1.1.1.1');
+  }
+
+  // Port mappings from worker profile (e.g., ["8080:8080", "8090:8090/tcp"])
+  if (ports?.length) {
+    for (const port of ports) {
+      if (/^\d+:\d+(\/\w+)?$/.test(port)) {
+        args.push('-p', port);
+      } else {
+        logger.warn({ port }, 'Ignoring invalid port mapping');
+      }
+    }
   }
 
   // Pass host timezone so container's local time matches the user's
@@ -455,7 +467,12 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = sanitizeFolderName(group.folder);
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, group.folder);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    group.folder,
+    group.containerConfig?.ports,
+  );
 
   logger.debug(
     {

@@ -810,6 +810,7 @@ export async function processTaskIpc(
             added_at: new Date().toISOString(),
             containerConfig: {
               additionalMounts: profile.mounts || [],
+              ports: profile.ports || [],
               disableIdleTimeout: true, // Workers stay alive until explicitly destroyed
             },
             requiresTrigger: false, // Workers have dedicated channels — no trigger needed
