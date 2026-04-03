@@ -24,6 +24,82 @@ If you prefer to set things up manually, the [full setup guide](docs/guides/setu
 5. `npm run build && systemctl --user start nanoclaw`
 6. In `#master`: "create a worker named my-task"
 
+## Using Workers
+
+All interaction happens in Discord. You talk to the **master agent** in `#master`, and it manages workers on your behalf.
+
+### Creating Workers
+
+By default, workers run on **Claude (Opus)** via the Anthropic API:
+
+```
+create a worker named my-task
+```
+
+To use an open-source model via [Neuralwatt](https://portal.neuralwatt.com), specify the backend and model:
+
+```
+create a worker named my-task based on neuralwatt kimi k2.5
+```
+
+The master resolves fuzzy model names automatically — "kimi fast", "qwen coder", etc. all work. You don't need to know exact model identifiers.
+
+### Switching Models
+
+For Neuralwatt workers, you can switch models live without losing your workspace or conversation:
+
+```
+switch my-task to qwen 3.5
+```
+
+Switching between Anthropic and Neuralwatt requires recreating the worker. The master handles this with `transfer_worker` — your workspace and chat history are preserved:
+
+```
+transfer my-task to neuralwatt kimi k2.5
+```
+
+### Viewing Energy & Usage Data
+
+Neuralwatt workers track per-request energy metrics (tokens, joules, watt-hours). There are several ways to see this data:
+
+**Status dashboard** — ask the master to run `/status`. This shows all workers with their backend, model, uptime, and cumulative energy usage:
+
+```
+show /status
+```
+
+Example output:
+```
+Master · claude · up 2h 15m
+
+## Workers
+- 🟢 my-task · moonshotai/Kimi-K2.5 · up 45m · 12 reqs · 8.3k tokens · 0.4 Wh
+- 🟢 other-task · claude · up 1h
+- ⚫ old-task · claude · stopped
+
+## Summary
+- Containers: 2/5 slots used
+- Workers: 3 registered
+- Neuralwatt total: 12 reqs · 8.3k tokens · 0.4 Wh
+```
+
+**On worker destruction** — when you destroy a Neuralwatt worker, lifetime usage is reported automatically.
+
+**Direct query** — from inside a worker or via curl:
+```bash
+curl http://host.docker.internal:3003/usage           # all workers
+curl http://host.docker.internal:3003/usage/discord_my-task  # single worker
+```
+
+Anthropic workers don't return energy data — only request counts and tokens are tracked for Neuralwatt workers.
+
+### Listing and Destroying Workers
+
+```
+list workers
+destroy my-task
+```
+
 ## Architecture
 
 ```
@@ -39,19 +115,15 @@ For goals, design principles, and detailed architecture, see [docs/architecture/
 
 ## Inference Backends
 
-Workers default to Claude (Opus). To use open-source models, start the translation shim and create a worker with `backend: neuralwatt`. The shim translates between Anthropic and OpenAI API formats, including streaming SSE.
+Under the hood, the system uses a **translation shim** (port 3003) that converts between Anthropic and OpenAI API formats. Workers always use the Claude Agent SDK — the shim handles the translation transparently for Neuralwatt workers. Anthropic workers talk directly to the credential proxy (port 3001).
 
-The master can discover available models by name ("kimi fast", "qwen coder") without memorizing identifiers. Models within Neuralwatt can be switched live. Switching between Anthropic and Neuralwatt requires recreating the worker (workspace is preserved).
-
-See [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md) and [docs/architecture/model-discovery.md](docs/architecture/model-discovery.md).
+For technical details: [inference routing](docs/architecture/inference-routing.md) · [model discovery](docs/architecture/model-discovery.md)
 
 <img src="assets/screenshot-worker.png" alt="Worker investigating CI regression runs" width="700">
 
 ## Usage & Energy Tracking
 
-Neuralwatt workers report per-request energy metrics (tokens, joules, watt-hours). The translation shim accumulates these per-worker, and the `/status` command shows a live dashboard with container states, slot usage, and cumulative energy stats. Lifetime usage is also reported when a worker is destroyed.
-
-See [docs/architecture/energy-tracking.md](docs/architecture/energy-tracking.md) for the design.
+The translation shim accumulates per-request energy data from Neuralwatt responses (tokens, joules, watt-hours) and exposes it via `/usage` endpoints. Usage persists across restarts in `data/worker-usage.json`. See [Using Workers](#viewing-energy--usage-data) above for how to access this data, and [docs/architecture/energy-tracking.md](docs/architecture/energy-tracking.md) for the technical design.
 
 ## Restart Behavior
 
