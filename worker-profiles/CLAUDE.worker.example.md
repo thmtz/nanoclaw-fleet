@@ -118,22 +118,73 @@ You have read-only access to Slack via MCP tools (`mcp__slack__*`). When someone
 
 You can also search messages with `mcp__slack__conversations_search_messages` and list channels with `mcp__slack__channels_list`.
 
+## Worker Profiles
+
+Your worker profile (`default.json`) controls what repos get cloned, tools installed, mounts added, and ports exposed. The profile directory is mounted read-write at `/workspace/worker-profiles/`.
+
+### Editing profiles
+
+You can view and edit profiles directly:
+
+```bash
+cat /workspace/worker-profiles/default.json    # View current profile
+# Edit repos, tools, mounts, ports as needed
+```
+
+The profile is a JSON file with these fields:
+
+| Field | Type | Purpose |
+|-|-|-|
+| `repos` | `[{url: "..."}]` | Git repos to clone on first boot |
+| `tools` | `["cmd1", "cmd2"]` | Shell commands to run during init (e.g., `uv tool install foo`) |
+| `mounts` | `[{hostPath, containerPath, readonly}]` | Additional host directories to mount |
+| `ports` | `["8080:8080"]` | Docker port mappings exposed to the host |
+| `claude_md` | `"CLAUDE.worker.md"` | Path to worker template (this file), relative to profile dir |
+| `skills_repo` | `"git@github.com:org/skills.git"` | Git repo containing Claude skills |
+
+### When changes take effect
+
+| What changed | When it applies | Action needed |
+|-|-|-|
+| `repos`, `tools` | Next new worker | Repos are cloned and tools run only on first boot. Existing workers are unaffected. |
+| `mounts`, `ports` | Next container restart | NanoClaw syncs these to the worker's container config periodically. Destroy and recreate the worker, or wait for a restart. |
+| `claude_md` (template content) | Next container restart | The template is copied into the worker's session directory. Updated if the source file is newer than the copy. |
+| `init.sh` | Next container restart | The init script runs on every container boot, so changes apply on restart. |
+| `Dockerfile` changes | After image rebuild | Run `cd /workspace/project/container && ./build.sh`, then restart NanoClaw. |
+
+### What persists across restarts
+
+| Location | Persists? | Notes |
+|-|-|-|
+| `/workspace/group/` | Yes | Your workspace. All repos, files, and uncommitted changes survive. |
+| `/workspace/worker-profiles/` | Yes | Mounted from host. Edits are permanent and shared across all workers. |
+| `~/.claude/` | Yes | Session state, memory, todos. Bind-mounted to host. |
+| Installed packages (`apt`, `pip`, `npm -g`) | No | Container runs with `--rm`. Reinstalled on boot via `init.sh` and profile `tools`. |
+| Files outside `/workspace/` | No | Lost on container restart. |
+
+### Important caveats
+
+- **Shared across workers.** The profile directory is the same for all workers using the same profile. Editing `default.json` affects every worker that uses the default profile.
+- **No hot-reload for mounts/ports.** Changing mounts or ports in the profile won't affect your running container. You need a container restart (destroy + recreate the worker).
+- **init.sh runs every boot.** Put idempotent commands there (e.g., `uv tool install --force`). Avoid destructive operations.
+
 ## Missing Tools or Config
 
 If you need a tool, repo, credential, or skill that isn't available in your environment:
 
 1. **Work around it** for the current task if possible (e.g., `uv tool install`, `npm install -g`, `apt-get install`)
-2. **Tell the user in Discord** what was missing, where it should be added, and why. Be specific — use the categories below so they know exactly what to change.
+2. **Edit the profile directly** at `/workspace/worker-profiles/default.json` if the change should persist for future workers
+3. **Tell the user in Discord** what you changed, or what you need changed at a level you can't access (Dockerfile, allowlists, secrets)
 
-### What to request and where
+### What to change and where
 
-| What's missing | Where to add it | Example request |
+| What's missing | Where to add it | Can you do it? |
 |-|-|-|
-| System package (used by all workers) | `container/Dockerfile` | "Add `htop` to the Dockerfile — useful for debugging resource usage" |
-| CLI tool installed from a repo | `tools` array in worker profile JSON | "Add `uv tool install /workspace/group/my-tool --force` to the profile tools list" |
-| Git repo to clone | `repos` array in worker profile JSON | "Add `git@github.com:org/repo.git` to the profile repos" |
-| Credential or config file | `mounts` array in worker profile JSON | "Mount `~/.config/foo` read-only into workers — needed for foo CLI auth" |
-| Claude skill | `skills_repo` in profile, or manual symlink in `init.sh` | "The /bar skill isn't available — add it to the skills repo" |
-| Env var | `init.sh` or `worker.env` | "Set `FOO_API_KEY` from the mounted credential at `~/.config/foo/key`" |
-
-After a Dockerfile change, the container image must be rebuilt. Profile and init.sh changes take effect on the next worker spawn — no rebuild needed.
+| Git repo to clone | `repos` in `/workspace/worker-profiles/default.json` | Yes — edit directly |
+| CLI tool | `tools` in `/workspace/worker-profiles/default.json` | Yes — edit directly |
+| Port mapping | `ports` in `/workspace/worker-profiles/default.json` | Yes — edit directly |
+| Host directory mount | `mounts` in `/workspace/worker-profiles/default.json` | Yes, but must be on the host's mount allowlist |
+| Claude skill | `skills_repo` in profile, or manual symlink in `init.sh` | Yes — edit directly |
+| System package (all workers) | `container/Dockerfile` | No — ask the user to rebuild the image |
+| Credential or secret | Host-side config | No — ask the user |
+| Env var with secrets | `init.sh` referencing mounted credentials | Partial — you can edit init.sh but not the credential source |
