@@ -1,12 +1,27 @@
 # Setup: Dynamic Worker Agents
 
-How to set up NanoClaw with dynamic worker spawning via Discord. This guide assumes NanoClaw is already installed and running.
+How to set up NanoClaw Fleet with dynamic worker spawning via Discord.
 
-## Prerequisites
+## Recommended: Automated Setup
 
-- NanoClaw installed and running (`systemctl --user status nanoclaw`)
+The fastest way to get running is to let Claude handle it:
+
+```bash
+git clone https://github.com/thmtz/nanoclaw-fleet.git && cd nanoclaw-fleet
+claude
+```
+
+Then run `/setup`. The setup skill walks you through everything below automatically, only pausing when it needs your input.
+
+## Manual Setup
+
+If you prefer to set things up by hand, follow the steps below.
+
+### Prerequisites
+
+- Node.js 22+
 - A Discord bot application (https://discord.com/developers/applications)
-- `docker` installed and accessible to the NanoClaw user
+- `docker` installed and accessible to your user
 
 ## Repo vs. User Config
 
