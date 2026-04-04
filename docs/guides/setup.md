@@ -67,7 +67,7 @@ NanoClaw separates generic code from per-installation configuration. The repo co
 |-|-|
 | `.env` | Secrets and tunables (bot tokens, guild IDs, backend config, container limits) |
 | `data/` | Runtime state — SQLite database, session data, usage metrics (gitignored) |
-| `groups/` | Worker workspaces — cloned repos, uncommitted changes (gitignored except for default CLAUDE.md files) |
+| `groups/` | Agent workspaces — assembled CLAUDE.md, cloned repos, uncommitted changes (gitignored) |
 | `logs/` | Application logs (gitignored) |
 
 The setup steps below walk through creating your user config from the repo's examples. When you later update NanoClaw (pull new code), your `~/.config/nanoclaw/` files are untouched — only the repo-side defaults change, and you can merge those into your config as needed.
