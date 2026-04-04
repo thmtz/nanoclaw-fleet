@@ -132,26 +132,10 @@ export function syncWorkerProfiles(): number {
         .join('\n'),
     );
 
-    // Update CLAUDE.md if profile specifies one — but only if the profile
-    // source is newer than the worker's copy (preserves worker-side edits).
-    if (profile.claude_md) {
-      const profileDir = path.dirname(profilePath);
-      const claudeMdSrc = path.join(profileDir, profile.claude_md);
-      const groupDir = path.join(process.cwd(), 'groups', group.folder);
-      const claudeMdDst = path.join(groupDir, 'CLAUDE.md');
-      if (fs.existsSync(claudeMdSrc) && fs.existsSync(groupDir)) {
-        const srcMtime = fs.statSync(claudeMdSrc).mtimeMs;
-        const dstMtime = fs.existsSync(claudeMdDst)
-          ? fs.statSync(claudeMdDst).mtimeMs
-          : 0;
-        if (srcMtime > dstMtime) {
-          fs.copyFileSync(claudeMdSrc, claudeMdDst);
-          logger.info(
-            { worker: group.name },
-            'Updated worker CLAUDE.md from profile',
-          );
-        }
-      }
+    // Assemble CLAUDE.md from instruction fragments (repo + personal).
+    const groupDir = path.join(process.cwd(), 'groups', group.folder);
+    if (fs.existsSync(groupDir)) {
+      assembleInstructions('worker', groupDir, group.name);
     }
   }
 
@@ -162,35 +146,77 @@ export function syncWorkerProfiles(): number {
 }
 
 /**
- * Sync master CLAUDE.md from ~/.config/nanoclaw/master-profile/CLAUDE.md
- * to the master group's workspace. Only overwrites if the source is newer.
+ * Sync master CLAUDE.md by assembling from instruction fragments.
  */
 export function syncMasterProfile(): void {
   const groups = getAllRegisteredGroups();
   const mainEntry = Object.values(groups).find((g) => g.isMain);
   if (!mainEntry) return;
 
-  const src = path.join(
+  const groupDir = path.join(process.cwd(), 'groups', mainEntry.folder);
+  fs.mkdirSync(groupDir, { recursive: true });
+  assembleInstructions('master', groupDir, mainEntry.name);
+}
+
+/**
+ * Assemble CLAUDE.md from layered instruction fragments.
+ *
+ * Concatenates in order:
+ *   1. Repo instructions/global.md
+ *   2. Repo instructions/{role}.md
+ *   3. Personal ~/.config/nanoclaw/instructions/global.md
+ *   4. Personal ~/.config/nanoclaw/instructions/{role}.md
+ *
+ * Only writes if the assembled content differs from the existing file.
+ */
+export function assembleWorkerInstructions(
+  groupDir: string,
+  groupName: string,
+): void {
+  assembleInstructions('worker', groupDir, groupName);
+}
+
+function assembleInstructions(
+  role: 'master' | 'worker',
+  groupDir: string,
+  groupName: string,
+): void {
+  const repoDir = path.join(process.cwd(), 'instructions');
+  const personalDir = path.join(
     process.env.HOME || '/root',
     '.config',
     'nanoclaw',
-    'master-profile',
-    'CLAUDE.md',
+    'instructions',
   );
-  if (!fs.existsSync(src)) return;
 
-  const groupDir = path.join(process.cwd(), 'groups', mainEntry.folder);
-  fs.mkdirSync(groupDir, { recursive: true });
+  const fragments: { label: string; path: string }[] = [
+    { label: 'repo/global', path: path.join(repoDir, 'global.md') },
+    { label: `repo/${role}`, path: path.join(repoDir, `${role}.md`) },
+    { label: 'personal/global', path: path.join(personalDir, 'global.md') },
+    { label: `personal/${role}`, path: path.join(personalDir, `${role}.md`) },
+  ];
+
+  const sections: string[] = [];
+  for (const frag of fragments) {
+    if (fs.existsSync(frag.path)) {
+      sections.push(fs.readFileSync(frag.path, 'utf-8').trimEnd());
+    }
+  }
+
+  if (sections.length === 0) return;
+
+  const assembled = sections.join('\n\n---\n\n') + '\n';
   const dst = path.join(groupDir, 'CLAUDE.md');
 
-  const srcMtime = fs.statSync(src).mtimeMs;
-  const dstMtime = fs.existsSync(dst) ? fs.statSync(dst).mtimeMs : 0;
-
-  if (srcMtime > dstMtime) {
-    fs.copyFileSync(src, dst);
-    logger.info(
-      { folder: mainEntry.folder },
-      'Synced master CLAUDE.md from ~/.config/nanoclaw/master-profile/',
-    );
+  // Only write if content changed (avoids unnecessary mtime updates)
+  if (fs.existsSync(dst)) {
+    const existing = fs.readFileSync(dst, 'utf-8');
+    if (existing === assembled) return;
   }
+
+  fs.writeFileSync(dst, assembled);
+  logger.info(
+    { group: groupName, role, fragmentCount: sections.length },
+    'Assembled CLAUDE.md from instruction fragments',
+  );
 }
