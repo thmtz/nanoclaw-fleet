@@ -591,16 +591,27 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  const t0 = Date.now();
+  const step = (label: string) => {
+    const elapsed = Date.now() - t0;
+    logger.info({ elapsed, step: label }, `Startup: ${label} (+${elapsed}ms)`);
+  };
+
   ensureContainerSystemRunning();
+  step('container system checked');
+
   initDatabase();
-  logger.info('Database initialized');
+  step('database initialized');
+
   loadState();
+  step('state loaded');
 
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
   );
+  step('credential proxy started');
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
@@ -664,6 +675,7 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+  step('channels connected');
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -720,9 +732,12 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
 
+  step('subsystems started');
+
   // Sync profiles: propagate profile changes to existing workers + master
   syncWorkerProfiles();
   syncMasterProfile();
+  step('profiles synced');
 
   recoverPendingMessages();
 
@@ -743,6 +758,8 @@ async function main(): Promise<void> {
       );
     }
   }
+
+  step('startup complete');
 
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

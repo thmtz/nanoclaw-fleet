@@ -56,9 +56,10 @@ NanoClaw separates generic code from per-installation configuration. The repo co
 | Path | Purpose |
 |-|-|
 | `worker-profiles/default.json` | Your worker profile — repos to clone, credential mounts, tools to install |
-| `worker-profiles/CLAUDE.worker.md` | Your worker agent instructions — coding conventions, repo access, team-specific context |
 | `worker-profiles/init.sh` | Your init script — runs inside each container at boot |
-| `master-profile/CLAUDE.md` | Your master agent instructions — communication style, GPU workflow, team-specific tools |
+| `instructions/global.md` | Personal instructions for all agents (beads, code conventions, etc.) |
+| `instructions/master.md` | Personal master-only instructions (mounts, GPU workflow, etc.) |
+| `instructions/worker.md` | Personal worker-only instructions (mount map, repos, network) |
 
 **Other per-installation state** (also outside the repo):
 
@@ -141,16 +142,23 @@ sqlite3 store/messages.db \
 
 Set `requires_trigger = 0` so the master responds to all messages (no @mention needed).
 
-## 6. Update Master Agent Instructions
+## 6. Personal Instructions (Optional)
 
-Copy the example template and customize it for your setup:
+Agent instructions are assembled from layered fragments. The repo provides base instructions in `instructions/{global,master,worker}.md`. You can add personal instructions that get appended:
 
 ```bash
-mkdir -p groups/discord_main
-cp master-profiles/CLAUDE.master.example.md groups/discord_main/CLAUDE.md
+mkdir -p ~/.config/nanoclaw/instructions
+# Create any or all of these — they're all optional:
+# global.md  — applied to all agents (master + workers)
+# master.md  — master-only additions
+# worker.md  — worker-only additions
 ```
 
-The template covers worker management tools, inference backend switching with model discovery, Docker access, and communication style. Edit it to add your org-specific repos, tools, and workflows.
+The final CLAUDE.md for each agent is assembled at startup:
+1. `instructions/global.md` (repo — shared base for all agents)
+2. `instructions/master.md` or `instructions/worker.md` (repo — role-specific)
+3. `~/.config/nanoclaw/instructions/global.md` (personal — all agents)
+4. `~/.config/nanoclaw/instructions/master.md` or `worker.md` (personal — role-specific)
 
 ## 7. Set Up Worker Profiles
 
@@ -159,7 +167,6 @@ Worker profiles define what repos, tools, and credentials each worker gets. Conf
 ```bash
 mkdir -p ~/.config/nanoclaw/worker-profiles
 cp worker-profiles/example.json ~/.config/nanoclaw/worker-profiles/default.json
-cp worker-profiles/CLAUDE.worker.example.md ~/.config/nanoclaw/worker-profiles/CLAUDE.worker.md
 cp worker-profiles/init.sh ~/.config/nanoclaw/worker-profiles/init.sh
 chmod +x ~/.config/nanoclaw/worker-profiles/init.sh
 ```
