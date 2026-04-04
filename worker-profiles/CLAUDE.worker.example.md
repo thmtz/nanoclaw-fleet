@@ -139,7 +139,7 @@ The profile is a JSON file with these fields:
 | `tools` | `["cmd1", "cmd2"]` | Shell commands to run during init (e.g., `uv tool install foo`) |
 | `mounts` | `[{hostPath, containerPath, readonly}]` | Additional host directories to mount |
 | `ports` | `["8080:8080"]` | Docker port mappings exposed to the host |
-| `claude_md` | `"CLAUDE.worker.md"` | Path to worker template (this file), relative to profile dir |
+| `claude_md` | `"CLAUDE.worker.md"` | (Deprecated) Legacy worker template path. Instructions are now assembled from `instructions/` fragments. |
 | `skills_repo` | `"git@github.com:org/skills.git"` | Git repo containing Claude skills |
 
 ### When changes take effect
