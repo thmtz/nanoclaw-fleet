@@ -126,7 +126,10 @@ import {
 } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { loadWorkerProfile } from './profile-sync.js';
+import {
+  assembleWorkerInstructions,
+  loadWorkerProfile,
+} from './profile-sync.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -765,17 +768,12 @@ export async function processTaskIpc(
           );
           const jid = `dc:${channelId}`;
 
-          // Set up group directory with worker CLAUDE.md
+          // Set up group directory with assembled CLAUDE.md
           const groupDir = path.join(process.cwd(), 'groups', data.folder);
           fs.mkdirSync(groupDir, { recursive: true });
-          if (profile.claude_md) {
-            // Resolve relative to profile directory
-            const profileDir = path.dirname(profilePath);
-            const claudeMdSrc = path.join(profileDir, profile.claude_md);
-            if (fs.existsSync(claudeMdSrc)) {
-              fs.copyFileSync(claudeMdSrc, path.join(groupDir, 'CLAUDE.md'));
-            }
-          }
+          // Import is at top of file; assembleInstructions handles the
+          // layered concatenation of repo + personal instruction fragments.
+          assembleWorkerInstructions(groupDir, data.folder);
 
           // Write worker env file for init script (repos + tools + skills)
           // Use | as separator — newlines break docker -e parsing

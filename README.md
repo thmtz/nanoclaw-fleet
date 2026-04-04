@@ -111,6 +111,19 @@ Discord Server
 
 One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master does minimal thinking: it calls MCP tools (create, destroy, list, switch) with the right arguments. Workers handle all the real work.
 
+### Agent Instructions
+
+Each agent's CLAUDE.md is assembled from layered fragments at spawn time:
+
+| Layer | Location | Scope |
+|-|-|-|
+| Repo global | `instructions/global.md` | All agents (master + workers) |
+| Repo role | `instructions/master.md` or `worker.md` | Role-specific |
+| Personal global | `~/.config/nanoclaw/instructions/global.md` | All agents (your conventions) |
+| Personal role | `~/.config/nanoclaw/instructions/master.md` or `worker.md` | Role-specific (your config) |
+
+Repo instructions cover generic NanoClaw behavior (communication, tools, workspace). Personal instructions add your workflow (code conventions, repos, credentials, integrations). Both are optional — the system works with just the repo layer.
+
 For goals, design principles, and detailed architecture, see [docs/architecture/overview.md](docs/architecture/overview.md).
 
 ## Inference Backends

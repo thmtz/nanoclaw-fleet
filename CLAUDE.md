@@ -106,7 +106,7 @@ After implementing a feature or fix, check whether documentation needs updating:
 - **`docs/architecture/`** if system behavior changed
 - **`docs/guides/testing.md`** if new testable behaviors were added
 - **`.env.example`** if new env vars were added
-- **`groups/discord_main/CLAUDE.md`** if the master agent's capabilities changed
+- **`instructions/`** if agent capabilities or behavior changed (global, master, or worker)
 
 **You must personally exercise your changes before declaring done.** Compiling and passing unit tests is not enough. Use `tools/nc-inject.sh` and `tools/nc-ipc.sh` to send real messages, create/destroy workers, and confirm the system behaves correctly. If you changed worker lifecycle code, create a worker, message it, destroy it, and recreate with resume. If you changed the shim, curl the endpoint and verify the response. If you changed the container image or init.sh, rebuild, restart, and message a worker to confirm it boots. Check `logs/nanoclaw.log` for errors after every test. See [docs/guides/testing.md](docs/guides/testing.md) for exact commands and scenarios.
 

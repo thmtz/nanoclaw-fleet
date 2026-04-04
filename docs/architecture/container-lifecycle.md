@@ -92,14 +92,17 @@ The `groups/` directory is gitignored and holds per-agent workspaces:
 
 | Directory | What it is | Created by |
 |-|-|-|
-| `groups/global/` | Shared CLAUDE.md loaded by all non-main agents | Manual (part of setup) |
-| `groups/discord_main/` | Master agent workspace (CLAUDE.md, repos, logs) | Startup sync |
-| `groups/discord_{name}/` | Worker workspaces (repos, code, CLAUDE.md) | `create_worker` |
+| `groups/discord_main/` | Master agent workspace (assembled CLAUDE.md, repos, logs) | Startup sync |
+| `groups/discord_{name}/` | Worker workspaces (repos, code, assembled CLAUDE.md) | `create_worker` |
 
-All `groups/` directories are ephemeral workspaces (gitignored). Agent instructions are defined elsewhere and copied in:
+All `groups/` directories are ephemeral workspaces (gitignored). Agent instructions are assembled from layered fragments at startup (master) or worker creation time:
 
-- **Master profile:** `~/.config/nanoclaw/master-profile/CLAUDE.md` is the source of truth for the master's instructions. Synced to `groups/discord_main/CLAUDE.md` on every NanoClaw startup (only overwrites if source is newer).
-- **Worker profile:** `~/.config/nanoclaw/worker-profiles/CLAUDE.worker.md` (with a repo example at `worker-profiles/CLAUDE.worker.example.md`). Copied to `groups/discord_{name}/CLAUDE.md` on `create_worker`.
+1. `instructions/global.md` (repo) — shared base for all agents
+2. `instructions/master.md` or `instructions/worker.md` (repo) — role-specific
+3. `~/.config/nanoclaw/instructions/global.md` (personal) — user-specific, all agents
+4. `~/.config/nanoclaw/instructions/master.md` or `worker.md` (personal) — user-specific, role-specific
+
+The assembled result is written to `groups/{folder}/CLAUDE.md`. See `profile-sync.ts` for the assembly logic.
 
 ## Storage Layers
 
