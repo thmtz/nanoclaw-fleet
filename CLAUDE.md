@@ -93,6 +93,15 @@ systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
 ```
 
+## Debugging
+
+**Host startup/shutdown timing** is logged at INFO level:
+```bash
+grep 'Startup:\|Shutdown:' logs/nanoclaw.log
+```
+
+**Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr.
+
 ## Gotchas
 
 - **Agent-runner source auto-syncs by mtime.** Changes to MCP tools or agent-runner code take effect on next container spawn. No manual cache clearing needed.

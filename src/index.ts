@@ -615,10 +615,23 @@ async function main(): Promise<void> {
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
+    const s0 = Date.now();
+    const sstep = (label: string) => {
+      const elapsed = Date.now() - s0;
+      logger.info(
+        { elapsed, step: label },
+        `Shutdown: ${label} (+${elapsed}ms)`,
+      );
+    };
+
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    sstep('credential proxy closed');
     await queue.shutdown(10000);
+    sstep('queue shut down');
     for (const ch of channels) await ch.disconnect();
+    sstep('channels disconnected');
+    sstep('shutdown complete');
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
