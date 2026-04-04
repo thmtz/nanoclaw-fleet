@@ -45,8 +45,8 @@ NanoClaw separates generic code from per-installation configuration. The repo co
 |-|-|
 | `src/` | Host process (message routing, container lifecycle, IPC) |
 | `container/` | Dockerfile, agent runner, MCP tools, skills |
+| `instructions/` | Agent instructions — global, master, and worker (assembled at startup) |
 | `worker-profiles/` | Example worker profiles — templates you copy and customize |
-| `master-profiles/` | Example master agent instructions — copy to `groups/discord_main/` |
 | `tools/` | Utility scripts (status dashboard, shims, injection helpers) |
 | `docs/` | Architecture docs, setup guides, testing procedures |
 | `.env.example` | Template for required environment variables |

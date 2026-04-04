@@ -133,7 +133,6 @@ Worker profiles define what repos, tools, and credentials each worker container 
 ```bash
 mkdir -p ~/.config/nanoclaw/worker-profiles
 cp worker-profiles/example.json ~/.config/nanoclaw/worker-profiles/default.json
-cp worker-profiles/CLAUDE.worker.example.md ~/.config/nanoclaw/worker-profiles/CLAUDE.worker.md
 cp worker-profiles/init.sh ~/.config/nanoclaw/worker-profiles/init.sh
 chmod +x ~/.config/nanoclaw/worker-profiles/init.sh
 ```
@@ -144,20 +143,18 @@ AskUserQuestion: "Which repos should workers clone on startup? (comma-separated,
 
 Update `default.json` with their repos. If they have no specific repos, leave the default.
 
-Also ask about `CLAUDE.worker.md`: "Do you want to customize the worker agent instructions? This controls coding conventions, repo access rules, and team-specific context." If yes, help them edit it. If no, the default is fine to start.
+## 8. Personal Instructions (Optional)
 
-## 8. Master Agent Instructions
+Agent instructions are assembled from repo-level fragments (`instructions/{global,master,worker}.md`) plus optional personal additions. Ask the user if they want to add personal instructions:
 
-The master agent's behavior is defined in `groups/discord_main/CLAUDE.md`. This file is gitignored (per-installation).
+AskUserQuestion: "Do you want to add personal agent instructions? (code conventions, repo lists, integrations, etc.) You can always add these later."
 
-If `groups/discord_main/CLAUDE.md` doesn't exist, copy the example template:
-
+If yes:
 ```bash
-mkdir -p groups/discord_main
-cp master-profiles/CLAUDE.master.example.md groups/discord_main/CLAUDE.md
+mkdir -p ~/.config/nanoclaw/instructions
 ```
 
-Ask the user if they want to customize it (add org-specific repos, tools, workflows). If yes, help them edit. If no, the example template covers worker management, inference backends with model discovery, Docker access, and communication style.
+Create `global.md` (applies to all agents), `master.md` (master only), or `worker.md` (workers only) as needed. Help them add their conventions.
 
 ## 9. Optional: Open-Weight Model Support
 
