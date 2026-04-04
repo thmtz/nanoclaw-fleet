@@ -197,9 +197,11 @@ function assembleInstructions(
   ];
 
   const sections: string[] = [];
+  const included: string[] = [];
   for (const frag of fragments) {
     if (fs.existsSync(frag.path)) {
       sections.push(fs.readFileSync(frag.path, 'utf-8').trimEnd());
+      included.push(frag.label);
     }
   }
 
@@ -216,7 +218,7 @@ function assembleInstructions(
 
   fs.writeFileSync(dst, assembled);
   logger.info(
-    { group: groupName, role, fragmentCount: sections.length },
+    { group: groupName, role, fragments: included },
     'Assembled CLAUDE.md from instruction fragments',
   );
 }

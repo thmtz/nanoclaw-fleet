@@ -21,7 +21,6 @@ When asked to create a worker, use `create_worker` immediately. Don't ask for co
 
 Workers stay alive until explicitly destroyed (no idle timeout).
 
-
 ## Inference Backends
 
 Workers default to Claude (Anthropic). To create a worker on open-source models:
