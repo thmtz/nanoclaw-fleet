@@ -59,15 +59,22 @@ fail() { echo -e "  ${RED}✗${NC} $1"; FAIL=$((FAIL + 1)); }
 info() { echo -e "${YELLOW}▸${NC} $1"; }
 
 cleanup() {
-  info "Cleaning up worker ${WORKER_NAME}..."
-  local jid
-  jid=$(sqlite3 store/messages.db "SELECT jid FROM registered_groups WHERE folder='${WORKER_FOLDER}';" 2>/dev/null | head -1)
-  if [ -n "$jid" ]; then
+  info "Cleaning up test workers..."
+  # Destroy any workers created by this test run (matched by PID suffix)
+  local jids
+  jids=$(sqlite3 store/messages.db "SELECT jid FROM registered_groups WHERE folder LIKE '%e2e%${$}%' OR folder LIKE '%e2e-nw-${$}%';" 2>/dev/null)
+  for jid in $jids; do
     tools/nc-ipc.sh discord_main "{\"type\":\"destroy_worker\",\"jid\":\"${jid}\"}" >/dev/null 2>&1 || true
-  fi
+  done
   sleep 3
-  rm -rf "groups/${WORKER_FOLDER}" "data/sessions/${WORKER_FOLDER}" 2>/dev/null || true
-  sqlite3 store/messages.db "DELETE FROM sessions WHERE group_folder='${WORKER_FOLDER}';" 2>/dev/null || true
+  # Clean up local state
+  for folder in $(find groups/ -maxdepth 1 -name "*e2e*$$*" -type d 2>/dev/null); do
+    rm -rf "$folder"
+  done
+  for folder in $(find data/sessions/ -maxdepth 1 -name "*e2e*$$*" -type d 2>/dev/null); do
+    rm -rf "$folder"
+    sqlite3 store/messages.db "DELETE FROM sessions WHERE group_folder='$(basename "$folder")';" 2>/dev/null || true
+  done
 }
 trap cleanup EXIT
 
@@ -332,9 +339,6 @@ fi
 
 info "Destroying worker..."
 
-# Remove the EXIT trap cleanup since we're doing it here
-trap - EXIT
-
 # Look up JID from DB (destroy_worker IPC requires jid, not name)
 WORKER_JID=$(sqlite3 store/messages.db "SELECT jid FROM registered_groups WHERE folder='${WORKER_FOLDER}';" 2>/dev/null | head -1)
 if [ -n "$WORKER_JID" ]; then
@@ -382,14 +386,7 @@ else
   pass "No startup timing found (JSONL may be from before this feature)"
 fi
 
-# ── Final cleanup ─────────────────────────────────────────────
-
-# Clean up workspace and session
-rm -rf "groups/${WORKER_FOLDER}"
-sqlite3 store/messages.db "DELETE FROM sessions WHERE group_folder='${WORKER_FOLDER}';" 2>/dev/null || true
-rm -rf "data/sessions/${WORKER_FOLDER}"
-
-# ── Summary ───────────────────────────────────────────────────
+# ── Summary (cleanup runs via EXIT trap) ──────────────────────
 
 TOTAL_END=$(date +%s%3N)
 TOTAL_MS=$((TOTAL_END - TOTAL_START))
