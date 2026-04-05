@@ -119,6 +119,7 @@ jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 | `tools/nc-inject.sh <channel> <msg>` | Inject a message into a channel (triggers agent response) |
 | `tools/nc-ipc.sh <group> <json>` | Send an IPC command (create/destroy workers, list, etc.) |
 | `tools/read-session.sh <group> [lines]` | Display a worker's session transcript as readable prose |
+| `tools/nc-logs.sh [worker] [--cache\|--slow]` | Query per-worker audit logs (tokens, latency, cache hits) |
 
 ## Gotchas
 

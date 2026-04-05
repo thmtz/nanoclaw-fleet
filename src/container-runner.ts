@@ -34,6 +34,10 @@ import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import {
+  extractTurnsFromTranscript,
+  getTranscriptOffset,
+} from './audit-log.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -520,6 +524,9 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  // Record transcript offset before run for post-turn audit extraction
+  const transcriptOffset = getTranscriptOffset(group.folder, input.sessionId);
+
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -663,6 +670,21 @@ export async function runContainerAgent(
     container.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
+
+      // Extract audit data from SDK transcript (Anthropic workers)
+      const effectiveSessionId = newSessionId || input.sessionId;
+      try {
+        extractTurnsFromTranscript(
+          group.folder,
+          effectiveSessionId,
+          transcriptOffset,
+        );
+      } catch (err) {
+        logger.debug(
+          { group: group.name, error: err },
+          'Audit extraction failed (non-fatal)',
+        );
+      }
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
