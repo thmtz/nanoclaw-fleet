@@ -724,7 +724,7 @@ async function testPortMapping(guildId: string) {
 
   // Check registration has ports in containerConfig
   const configJson = sqlite(
-    `SELECT json_extract(data, '$.containerConfig.ports') FROM registered_groups WHERE folder='${folder}';`,
+    `SELECT json_extract(container_config, '$.ports') FROM registered_groups WHERE folder='${folder}';`,
   );
   if (configJson && configJson.includes('19876')) {
     pass('Port mapping stored in DB config');
