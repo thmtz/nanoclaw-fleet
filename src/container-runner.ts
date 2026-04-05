@@ -341,6 +341,9 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Beads: containers reach the host's dolt server via Docker gateway
+  args.push('-e', 'BEADS_DOLT_SERVER_HOST=host.docker.internal');
+
   // Pass model selection to the container agent
   const { NANOCLAW_MODEL, DISCORD_GUILD_ID } = readEnvFile([
     'NANOCLAW_MODEL',
