@@ -46,6 +46,10 @@ Your worker profile controls what repos get cloned, tools installed, mounts adde
 | `init.sh` | Next container restart (runs every boot) |
 | `Dockerfile` changes | After image rebuild |
 
+### Port mappings
+
+If you need a port mapped to the host (e.g., running a web server), you can't add one to a running container. Tell the user to ask the master to recreate you with ports: "create a worker named X with ports 3000:3000". Port mappings can also be set in the worker profile's `ports` field for all future workers.
+
 ## Missing Tools or Config
 
 If you need a tool, repo, credential, or skill that isn't available:
