@@ -472,14 +472,17 @@ const server = Bun.serve({
       url.pathname.startsWith('/api/') ||
       url.pathname.startsWith('/v1/organizations') ||
       url.pathname.startsWith('/v1/sessions') ||
-      (request.method === 'GET' && !url.pathname.startsWith('/w/') && !url.pathname.startsWith('/usage') && !url.pathname.startsWith('/health') && !url.pathname.startsWith('/models') && !url.pathname.startsWith('/logs') && !url.pathname.startsWith('/config'))
+      (request.method === 'GET' &&
+        !['/w/', '/usage', '/health', '/models', '/logs', '/config'].some((p) =>
+          url.pathname.startsWith(p),
+        ))
     ) {
       return Response.json({});
     }
 
     // Health + usage + config endpoints
     if (url.pathname === '/health') {
-      return Response.json({ status: 'ok', version: 'audit-v2' });
+      return Response.json({ status: 'ok' });
     }
     if (url.pathname === '/usage') {
       return Response.json({ ...workerUsage, total: getUsageTotal() });

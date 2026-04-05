@@ -28,6 +28,36 @@ interface TurnEntry {
   stream: boolean;
 }
 
+/** Parse assistant messages with usage data from transcript JSONL lines. */
+function parseTurnsFromLines(lines: string[], turns: TurnEntry[]): void {
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.message?.role !== 'assistant') continue;
+      if (!entry.message?.usage) continue;
+
+      const usage = entry.message.usage;
+      turns.push({
+        ts: new Date().toISOString(),
+        model: entry.message.model || 'unknown',
+        backend: 'anthropic',
+        input_tokens:
+          (usage.input_tokens || 0) +
+          (usage.cache_read_input_tokens || 0) +
+          (usage.cache_creation_input_tokens || 0),
+        output_tokens: usage.output_tokens || 0,
+        cached_tokens: usage.cache_read_input_tokens || null,
+        cache_creation_tokens: usage.cache_creation_input_tokens || null,
+        latency_ms: null,
+        stop_reason: entry.message.stop_reason || 'unknown',
+        stream: true,
+      });
+    } catch {
+      // Skip malformed lines
+    }
+  }
+}
+
 /**
  * Extract usage from SDK transcript entries written during a container run.
  * Reads only entries added after `sinceOffset` bytes.
@@ -72,37 +102,8 @@ export function extractTurnsFromTranscript(
 
   const turns: TurnEntry[] = [];
 
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      // Only look at assistant messages (they have usage data)
-      if (entry.message?.role !== 'assistant') continue;
-      if (!entry.message?.usage) continue;
-
-      const usage = entry.message.usage;
-      const inputTokens =
-        (usage.input_tokens || 0) +
-        (usage.cache_read_input_tokens || 0) +
-        (usage.cache_creation_input_tokens || 0);
-
-      turns.push({
-        ts: new Date().toISOString(),
-        model: entry.message.model || 'unknown',
-        backend: 'anthropic',
-        input_tokens: inputTokens,
-        output_tokens: usage.output_tokens || 0,
-        cached_tokens: usage.cache_read_input_tokens || null,
-        cache_creation_tokens: usage.cache_creation_input_tokens || null,
-        latency_ms: null, // Not available from transcript
-        stop_reason: entry.message.stop_reason || 'unknown',
-        stream: true, // SDK always uses streaming
-      });
-    } catch {
-      // Skip malformed lines
-    }
-  }
-
-  if (turns.length === 0) return;
+  // Extract turns from transcript lines
+  parseTurnsFromLines(lines, turns);
 
   // Also scan subagent transcripts for this session
   const subagentsDir = path.join(sessionsDir, sessionId, 'subagents');
@@ -114,28 +115,10 @@ export function extractTurnsFromTranscript(
           path.join(subagentsDir, subFile),
           'utf-8',
         );
-        for (const subLine of subContent.trim().split('\n').filter(Boolean)) {
-          const entry = JSON.parse(subLine);
-          if (entry.message?.role !== 'assistant' || !entry.message?.usage)
-            continue;
-          const usage = entry.message.usage;
-          const inputTokens =
-            (usage.input_tokens || 0) +
-            (usage.cache_read_input_tokens || 0) +
-            (usage.cache_creation_input_tokens || 0);
-          turns.push({
-            ts: new Date().toISOString(),
-            model: entry.message.model || 'unknown',
-            backend: 'anthropic',
-            input_tokens: inputTokens,
-            output_tokens: usage.output_tokens || 0,
-            cached_tokens: usage.cache_read_input_tokens || null,
-            cache_creation_tokens: usage.cache_creation_input_tokens || null,
-            latency_ms: null,
-            stop_reason: entry.message.stop_reason || 'unknown',
-            stream: true,
-          });
-        }
+        parseTurnsFromLines(
+          subContent.trim().split('\n').filter(Boolean),
+          turns,
+        );
       } catch {
         // Skip corrupt subagent files
       }
