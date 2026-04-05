@@ -45,3 +45,79 @@ docker ps --filter name=nanoclaw    # Inspect running workers
 docker logs <container-name>         # View worker logs
 docker exec -it <container-name> bash  # Exec into a worker
 ```
+
+## Diagnostics
+
+When something isn't working, investigate the root cause before suggesting a fix. Don't just say "restart the container" — understand *why* it's broken so the system can be improved.
+
+### Why is a worker not responding?
+
+```bash
+# Is the container running?
+docker ps --filter name=nanoclaw-discord-<worker>
+
+# If not running, check what happened last time
+docker logs $(docker ps -a --filter name=nanoclaw-discord-<worker> --format '{{.Names}}' | head -1) 2>&1 | tail -30
+
+# Check for errors in host logs
+jq 'select(.group == "<worker>" and .level >= 50)' /workspace/project/logs/nanoclaw.jsonl | tail -5
+
+# Check the worker's last session transcript
+/workspace/project/tools/read-session.sh <worker> 30
+```
+
+### Auth failures (401s, "Failed to authenticate")
+
+```bash
+# Recent auth errors across all workers
+jq -r 'select(.msg != null and (.msg | test("401|authenticate|API key"; "i"))) | "\(.time / 1000 | strftime("%H:%M:%S")) [\(.group // "host")] \(.msg[0:100])"' /workspace/project/logs/nanoclaw.jsonl | tail -10
+
+# Check credential proxy is reachable
+curl -s -o /dev/null -w "%{http_code}" http://host.docker.internal:3001/
+
+# Check if OAuth token is still valid (look for recent successful requests)
+jq 'select(.msg == "Container first output") | "\(.time / 1000 | strftime("%H:%M:%S")) \(.group)"' /workspace/project/logs/nanoclaw.jsonl | tail -5
+```
+
+### Orphaned containers or stale state
+
+```bash
+# Running containers with no matching registration
+docker ps --filter name=nanoclaw- --format '{{.Names}}'
+sqlite3 /workspace/project/store/messages.db "SELECT folder FROM registered_groups WHERE is_main=0;"
+# Compare the two lists — containers without registrations are orphans
+
+# Registered workers with no workspace
+sqlite3 /workspace/project/store/messages.db "SELECT folder FROM registered_groups WHERE is_main=0;" | while read f; do
+  [ -d "/workspace/project/groups/$f" ] || echo "MISSING WORKSPACE: $f"
+done
+```
+
+### Slow worker startups
+
+```bash
+# Recent container startups with timing
+jq -r 'select(.msg == "Container first output") | "\(.time / 1000 | strftime("%H:%M:%S")) [\(.group)] \(.startupMs)ms"' /workspace/project/logs/nanoclaw.jsonl | tail -10
+
+# Check init.sh profiling for a specific worker
+docker logs $(docker ps --filter name=nanoclaw-discord-<worker> --format '{{.Names}}') 2>&1 | grep '\[entrypoint\|\[init\]'
+```
+
+### Audit logs (per-worker API usage)
+
+```bash
+/workspace/project/tools/nc-logs.sh                    # summary of all workers
+/workspace/project/tools/nc-logs.sh <worker>            # last 20 turns
+/workspace/project/tools/nc-logs.sh <worker> --cache    # cache hit analysis
+/workspace/project/tools/nc-logs.sh <worker> --slow 5000  # slow requests
+```
+
+### Host startup timing
+
+```bash
+jq 'select(.msg | startswith("Startup:"))' /workspace/project/logs/nanoclaw.jsonl | tail -10
+```
+
+### After diagnosing
+
+Focus on *why* the issue happened, not just fixing the symptom. If you discover a new failure mode or a useful diagnostic command, suggest updating these instructions so the next investigation is faster.
