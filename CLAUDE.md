@@ -53,7 +53,7 @@ git config core.hooksPath .githooks
 ```
 This is a per-clone setting and must be re-run after cloning to a new machine.
 
-**Pre-push hook** — blocks direct pushes to `main`. Override in an emergency with `ALLOW_MAIN=1 git push`.
+**Pre-push hook** — blocks direct pushes to `main`. There is no exception for "small fixes." Always use a feature branch + PR, no matter how trivial the change seems.
 
 ## Quick Context
 
