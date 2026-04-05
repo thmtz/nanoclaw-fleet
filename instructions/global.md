@@ -43,15 +43,15 @@ When the user asks you to change instructions, tools, packages, or other config,
 
 **Global vs role-specific**: Does this apply to all agents (master + workers), or just one role? Global config goes in `global.md` or the base Dockerfile. Role-specific config goes in `master.md`, `worker.md`, or a named worker profile.
 
-| Change | Where |
-|-|-|
-| Generic agent behavior (communication, workspace) | Repo `instructions/global.md` |
-| Master-only tools or capabilities | Repo `instructions/master.md` |
-| Worker-only environment info | Repo `instructions/worker.md` |
-| User's code conventions, repos, integrations | Personal `~/.config/nanoclaw/instructions/` |
-| System packages all users need | Repo `container/Dockerfile` |
-| User's extra packages (databases, test tools) | Personal `~/.config/nanoclaw/Dockerfile` |
-| Which repos to clone, tools to install | Personal `~/.config/nanoclaw/worker-profiles/` |
+| Change | Where | Can you edit it? |
+|-|-|-|
+| Generic agent behavior | Repo `instructions/global.md` | Master: yes (`/workspace/project/`). Workers: yes (clone). |
+| Master-only capabilities | Repo `instructions/master.md` | Master: yes. Workers: no. |
+| Worker-only environment info | Repo `instructions/worker.md` | Master: yes. Workers: yes (clone). |
+| User's code conventions, repos | Host `~/.config/nanoclaw/instructions/` | No (host-only). Tell the user what to add. |
+| System packages all users need | Repo `container/Dockerfile` | Master: yes. Requires image rebuild. |
+| User's extra packages | Host `~/.config/nanoclaw/Dockerfile` | No (host-only). Tell the user what to add. |
+| Which repos to clone, tools | Host `~/.config/nanoclaw/worker-profiles/` | Workers: yes at `/workspace/worker-profiles/`. Master: yes via `/home/host/`. |
 
 If you're unsure, ask the user. The key question is: would removing this break NanoClaw for other users? If yes, it's shared. If only this user cares, it's personal.
 
