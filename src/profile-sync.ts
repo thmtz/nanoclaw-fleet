@@ -14,7 +14,7 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface WorkerProfile {
-  repos?: { url: string }[];
+  repos?: { url: string; postClone?: string }[];
   tools?: string[];
   mounts?: {
     hostPath: string;
@@ -114,6 +114,12 @@ export function syncWorkerProfiles(): number {
     const workerEnv: Record<string, string> = {};
     if (profile.repos?.length) {
       workerEnv.WORKER_REPOS = profile.repos.map((r) => r.url).join('|');
+      const postClones = profile.repos
+        .filter((r) => r.postClone)
+        .map((r) => `${path.basename(r.url, '.git')}:${r.postClone}`);
+      if (postClones.length > 0) {
+        workerEnv.WORKER_REPO_POST_CLONE = postClones.join('|');
+      }
     }
     if (profile.tools?.length) {
       workerEnv.WORKER_TOOLS = profile.tools.join('|');
