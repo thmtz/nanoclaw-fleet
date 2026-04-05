@@ -3,7 +3,7 @@
   "description": "Example worker profile — copy to ~/.config/nanoclaw/worker-profiles/default.json and customize",
 
   "repos": [
-    {"url": "git@github.com:your-org/your-repo.git", "description": "Main project repo"}
+    {"url": "git@github.com:your-org/your-repo.git", "postClone": "git config core.hooksPath .githooks"}
   ],
 
   "tools": [
