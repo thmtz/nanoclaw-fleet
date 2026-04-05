@@ -1,0 +1,23 @@
+{
+  "name": "default",
+  "description": "Standard development worker",
+
+  "repos": [
+    {"url": "git@github.com:your-org/backend.git", "postClone": "git config core.hooksPath .githooks"},
+    {"url": "git@github.com:your-org/frontend.git", "postClone": "git config core.hooksPath .githooks"},
+    {"url": "git@github.com:your-org/shared-tools.git"},
+    {"url": "git@github.com:your-org/nanoclaw-fleet.git", "postClone": "git config core.hooksPath .githooks"}
+  ],
+
+  "tools": [
+    "uv tool install /workspace/group/shared-tools --force"
+  ],
+
+  "mounts": [
+    {"hostPath": "~/.config/your-tool", "containerPath": "your-tool", "readonly": false},
+    {"hostPath": "~/.claude/skills", "containerPath": "host-skills", "readonly": false},
+    {"hostPath": "~/.ssh", "containerPath": "host-ssh", "readonly": true}
+  ],
+
+  "skills_repo": "your-claude-skills"
+}

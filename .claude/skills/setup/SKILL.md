@@ -128,7 +128,7 @@ AskUserQuestion: "Do your workers need to clone private GitHub repos?"
 
 ## 7. Worker Profiles
 
-Worker profiles define what repos, tools, and credentials each worker container gets. They live at `~/.config/nanoclaw/worker-profiles/`.
+Worker profiles define what repos, tools, and credentials each worker container gets. They live at `~/.config/nanoclaw/worker-profiles/`. See `docs/guides/personal-config.md` for the full config reference and `examples/personal-config/` for a complete example.
 
 ```bash
 mkdir -p ~/.config/nanoclaw/worker-profiles
@@ -154,7 +154,7 @@ If yes:
 mkdir -p ~/.config/nanoclaw/instructions
 ```
 
-Create `global.md` (applies to all agents), `master.md` (master only), or `worker.md` (workers only) as needed. Help them add their conventions.
+Create `global.md` (applies to all agents), `master.md` (master only), or `worker.md` (workers only) as needed. Help them add their conventions. Reference examples are in `examples/personal-config/instructions/`.
 
 ### Personal Dockerfile (Optional)
 

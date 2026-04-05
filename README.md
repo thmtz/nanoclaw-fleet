@@ -125,7 +125,7 @@ This applies to instructions, the container image, init scripts, and tools:
 
 At startup, NanoClaw assembles each agent's CLAUDE.md from four fragments: repo global, repo role, personal global, personal role. The container image works similarly — the repo Dockerfile is the base, and your personal Dockerfile layers on top. The repo provides generic NanoClaw behavior; your personal config adds your workflow, repos, tools, and conventions.
 
-See [docs/guides/setup.md](docs/guides/setup.md) for the full config layout and [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md) for how each layer propagates.
+See [docs/guides/personal-config.md](docs/guides/personal-config.md) for the full config reference with examples, [docs/guides/setup.md](docs/guides/setup.md) for installation, and [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md) for how each layer propagates.
 
 For goals, design principles, and detailed architecture, see [docs/architecture/overview.md](docs/architecture/overview.md).
 
