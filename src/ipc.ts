@@ -344,6 +344,7 @@ export async function processTaskIpc(
     model?: string;
     worker_name?: string;
     reuse?: 'resume' | 'fresh';
+    ports?: string[];
     // For transfer_worker
     source_worker?: string;
     target_name?: string;
@@ -814,7 +815,7 @@ export async function processTaskIpc(
             added_at: new Date().toISOString(),
             containerConfig: {
               additionalMounts: profile.mounts || [],
-              ports: profile.ports || [],
+              ports: [...(profile.ports || []), ...(data.ports || [])],
               disableIdleTimeout: true, // Workers stay alive until explicitly destroyed
             },
             requiresTrigger: false, // Workers have dedicated channels — no trigger needed
