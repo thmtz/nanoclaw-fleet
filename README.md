@@ -111,18 +111,21 @@ Discord Server
 
 One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master does minimal thinking: it calls MCP tools (create, destroy, list, switch) with the right arguments. Workers handle all the real work.
 
-### Agent Instructions
+### Configuration Model
 
-Each agent's CLAUDE.md is assembled from layered fragments at spawn time:
+Everything in NanoClaw splits along two axes: **what's shared** (in the repo, for all users) vs **what's personal** (in `~/.config/nanoclaw/`, for your setup), and **global** (applies to master + all workers) vs **role-specific** (master-only or worker-only).
 
-| Layer | Location | Scope |
+This applies to instructions, the container image, init scripts, and tools:
+
+| What | Repo (shared) | Personal (`~/.config/nanoclaw/`) |
 |-|-|-|
-| Repo global | `instructions/global.md` | All agents (master + workers) |
-| Repo role | `instructions/master.md` or `worker.md` | Role-specific |
-| Personal global | `~/.config/nanoclaw/instructions/global.md` | All agents (your conventions) |
-| Personal role | `~/.config/nanoclaw/instructions/master.md` or `worker.md` | Role-specific (your config) |
+| **Instructions** | `instructions/{global,master,worker}.md` | `instructions/{global,master,worker}.md` |
+| **Container image** | `container/Dockerfile` | `Dockerfile` (layered on top) |
+| **Worker config** | `worker-profiles/example.json` | `worker-profiles/default.json` + `init.sh` |
 
-Repo instructions cover generic NanoClaw behavior (communication, tools, workspace). Personal instructions add your workflow (code conventions, repos, credentials, integrations). Both are optional — the system works with just the repo layer.
+At startup, NanoClaw assembles each agent's CLAUDE.md from four fragments: repo global, repo role, personal global, personal role. The container image works similarly — the repo Dockerfile is the base, and your personal Dockerfile layers on top. The repo provides generic NanoClaw behavior; your personal config adds your workflow, repos, tools, and conventions.
+
+See [docs/guides/setup.md](docs/guides/setup.md) for the full config layout and [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md) for how each layer propagates.
 
 For goals, design principles, and detailed architecture, see [docs/architecture/overview.md](docs/architecture/overview.md).
 
