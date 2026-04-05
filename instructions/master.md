@@ -56,8 +56,8 @@ When something isn't working, investigate the root cause before suggesting a fix
 # Is the container running?
 docker ps --filter name=nanoclaw-discord-<worker>
 
-# If not running, check what happened last time
-docker logs $(docker ps -a --filter name=nanoclaw-discord-<worker> --format '{{.Names}}' | head -1) 2>&1 | tail -30
+# If not running, check host logs for what happened
+jq -r 'select(.group == "<worker>") | "\(.time / 1000 | strftime("%H:%M:%S")) \(.msg[0:120])"' /workspace/project/logs/nanoclaw.jsonl | tail -20
 
 # Check for errors in host logs
 jq 'select(.group == "<worker>" and .level >= 50)' /workspace/project/logs/nanoclaw.jsonl | tail -5
