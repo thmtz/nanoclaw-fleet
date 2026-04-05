@@ -169,7 +169,7 @@ USER node
 EOF
 ```
 
-`container/build.sh` will automatically detect and apply this layer. See [container lifecycle docs](docs/architecture/container-lifecycle.md) for details on what goes in the Dockerfile vs init.sh vs profile tools.
+`container/build.sh` will automatically detect and apply this layer. Heavy packages that are the same every boot (databases, compilers, test frameworks) go in the Dockerfile. Setup that needs host context (repo cloning, credential symlinks) stays in init.sh. Per-profile tools that depend on workspace content stay in profile tools.
 
 ## 9. Optional: Open-Weight Model Support
 
