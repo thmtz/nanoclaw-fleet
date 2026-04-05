@@ -626,7 +626,7 @@ async function main(): Promise<void> {
 
     logger.info({ signal }, 'Shutdown signal received');
 
-    // Notify master channel before tearing down
+    // Notify master channel before tearing down (3s timeout so we don't hang)
     const mainEntry = Object.entries(registeredGroups).find(
       ([, g]) => g.isMain,
     );
@@ -634,12 +634,12 @@ async function main(): Promise<void> {
       const ch = findChannel(channels, mainEntry[0]);
       if (ch) {
         try {
-          await ch.sendMessage(
-            mainEntry[0],
-            `NanoClaw shutting down (${signal})`,
-          );
-        } catch {
-          // Discord may already be unreachable
+          await Promise.race([
+            ch.sendMessage(mainEntry[0], `NanoClaw shutting down (${signal})`),
+            new Promise((r) => setTimeout(r, 3000)),
+          ]);
+        } catch (err) {
+          logger.debug({ err }, 'Shutdown notification failed');
         }
       }
     }
