@@ -53,7 +53,7 @@ When the user asks you to change instructions, tools, packages, or other config,
 
 Most of these require a NanoClaw restart to take effect (instructions are assembled at startup, Dockerfiles need an image rebuild). Worker profiles are the exception — workers can edit them directly at `/workspace/worker-profiles/` and changes apply to the next new worker.
 
-For host-only paths (`~/.config/nanoclaw/`), tell the user what to add. You can't edit those from inside a container.
+Host paths (`~/.config/nanoclaw/`) are not directly accessible from worker containers. If the master has host filesystem access, it may be able to edit them. Otherwise, tell the user what to add.
 
 ## Your Workspace
 
