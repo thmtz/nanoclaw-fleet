@@ -14,6 +14,7 @@ Before working on a subsystem, read the relevant doc:
 - **Streaming SSE translation:** [docs/architecture/streaming-shim.md](docs/architecture/streaming-shim.md)
 - **E2E testing procedures:** [docs/guides/testing.md](docs/guides/testing.md)
 - **Setup from scratch:** [docs/guides/setup.md](docs/guides/setup.md)
+- **Personal config (instructions, profiles, Dockerfile):** [docs/guides/personal-config.md](docs/guides/personal-config.md)
 - **Full doc index:** [docs/README.md](docs/README.md)
 
 ## Communication (Discord)

@@ -16,6 +16,7 @@ How the system works (current state of the code):
 How to do X (step-by-step):
 
 - [Setup](guides/setup.md) — Getting started with dynamic workers on Discord
+- [Personal config](guides/personal-config.md) — Customizing instructions, profiles, and container image
 - [Testing](guides/testing.md) — Exercising every behavior end-to-end
 - [Troubleshooting](guides/troubleshooting.md) — Common issues and fixes
 
