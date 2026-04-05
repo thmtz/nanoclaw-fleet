@@ -147,4 +147,8 @@ When you change the container image, `init.sh`, agent-runner source, or worker p
 
 **Worker profile changes:** Synced to SQLite on NanoClaw startup, but don't trigger container restarts. Restart NanoClaw, then the next container spawn uses the new profile.
 
+**Instruction changes** (`instructions/` or `~/.config/nanoclaw/instructions/`): The assembled CLAUDE.md is regenerated on every NanoClaw startup (for master and all workers). Changes take effect on next container spawn — no destroy/recreate needed, just restart NanoClaw and message the worker.
+
+**Personal Dockerfile changes** (`~/.config/nanoclaw/Dockerfile`): Requires an image rebuild (`container/build.sh`), then restart NanoClaw. Existing workers respawn with the new image on next message.
+
 **Full clean slate:** Destroy the worker and recreate with "fresh" to wipe everything, or destroy and recreate with "resume" to keep repos but get a fresh session and container.
