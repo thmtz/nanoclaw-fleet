@@ -108,7 +108,15 @@ jq 'select(.msg == "Container first output" and .startupMs > 10000)' logs/nanocl
 jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 ```
 
-**Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr.
+**Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr. View with `docker logs <container-name>`.
+
+**Host-side tools** for testing and debugging:
+
+| Tool | Purpose |
+|-|-|
+| `tools/nc-inject.sh <channel> <msg>` | Inject a message into a channel (triggers agent response) |
+| `tools/nc-ipc.sh <group> <json>` | Send an IPC command (create/destroy workers, list, etc.) |
+| `tools/read-session.sh <group> [lines]` | Display a worker's session transcript as readable prose |
 
 ## Gotchas
 
