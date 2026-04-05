@@ -625,6 +625,25 @@ async function main(): Promise<void> {
     };
 
     logger.info({ signal }, 'Shutdown signal received');
+
+    // Notify master channel before tearing down
+    const mainEntry = Object.entries(registeredGroups).find(
+      ([, g]) => g.isMain,
+    );
+    if (mainEntry) {
+      const ch = findChannel(channels, mainEntry[0]);
+      if (ch) {
+        try {
+          await ch.sendMessage(
+            mainEntry[0],
+            `NanoClaw shutting down (${signal})`,
+          );
+        } catch {
+          // Discord may already be unreachable
+        }
+      }
+    }
+
     proxyServer.close();
     sstep('credential proxy closed');
     await queue.shutdown(10000);
@@ -773,6 +792,18 @@ async function main(): Promise<void> {
   }
 
   step('startup complete');
+
+  // Notify master channel that NanoClaw is online (host-level, no agent involved)
+  if (mainGroup) {
+    const ch = findChannel(channels, mainGroup[0]);
+    if (ch) {
+      const elapsedS = ((Date.now() - t0) / 1000).toFixed(1);
+      ch.sendMessage(
+        mainGroup[0],
+        `NanoClaw online (${elapsedS}s startup)`,
+      ).catch(() => {});
+    }
+  }
 
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
