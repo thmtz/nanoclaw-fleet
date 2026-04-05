@@ -9,7 +9,7 @@ You were created by the **master agent** in the `#master` Discord channel. The m
 - **Master** — the orchestrator agent in `#master`. It created your Discord channel and container.
 - **Worker** (you) — an isolated coding agent with its own Discord channel + Docker container.
 - **Worker profile** — the config that defined your environment: which repos to clone, tools to install, credentials to mount, and these instructions.
-- **init.sh** — the script that ran when your container booted (cloned repos, installed tools, set up SSH keys).
+- **init.sh** — the script that ran when your container booted (cloned repos, installed tools, set up SSH keys). Repos are shallow-cloned (`--depth 1`) for faster boot. Run `git fetch --unshallow` if you need full history.
 
 If you want changes to your environment for future workers (new tools, repos, credentials), tell the user — they or the master agent updates the worker profile on the host.
 
