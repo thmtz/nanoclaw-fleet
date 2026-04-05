@@ -657,6 +657,13 @@ This creates a new text channel in the specified Discord guild, registers it as 
           '"resume" keeps old workspace + conversation history. "fresh" wipes everything and starts clean. ' +
           'If omitted and a collision is detected, the tool returns an error — you MUST ask the user which option they want.',
       ),
+    ports: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Docker port mappings (e.g., ["8080:8080", "3000:3000/tcp"]). ' +
+          'Merged with any ports defined in the worker profile.',
+      ),
   },
   async (args) => {
     if (!isMain) {
@@ -684,6 +691,7 @@ This creates a new text channel in the specified Discord guild, registers it as 
       backend: args.backend,
       model: args.model,
       reuse: args.reuse,
+      ports: args.ports,
       reply_jid: process.env.NANOCLAW_CHAT_JID, // reply back to master channel
       timestamp: new Date().toISOString(),
     };
