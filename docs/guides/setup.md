@@ -55,6 +55,7 @@ NanoClaw separates generic code from per-installation configuration. The repo co
 
 | Path | Purpose |
 |-|-|
+| `Dockerfile` | Personal container image layer — databases, test tools, CLI tools (optional) |
 | `worker-profiles/default.json` | Your worker profile — repos to clone, credential mounts, tools to install |
 | `worker-profiles/init.sh` | Your init script — runs inside each container at boot |
 | `instructions/global.md` | Personal instructions for all agents (beads, code conventions, etc.) |

@@ -156,6 +156,21 @@ mkdir -p ~/.config/nanoclaw/instructions
 
 Create `global.md` (applies to all agents), `master.md` (master only), or `worker.md` (workers only) as needed. Help them add their conventions.
 
+### Personal Dockerfile (Optional)
+
+If the user has heavy packages to install (databases, test frameworks, CLI tools), they can create a personal Dockerfile that layers on top of the base image:
+
+```bash
+cat > ~/.config/nanoclaw/Dockerfile << 'EOF'
+FROM nanoclaw-agent:base
+USER root
+# Add your packages here
+USER node
+EOF
+```
+
+`container/build.sh` will automatically detect and apply this layer. See [container lifecycle docs](docs/architecture/container-lifecycle.md) for details on what goes in the Dockerfile vs init.sh vs profile tools.
+
 ## 9. Optional: Open-Weight Model Support
 
 AskUserQuestion: "Do you want to use open-weight models (e.g. Kimi K2.5, Qwen) in addition to Claude?"
