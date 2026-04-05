@@ -71,6 +71,7 @@ interface WorkerUsage {
 }
 
 const USAGE_PATH = process.env.USAGE_PATH || 'data/worker-usage.json';
+const LOGS_DIR = process.env.WORKER_LOGS_DIR || 'logs/workers';
 
 let workerUsage: Record<string, WorkerUsage> = {};
 
@@ -91,6 +92,31 @@ function saveUsage(): void {
   fs.renameSync(tmp, USAGE_PATH);
 }
 
+// ── Per-request audit log ───────────────────────────────────────
+// Each NW API call gets a JSONL entry in logs/workers/<folder>/turns.jsonl
+// Fields: timestamp, model, tokens (in/out/cached), latency, energy, stop reason
+
+interface TurnEntry {
+  ts: string;
+  model: string;
+  backend: 'neuralwatt' | 'anthropic';
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number | null;
+  latency_ms: number;
+  energy_joules: number | null;
+  stop_reason: string;
+  stream: boolean;
+}
+
+function logTurn(workerFolder: string, entry: TurnEntry): void {
+  if (!workerFolder) return;
+  const dir = path.join(LOGS_DIR, workerFolder);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'turns.jsonl');
+  fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+}
+
 function recordUsage(
   workerFolder: string,
   usage:
@@ -98,9 +124,17 @@ function recordUsage(
         prompt_tokens?: number;
         completion_tokens?: number;
         total_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number } | null;
       }
     | undefined,
   energy: { energy_joules?: number; energy_kwh?: number } | undefined,
+  auditExtra?: {
+    model: string;
+    backend: 'neuralwatt' | 'anthropic';
+    latency_ms: number;
+    stop_reason: string;
+    stream: boolean;
+  },
 ): void {
   if (!workerFolder) return;
   const w = workerUsage[workerFolder] || {
@@ -121,6 +155,22 @@ function recordUsage(
   w.last_updated = new Date().toISOString();
   workerUsage[workerFolder] = w;
   saveUsage();
+
+  // Write per-request audit entry
+  if (auditExtra) {
+    logTurn(workerFolder, {
+      ts: w.last_updated,
+      model: auditExtra.model,
+      backend: auditExtra.backend,
+      input_tokens: usage?.prompt_tokens || 0,
+      output_tokens: usage?.completion_tokens || 0,
+      cached_tokens: usage?.prompt_tokens_details?.cached_tokens ?? null,
+      latency_ms: auditExtra.latency_ms,
+      energy_joules: energy?.energy_joules ?? null,
+      stop_reason: auditExtra.stop_reason,
+      stream: auditExtra.stream,
+    });
+  }
 }
 
 // Deduplicate SDK retries: track last request per worker to detect duplicates.
@@ -422,14 +472,14 @@ const server = Bun.serve({
       url.pathname.startsWith('/api/') ||
       url.pathname.startsWith('/v1/organizations') ||
       url.pathname.startsWith('/v1/sessions') ||
-      (request.method === 'GET' && !url.pathname.startsWith('/w/') && !url.pathname.startsWith('/usage') && !url.pathname.startsWith('/health') && !url.pathname.startsWith('/models'))
+      (request.method === 'GET' && !url.pathname.startsWith('/w/') && !url.pathname.startsWith('/usage') && !url.pathname.startsWith('/health') && !url.pathname.startsWith('/models') && !url.pathname.startsWith('/logs') && !url.pathname.startsWith('/config'))
     ) {
       return Response.json({});
     }
 
     // Health + usage + config endpoints
     if (url.pathname === '/health') {
-      return Response.json({ status: 'ok' });
+      return Response.json({ status: 'ok', version: 'audit-v2' });
     }
     if (url.pathname === '/usage') {
       return Response.json({ ...workerUsage, total: getUsageTotal() });
@@ -496,6 +546,50 @@ const server = Bun.serve({
       return Response.json({ status: 'updated' });
     }
 
+    // Per-worker audit logs: GET /logs/<folder>?n=20 returns last N turns
+    if (url.pathname.startsWith('/logs/')) {
+      const folder = url.pathname.slice('/logs/'.length);
+      const n = parseInt(url.searchParams.get('n') || '20', 10);
+      const turnsFile = path.join(LOGS_DIR, folder, 'turns.jsonl');
+      if (!fs.existsSync(turnsFile)) {
+        return Response.json({ folder, turns: [], total: 0 });
+      }
+      const lines = fs
+        .readFileSync(turnsFile, 'utf-8')
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+      const turns = lines.slice(-n).map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
+      return Response.json({ folder, turns, total: lines.length });
+    }
+    // All workers summary: GET /logs returns last turn per worker
+    if (url.pathname === '/logs') {
+      const summary: Record<string, any> = {};
+      if (fs.existsSync(LOGS_DIR)) {
+        for (const folder of fs.readdirSync(LOGS_DIR)) {
+          const turnsFile = path.join(LOGS_DIR, folder, 'turns.jsonl');
+          if (!fs.existsSync(turnsFile)) continue;
+          const lines = fs
+            .readFileSync(turnsFile, 'utf-8')
+            .trim()
+            .split('\n')
+            .filter(Boolean);
+          if (lines.length === 0) continue;
+          try {
+            const lastTurn = JSON.parse(lines[lines.length - 1]);
+            summary[folder] = { total_turns: lines.length, last_turn: lastTurn };
+          } catch { /* skip corrupt */ }
+        }
+      }
+      return Response.json(summary);
+    }
+
     // Worker config lookup endpoint (workers can read their own config)
     // Access via /w/<folder>/worker-config or /worker-config with x-api-key
     if (
@@ -546,6 +640,7 @@ const server = Bun.serve({
         );
         const openaiReq = anthropicToOpenAI(anthropicBody, nwModel);
 
+        const requestStart = Date.now();
         const reqBodySize = JSON.stringify(openaiReq).length;
         console.log(
           `[proxy] ${workerFolder}: ${anthropicBody.model} → ${nwModel} (${openaiReq.messages.length} msgs${openaiReq.tools ? `, ${openaiReq.tools.length} tools` : ''}, ${(reqBodySize / 1024).toFixed(1)}KB request)`,
@@ -807,10 +902,17 @@ const server = Bun.serve({
 
                 emit('message_stop', { type: 'message_stop' });
 
-                // Record usage
-                recordUsage(workerFolder, usage, energy);
+                // Record usage + audit log
+                recordUsage(workerFolder, usage, energy, {
+                  model: nwModel,
+                  backend: 'neuralwatt',
+                  latency_ms: Date.now() - requestStart,
+                  stop_reason: stopReason,
+                  stream: true,
+                });
+                const cached = usage.prompt_tokens_details?.cached_tokens;
                 console.log(
-                  `[proxy] → stream ${stopReason} (${usage.completion_tokens || '?'} out, ${usage.prompt_tokens || '?'} in)`,
+                  `[proxy] → stream ${stopReason} (${usage.completion_tokens || '?'} out, ${usage.prompt_tokens || '?'} in${cached ? `, ${cached} cached` : ''})`,
                 );
               } catch (err: any) {
                 console.error(`[proxy] Stream error: ${err.message}`);
@@ -862,11 +964,18 @@ const server = Bun.serve({
           anthropicBody.model,
         );
 
-        // Track usage + energy per worker
-        recordUsage(workerFolder, openaiResp.usage, openaiResp.energy);
+        // Track usage + energy per worker + audit log
+        recordUsage(workerFolder, openaiResp.usage, openaiResp.energy, {
+          model: nwModel,
+          backend: 'neuralwatt',
+          latency_ms: Date.now() - requestStart,
+          stop_reason: anthropicResp.stop_reason,
+          stream: false,
+        });
 
+        const cached = openaiResp.usage?.prompt_tokens_details?.cached_tokens;
         console.log(
-          `[proxy] → ${anthropicResp.stop_reason} (${anthropicResp.usage.output_tokens} out, ${openaiResp.usage?.prompt_tokens || '?'} in)`,
+          `[proxy] → ${anthropicResp.stop_reason} (${anthropicResp.usage.output_tokens} out, ${openaiResp.usage?.prompt_tokens || '?'} in${cached ? `, ${cached} cached` : ''})`,
         );
         if (DEBUG) {
           console.log(

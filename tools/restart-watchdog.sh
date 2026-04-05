@@ -38,8 +38,10 @@ while true; do
     cd "$NANOCLAW_DIR"
 
     if npm run build 2>&1; then
-      log "Build succeeded, restarting nanoclaw..."
+      log "Build succeeded, restarting nanoclaw + shim..."
       systemctl --user restart nanoclaw
+      # Also restart the shim so it picks up code changes
+      systemctl --user restart nanoclaw-shim 2>/dev/null || true
       log "Restart complete"
     else
       log "ERROR: Build failed, not restarting"
