@@ -132,12 +132,12 @@ info "Messaging worker (first boot)..."
 tools/nc-inject.sh "$WORKER_NAME" "Remember this secret code: bravo-tango-42. Reply with just 'got it'." >/dev/null
 
 # Wait for container to spawn and respond
+# Container names use hyphens (sanitizeFolderName replaces underscores)
+SAFE_NAME=$(echo "$WORKER_FOLDER" | tr '_' '-')
 TIMEOUT=60
 ELAPSED=0
 CONTAINER_UP=false
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  # Container names use hyphens (sanitizeFolderName replaces underscores)
-  SAFE_NAME=$(echo "$WORKER_FOLDER" | tr '_' '-')
   if docker ps --format '{{.Names}}' | grep -q "nanoclaw-${SAFE_NAME}"; then
     CONTAINER_UP=true
     break
