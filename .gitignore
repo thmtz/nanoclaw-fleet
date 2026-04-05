@@ -9,14 +9,8 @@ store/
 data/
 logs/
 
-# Groups - only track base structure and specific CLAUDE.md files
-groups/*
-!groups/main/
-!groups/global/
-groups/main/*
-groups/global/*
-!groups/main/CLAUDE.md
-!groups/global/CLAUDE.md
+# Groups — ephemeral agent workspaces (assembled CLAUDE.md, cloned repos)
+groups/
 
 # Secrets
 *.keys.json
