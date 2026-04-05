@@ -9,8 +9,14 @@ GROUP="${1:?Usage: read-session.sh <group-folder> [lines]}"
 LINES="${2:-80}"
 SESSION_DIR="data/sessions/${GROUP}/.claude/projects/-workspace-group"
 
+# Try with discord_ prefix if the literal name doesn't exist
 if [ ! -d "$SESSION_DIR" ]; then
-  echo "No sessions found for ${GROUP}" >&2
+  SESSION_DIR="data/sessions/discord_${GROUP}/.claude/projects/-workspace-group"
+  GROUP="discord_${GROUP}"
+fi
+
+if [ ! -d "$SESSION_DIR" ]; then
+  echo "No sessions found for ${1}" >&2
   exit 1
 fi
 
