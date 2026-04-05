@@ -237,7 +237,7 @@ if (TELEGRAM_BOT_POOL.length > 0) {
 
 #### 5a. Add global message formatting rules
 
-Read `groups/global/CLAUDE.md` and add a Message Formatting section:
+Read `instructions/global.md` and add a Message Formatting section:
 
 ```markdown
 ## Message Formatting
@@ -253,7 +253,7 @@ No ## headings. No [links](url). No **double stars**.
 
 #### 5b. Update existing group CLAUDE.md headings
 
-In any group CLAUDE.md that has a "WhatsApp Formatting" section (e.g. `groups/main/CLAUDE.md`), rename the heading to reflect multi-channel support:
+In any instruction file that has a "WhatsApp Formatting" section, rename the heading to reflect multi-channel support:
 
 ```
 ## WhatsApp Formatting (and other messaging apps)
@@ -261,7 +261,7 @@ In any group CLAUDE.md that has a "WhatsApp Formatting" section (e.g. `groups/ma
 
 #### 5c. Add Agent Teams instructions to Telegram groups
 
-For each Telegram group that will use agent teams, create or update its `groups/{folder}/CLAUDE.md` with these instructions. Read the existing CLAUDE.md first (or `groups/global/CLAUDE.md` as a base) and add the Agent Teams section:
+For each Telegram group that will use agent teams, add these instructions to `instructions/global.md` (or a personal `~/.config/nanoclaw/instructions/global.md` if this is user-specific):
 
 ```markdown
 ## Agent Teams
