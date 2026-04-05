@@ -22,16 +22,25 @@
  *   9. Port mapping — create worker with ports, verify docker config
  */
 
-import { execSync, spawn } from 'child_process';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, readdirSync, rmSync } from 'fs';
+import { execSync } from 'child_process';
+import {
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+  renameSync,
+  readdirSync,
+  rmSync,
+} from 'fs';
 import path from 'path';
 
 // ── Environment detection ────────────────────────────────────
 
-const IN_CONTAINER = existsSync('/.dockerenv') || process.env.NANOCLAW_CHAT_JID != null;
+const IN_CONTAINER =
+  existsSync('/.dockerenv') || process.env.NANOCLAW_CHAT_JID != null;
 const PROJECT_DIR = IN_CONTAINER
   ? '/workspace/project'
-  : path.resolve(import.meta.dirname || __dirname, '..');
+  : path.resolve(import.meta.dirname!, '..');
 const HOST_HOME = IN_CONTAINER ? '/home/host' : process.env.HOME!;
 const DB_PATH = path.join(PROJECT_DIR, 'store/messages.db');
 const LOGS_JSONL = path.join(PROJECT_DIR, 'logs/nanoclaw.jsonl');
@@ -70,7 +79,10 @@ function sleep(ms: number): Promise<void> {
 
 // ── Shell helpers ────────────────────────────────────────────
 
-function sh(cmd: string, opts?: { ignoreError?: boolean; timeout?: number }): string {
+function sh(
+  cmd: string,
+  opts?: { ignoreError?: boolean; timeout?: number },
+): string {
   try {
     return execSync(cmd, {
       encoding: 'utf-8',
@@ -106,7 +118,9 @@ function ipc(payload: Record<string, unknown>): void {
 // ── nc-inject helper ─────────────────────────────────────────
 
 function inject(channel: string, message: string) {
-  sh(`"${PROJECT_DIR}/tools/nc-inject.sh" "${channel}" "${message}"`, { timeout: 10_000 });
+  sh(`"${PROJECT_DIR}/tools/nc-inject.sh" "${channel}" "${message}"`, {
+    timeout: 10_000,
+  });
 }
 
 // ── Log scanning ─────────────────────────────────────────────
@@ -124,7 +138,9 @@ function scanJsonl(
       const entry = JSON.parse(line);
       if (opts?.afterMs && entry.time < opts.afterMs) continue;
       if (filter(entry)) results.push(entry);
-    } catch { /* skip malformed lines */ }
+    } catch {
+      /* skip malformed lines */
+    }
   }
   return results;
 }
@@ -138,7 +154,9 @@ async function cleanup() {
   info('Cleaning up test workers...');
   for (const name of workersToCleanup) {
     const folder = `discord_${name}`;
-    const jid = sqlite(`SELECT jid FROM registered_groups WHERE folder='${folder}';`);
+    const jid = sqlite(
+      `SELECT jid FROM registered_groups WHERE folder='${folder}';`,
+    );
     if (jid) {
       try {
         ipc({ type: 'destroy_worker', jid });
@@ -148,8 +166,10 @@ async function cleanup() {
     // Clean up local state
     const groupDir = path.join(PROJECT_DIR, 'groups', folder);
     const sessionDir = path.join(PROJECT_DIR, 'data/sessions', folder);
-    if (existsSync(groupDir)) rmSync(groupDir, { recursive: true, force: true });
-    if (existsSync(sessionDir)) rmSync(sessionDir, { recursive: true, force: true });
+    if (existsSync(groupDir))
+      rmSync(groupDir, { recursive: true, force: true });
+    if (existsSync(sessionDir))
+      rmSync(sessionDir, { recursive: true, force: true });
     sqlite(`DELETE FROM sessions WHERE group_folder='${folder}';`);
   }
 }
@@ -179,7 +199,10 @@ async function preflight() {
       if (existsSync(envFile)) {
         const content = readFileSync(envFile, 'utf-8');
         const match = content.match(/DISCORD_GUILD_ID=(.+)/);
-        if (match) { guildId = match[1].trim(); break; }
+        if (match) {
+          guildId = match[1].trim();
+          break;
+        }
       }
     }
   }
@@ -214,7 +237,6 @@ async function testCreateWorker(guildId: string): Promise<string> {
   workersToCleanup.push(name);
 
   info(`Creating worker: ${name}`);
-  const t0 = Date.now();
 
   ipc({
     type: 'create_worker',
@@ -228,8 +250,13 @@ async function testCreateWorker(guildId: string): Promise<string> {
   let registered = false;
   for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
     await sleep(1000);
-    const reg = sqlite(`SELECT folder FROM registered_groups WHERE folder='${folder}';`);
-    if (reg.includes(folder)) { registered = true; break; }
+    const reg = sqlite(
+      `SELECT folder FROM registered_groups WHERE folder='${folder}';`,
+    );
+    if (reg.includes(folder)) {
+      registered = true;
+      break;
+    }
   }
   if (registered) {
     pass('Worker registered in DB');
@@ -262,7 +289,10 @@ async function testFirstBoot(workerName: string) {
 
   info('Messaging worker (first boot)...');
   const t0 = Date.now();
-  inject(workerName, "Remember this secret code: bravo-tango-42. Reply with just 'got it'.");
+  inject(
+    workerName,
+    "Remember this secret code: bravo-tango-42. Reply with just 'got it'.",
+  );
 
   // Wait for container
   let containerUp = false;
@@ -295,10 +325,9 @@ async function testFirstBoot(workerName: string) {
   if (!responded) fail('Agent did not respond within 60s');
 
   // Check for errors
-  const errors = scanJsonl(
-    (e) => e.group === workerName && e.level >= 50,
-    { afterMs: t0 },
-  );
+  const errors = scanJsonl((e) => e.group === workerName && e.level >= 50, {
+    afterMs: t0,
+  });
   if (errors.length === 0) {
     pass('No errors in logs');
   } else {
@@ -315,11 +344,15 @@ async function testSessionResume(workerName: string) {
   info('Testing session resume...');
 
   // Kill container
-  sh(`docker kill $(docker ps -q --filter "name=nanoclaw-${safeName}")`, { ignoreError: true });
+  sh(`docker kill $(docker ps -q --filter "name=nanoclaw-${safeName}")`, {
+    ignoreError: true,
+  });
   await sleep(2000);
 
   // Check session preserved
-  const sessionId = sqlite(`SELECT session_id FROM sessions WHERE group_folder='${folder}';`);
+  const sessionId = sqlite(
+    `SELECT session_id FROM sessions WHERE group_folder='${folder}';`,
+  );
   if (sessionId) {
     pass(`Session ID preserved: ${sessionId.slice(0, 8)}...`);
   } else {
@@ -349,20 +382,25 @@ async function testSessionResume(workerName: string) {
   // Check secret code recall (best-effort)
   await sleep(5000);
   const codeEntries = scanJsonl(
-    (e) =>
-      e.group === workerName &&
-      e.msg &&
-      /bravo|tango|42/i.test(e.msg),
+    (e) => e.group === workerName && e.msg && /bravo|tango|42/i.test(e.msg),
     { afterMs: t2 },
   );
   if (codeEntries.length > 0) {
     pass('Agent remembered secret code (session resume works)');
   } else {
     // Check transcript
-    const sessDir = path.join(PROJECT_DIR, 'data/sessions', folder, '.claude/projects/-workspace-group');
+    const sessDir = path.join(
+      PROJECT_DIR,
+      'data/sessions',
+      folder,
+      '.claude/projects/-workspace-group',
+    );
     let found = false;
     if (existsSync(sessDir)) {
-      const jsonls = readdirSync(sessDir).filter((f) => f.endsWith('.jsonl')).sort().reverse();
+      const jsonls = readdirSync(sessDir)
+        .filter((f) => f.endsWith('.jsonl'))
+        .sort()
+        .reverse();
       for (const jsonl of jsonls) {
         const content = readFileSync(path.join(sessDir, jsonl), 'utf-8');
         if (/bravo|tango|42/i.test(content)) {
@@ -384,11 +422,14 @@ async function testNeuralwatt(guildId: string) {
     return;
   }
 
+  const shimHost = IN_CONTAINER ? 'host.docker.internal' : 'localhost';
+
   // Check shim availability
   let nwModel = '';
   try {
-    const shimHost = IN_CONTAINER ? 'host.docker.internal' : 'localhost';
-    const models = sh(`curl -s http://${shimHost}:3003/models`, { timeout: 5000 });
+    const models = sh(`curl -s http://${shimHost}:3003/models`, {
+      timeout: 5000,
+    });
     const parsed = JSON.parse(models);
     nwModel = parsed.models?.[0] ?? '';
   } catch {}
@@ -399,7 +440,6 @@ async function testNeuralwatt(guildId: string) {
   }
 
   info(`Testing Neuralwatt backend (model: ${nwModel})...`);
-  const shimHost = IN_CONTAINER ? 'host.docker.internal' : 'localhost';
 
   const nwName = `e2e-nw-${pid}`;
   const nwFolder = `discord_${nwName}`;
@@ -418,7 +458,9 @@ async function testNeuralwatt(guildId: string) {
   // Poll for registration
   for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
     await sleep(1000);
-    const reg = sqlite(`SELECT folder FROM registered_groups WHERE folder='${nwFolder}';`);
+    const reg = sqlite(
+      `SELECT folder FROM registered_groups WHERE folder='${nwFolder}';`,
+    );
     if (reg.includes(nwFolder)) break;
   }
 
@@ -503,7 +545,9 @@ async function testCredentialProxy() {
   info('Checking Anthropic credential proxy...');
   const proxyHost = IN_CONTAINER ? 'host.docker.internal' : '172.17.0.1';
   try {
-    sh(`curl -s -o /dev/null -w "" http://${proxyHost}:3001/`, { timeout: 5000 });
+    sh(`curl -s -o /dev/null -w "" http://${proxyHost}:3001/`, {
+      timeout: 5000,
+    });
     pass('Credential proxy reachable on :3001');
   } catch {
     fail('Credential proxy not reachable on :3001');
@@ -518,7 +562,9 @@ async function testDestroy(workerName: string) {
 
   info('Destroying worker...');
 
-  const jid = sqlite(`SELECT jid FROM registered_groups WHERE folder='${folder}';`);
+  const jid = sqlite(
+    `SELECT jid FROM registered_groups WHERE folder='${folder}';`,
+  );
   if (jid) {
     ipc({ type: 'destroy_worker', jid });
   }
@@ -526,13 +572,17 @@ async function testDestroy(workerName: string) {
   // Poll for deregistration
   for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
     await sleep(1000);
-    const count = sqlite(`SELECT count(*) FROM registered_groups WHERE folder='${folder}';`);
+    const count = sqlite(
+      `SELECT count(*) FROM registered_groups WHERE folder='${folder}';`,
+    );
     if (count === '0') break;
   }
   await sleep(2000);
 
   // Registration removed
-  const count = sqlite(`SELECT count(*) FROM registered_groups WHERE folder='${folder}';`);
+  const count = sqlite(
+    `SELECT count(*) FROM registered_groups WHERE folder='${folder}';`,
+  );
   if (count === '0') {
     pass('Registration removed from DB');
   } else {
@@ -555,7 +605,9 @@ async function testDestroy(workerName: string) {
   }
 
   // Session preserved
-  const sess = sqlite(`SELECT session_id FROM sessions WHERE group_folder='${folder}';`);
+  const sess = sqlite(
+    `SELECT session_id FROM sessions WHERE group_folder='${folder}';`,
+  );
   if (sess) {
     pass('Session preserved for resume');
   } else {
@@ -588,7 +640,9 @@ async function testPortMapping(guildId: string) {
   // Poll for registration
   for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
     await sleep(1000);
-    const reg = sqlite(`SELECT folder FROM registered_groups WHERE folder='${folder}';`);
+    const reg = sqlite(
+      `SELECT folder FROM registered_groups WHERE folder='${folder}';`,
+    );
     if (reg.includes(folder)) break;
   }
 
@@ -635,7 +689,9 @@ async function testPortMapping(guildId: string) {
 // ── Main ─────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\nNanoClaw E2E Test${IN_CONTAINER ? ' (from container)' : ' (from host)'}\n`);
+  console.log(
+    `\nNanoClaw E2E Test${IN_CONTAINER ? ' (from container)' : ' (from host)'}\n`,
+  );
 
   const guildId = await preflight();
   const workerName = await testCreateWorker(guildId);
@@ -653,7 +709,9 @@ async function main() {
   if (failed === 0) {
     console.log(`${GREEN}All ${passed} checks passed${NC} (${totalMs}ms)`);
   } else {
-    console.log(`${RED}${failed} failed${NC}, ${GREEN}${passed} passed${NC} (${totalMs}ms)`);
+    console.log(
+      `${RED}${failed} failed${NC}, ${GREEN}${passed} passed${NC} (${totalMs}ms)`,
+    );
   }
   console.log('════════════════════════════════════════');
 
@@ -661,7 +719,21 @@ async function main() {
   process.exit(failed);
 }
 
+// Cleanup on interruption to prevent orphaned test workers
+process.on('SIGINT', () =>
+  cleanup()
+    .catch(() => {})
+    .finally(() => process.exit(1)),
+);
+process.on('SIGTERM', () =>
+  cleanup()
+    .catch(() => {})
+    .finally(() => process.exit(1)),
+);
+
 main().catch((e) => {
   console.error('Fatal error:', e);
-  cleanup().then(() => process.exit(1));
+  cleanup()
+    .catch(() => {})
+    .finally(() => process.exit(1));
 });
