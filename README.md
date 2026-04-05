@@ -113,7 +113,7 @@ One Discord bot. The host process routes messages by channel ID. Workers are iso
 
 ### Configuration Model
 
-Everything in NanoClaw splits along two axes: **what's shared** (in the repo, for all users) vs **what's personal** (in `~/.config/nanoclaw/`, for your setup), and **global** (applies to master + all workers) vs **role-specific** (master-only or worker-only).
+Configuration splits along two axes: **what's shared** (in the repo, for all users) vs **what's personal** (in `~/.config/nanoclaw/`, for your setup), and **global** (applies to master + all workers) vs **role-specific** (master-only or worker-only).
 
 This applies to instructions, the container image, init scripts, and tools:
 
