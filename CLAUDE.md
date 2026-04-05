@@ -114,7 +114,8 @@ jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 
 | Tool | Purpose |
 |-|-|
-| `tools/e2e-test.sh` | Smoke test: creates a worker, messages it, tests resume, NW backend, destroy. ~65s. |
+| `tools/e2e-test.ts` | **Preferred** smoke test (TypeScript). Works from host or container. ~60s. |
+| `tools/e2e-test.sh` | Legacy smoke test (Bash). Host-only (uses systemctl). ~65s. |
 | `tools/nc-inject.sh <channel> <msg>` | Inject a message into a channel (triggers agent response) |
 | `tools/nc-ipc.sh <group> <json>` | Send an IPC command (create/destroy workers, list, etc.) |
 | `tools/read-session.sh <group> [lines]` | Display a worker's session transcript as readable prose |
