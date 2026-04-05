@@ -27,9 +27,18 @@ Host-side test tools live in `tools/`.
 | `container/agent-runner/src/` (MCP tools) | Restart, message a worker, verify the tool works (auto-syncs by mtime) |
 | Inference routing or model config | Create NW worker, switch model, verify (scenarios 5-8) |
 
+## Quick Smoke Test
+
+Run `tools/e2e-test.sh` to verify nothing major is broken. It creates a temporary worker, messages it, tests session resume, Neuralwatt backend + streaming, backend switching, and destroy. Takes ~65 seconds, reports pass/fail for 22 checks. Run this after any significant change.
+
+```bash
+./tools/e2e-test.sh                          # from host
+cd /workspace/project && tools/e2e-test.sh   # from master container
+```
+
 ## Host-Side Tools
 
-Two shell scripts let you interact with NanoClaw without Discord:
+Shell scripts for interacting with NanoClaw without Discord:
 
 **nc-inject.sh** — Send a message to any channel as if a user typed it:
 ```bash
