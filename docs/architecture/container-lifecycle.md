@@ -47,8 +47,29 @@ When the first message arrives in a worker channel:
    - Env vars: `ANTHROPIC_BASE_URL` pointing to the correct proxy (`:3001` for Anthropic, `:3003/w/{folder}/` for Neuralwatt)
    - `NANOCLAW_MODEL`, `NANOCLAW_IS_MAIN=0`, `DISCORD_GUILD_ID`, etc.
    - Port mappings from worker profile (`-p` flags), if configured
-3. **init.sh runs** from the worker profile. This clones repos (skipping already-cloned), installs tools, symlinks skills. Runs every time a container spawns.
+3. **init.sh runs** from the worker profile. This clones repos (skipping already-cloned), installs profile-specific tools, symlinks skills and credentials. Runs every time a container spawns.
 4. **Agent runner starts** with the Claude Agent SDK. If a session ID exists in SQLite, it resumes that session.
+
+### Image layers: public vs personal
+
+The container image supports two layers:
+
+| Layer | Location | What goes here |
+|-|-|-|
+| **Public base** | `container/Dockerfile` | Packages every NanoClaw user needs (node, git, chromium, claude-code, rust, python) |
+| **Personal** | `~/.config/nanoclaw/Dockerfile` | Your additions (databases, test frameworks, CLI tools). Optional. |
+
+`container/build.sh` builds the base image, then layers the personal Dockerfile on top if it exists. The personal Dockerfile should start with `FROM nanoclaw-agent:base`.
+
+### Dockerfile vs init.sh vs profile tools
+
+| Where | What goes here | When it runs |
+|-|-|-|
+| **Dockerfile** | Packages that are the same every time and slow to install. Split between public base and personal layer. | Image build (once) |
+| **init.sh** | Setup that needs host context: cloning repos (needs SSH keys), symlinking credentials from mounts, configuring service connections. Idempotent. | Every container spawn |
+| **Profile tools** | Installs that depend on workspace content (e.g., `uv tool install /workspace/group/myproject`). | Every container spawn, after init.sh |
+
+If an install takes more than a few seconds and is the same across all workers, move it to a Dockerfile layer.
 
 ## Running
 
