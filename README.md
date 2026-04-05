@@ -52,10 +52,10 @@ The master resolves fuzzy model names automatically — "kimi fast", "qwen coder
 switch my-task to qwen 3.5
 ```
 
-**Between Anthropic and Neuralwatt** — requires a container restart because `ANTHROPIC_BASE_URL` is set at container start (Anthropic workers talk to the credential proxy on :3001, Neuralwatt workers talk to the translation shim on :3003). Use `transfer_worker`, which destroys the old container and creates a new one — workspace and chat history are preserved:
+**Between Anthropic and Neuralwatt** — requires a container restart because `ANTHROPIC_BASE_URL` is set at container start. Use `switch_backend` followed by destroying and recreating the worker with `reuse: "resume"`. The master handles this automatically when you ask it to change a worker's backend. Workspace and chat history are preserved:
 
 ```
-transfer my-task to neuralwatt kimi k2.5
+switch my-task to neuralwatt kimi k2.5
 ```
 
 ### Viewing Energy & Usage Data

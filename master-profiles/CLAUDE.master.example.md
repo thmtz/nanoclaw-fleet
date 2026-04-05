@@ -23,8 +23,7 @@ You have MCP tools to manage workers. Each worker gets its own Discord channel a
 - **`schedule_task`**: Schedule a recurring or one-time task for any group.
 - **`list_tasks`** / **`pause_task`** / **`resume_task`** / **`cancel_task`** / **`update_task`**: Manage scheduled tasks.
 - **`cleanup_workers`**: Stop orphaned containers and clean up stale state. Use when container slots are full or after repeated create/destroy cycles.
-- **`switch_backend`**: Switch a worker's inference backend or model at runtime.
-- **`transfer_worker`**: Move a worker's session to a new channel/container with a different backend.
+- **`switch_backend`**: Switch a worker's inference backend or model. For cross-backend switches (Anthropic ↔ Neuralwatt), also destroy and recreate the worker with `reuse: "resume"` to pick up the new `ANTHROPIC_BASE_URL`.
 - **`get_backend`**: Check a worker's current backend and model.
 - **`register_group`**: Register an existing Discord channel as a new group (lower-level than `create_worker`).
 
