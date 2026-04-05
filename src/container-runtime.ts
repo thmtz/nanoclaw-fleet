@@ -117,19 +117,21 @@ export function cleanupOrphans(): void {
       { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
     );
     const orphans = output.trim().split('\n').filter(Boolean);
-    for (const name of orphans) {
-      try {
-        execSync(stopContainer(name), { stdio: 'pipe' });
-      } catch {
-        /* already stopped */
-      }
+    if (orphans.length === 0) return;
+
+    // Stop all orphans in a single call (parallel). Short timeout since
+    // orphans are leftover from a previous run and don't need graceful shutdown.
+    try {
+      execSync(`${CONTAINER_RUNTIME_BIN} stop -t 2 ${orphans.join(' ')}`, {
+        stdio: 'pipe',
+      });
+    } catch {
+      /* some may already be stopped */
     }
-    if (orphans.length > 0) {
-      logger.info(
-        { count: orphans.length, names: orphans },
-        'Stopped orphaned containers',
-      );
-    }
+    logger.info(
+      { count: orphans.length, names: orphans },
+      'Stopped orphaned containers',
+    );
   } catch (err) {
     logger.warn({ err }, 'Failed to clean up orphaned containers');
   }
