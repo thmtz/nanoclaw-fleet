@@ -523,7 +523,7 @@ async function testNeuralwatt(guildId: string) {
     fail(`NW streaming request failed: ${e.message}`);
   }
 
-  // Backend switch: NW → Anthropic
+  // Backend switch: NW → Anthropic (config only)
   info('Testing backend switch (NW → Anthropic)...');
   ipc({ type: 'switch_backend', worker_name: nwName, backend: 'anthropic' });
   await sleep(3000);
@@ -536,6 +536,82 @@ async function testNeuralwatt(guildId: string) {
     } else {
       fail(`Backend switch failed (still: ${cfg})`);
     }
+  }
+
+  // Cross-backend switch: destroy + recreate with resume
+  // This tests the workflow: switch_backend changes config, destroy preserves
+  // workspace, create with reuse="resume" picks up the new backend.
+  // Note: this NW worker was only tested via curl (no Discord messages), so
+  // no session ID exists — we test workspace + registration preservation, not
+  // session resume (that's covered in scenario 2).
+  info('Testing cross-backend switch (destroy + resume)...');
+
+  // Look up JID for destroy
+  const nwJid = sqlite(
+    `SELECT jid FROM registered_groups WHERE folder='${nwFolder}';`,
+  ).trim();
+  if (!nwJid) {
+    fail('Cannot find NW worker JID for destroy');
+    return;
+  }
+
+  ipc({ type: 'destroy_worker', jid: nwJid });
+
+  // Wait for deregistration
+  for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
+    await sleep(1000);
+    const count = sqlite(
+      `SELECT count(*) FROM registered_groups WHERE folder='${nwFolder}';`,
+    );
+    if (count === '0') break;
+  }
+
+  // Workspace should be preserved after destroy
+  if (existsSync(path.join(PROJECT_DIR, 'groups', nwFolder))) {
+    pass('Workspace preserved after cross-backend destroy');
+  } else {
+    fail('Workspace lost after cross-backend destroy');
+  }
+
+  // Recreate with same name + resume
+  ipc({
+    type: 'create_worker',
+    guild_id: guildId,
+    channel_name: nwName,
+    folder: nwFolder,
+    trigger: '@Andy',
+    reuse: 'resume',
+  });
+
+  // Poll for re-registration
+  for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
+    await sleep(1000);
+    const reg = sqlite(
+      `SELECT folder FROM registered_groups WHERE folder='${nwFolder}';`,
+    );
+    if (reg.includes(nwFolder)) break;
+  }
+
+  const regAfterResume = sqlite(
+    `SELECT folder FROM registered_groups WHERE folder='${nwFolder}';`,
+  );
+  if (regAfterResume.includes(nwFolder)) {
+    pass('Worker re-registered after cross-backend resume');
+  } else {
+    fail('Worker not re-registered after resume');
+  }
+
+  // Verify the resumed worker is on Anthropic backend (no NW entry)
+  if (existsSync(backendsFile)) {
+    const backendsResume = JSON.parse(readFileSync(backendsFile, 'utf-8'));
+    const resumeBackend = backendsResume[nwFolder]?.backend ?? 'anthropic';
+    if (resumeBackend === 'anthropic') {
+      pass('Resumed worker on Anthropic backend');
+    } else {
+      fail(`Resumed worker still on: ${resumeBackend}`);
+    }
+  } else {
+    pass('Resumed worker on Anthropic backend (no backends file)');
   }
 }
 
