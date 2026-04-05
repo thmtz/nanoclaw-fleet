@@ -132,7 +132,7 @@ curl http://localhost:3003/logs/<folder>   # last 20 turns for a worker
 
 ## Gotchas
 
-- **Agent-runner source auto-syncs by mtime.** Changes to MCP tools or agent-runner code take effect on next container spawn. No manual cache clearing needed.
+- **Agent-runner source auto-syncs by mtime.** Changes to MCP tools or agent-runner code take effect on next container spawn. No manual cache clearing needed. However, if the image is stale, the entrypoint recompiles TypeScript on every spawn (~2-3s). Rebuild the image (`container/build.sh`) after agent-runner changes to avoid this.
 - **Docker build cache is aggressive.** `--no-cache` alone doesn't invalidate COPY steps. Prune the builder for a truly clean rebuild.
 - **WhatsApp is a separate channel fork.** Run `/add-whatsapp` to install it after upgrading.
 

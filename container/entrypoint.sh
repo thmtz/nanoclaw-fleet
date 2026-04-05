@@ -20,8 +20,10 @@ if [ -x /workspace/init.sh ]; then
 fi
 
 # Use pre-built dist from Docker image if source hasn't changed.
-# The host mounts agent-runner source to /app/src at runtime, so mtime
-# comparisons are unreliable. Instead, compare content hashes.
+# The host mounts agent-runner source to /app/src at runtime (synced from
+# container/agent-runner/src/ on the host). If the host source differs from
+# what the image was built with, tsc recompiles. Rebuild the container image
+# after agent-runner changes to avoid this 2-3s penalty on every spawn.
 DIST_DIR="/app/dist"
 needs_compile=false
 if [ ! -f "$DIST_DIR/index.js" ]; then

@@ -21,7 +21,7 @@ To check your session's usage stats (Neuralwatt only): `curl -s http://host.dock
 
 ## First Boot
 
-On your first message, briefly announce what's available — list the cloned repos and confirm key tools are working. Keep it short.
+On your first message, acknowledge you're ready and respond to the user's request. Don't run setup commands or list repos unless asked.
 
 ## Skills
 
