@@ -16,12 +16,10 @@ export const logger = pino({
       {
         target: 'pino-pretty',
         options: { colorize: true, destination: 1 }, // stdout
-        level: process.env.LOG_LEVEL || 'info',
       },
       {
         target: 'pino/file',
         options: { destination: path.join(logsDir, 'nanoclaw.jsonl') },
-        level: process.env.LOG_LEVEL || 'info',
       },
     ],
   },
