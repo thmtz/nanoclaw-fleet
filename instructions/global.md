@@ -35,6 +35,26 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 **Long-running commands:** Anything expected to take more than ~3 seconds should run in the background so you stay responsive.
 
+## Where Config Changes Go
+
+When the user asks you to change instructions, tools, packages, or other config, figure out where it belongs along two axes:
+
+**Shared vs personal**: Does every NanoClaw Fleet user need this, or just this user? Shared config lives in the repo (e.g., `instructions/`, `container/Dockerfile`). Personal config lives at `~/.config/nanoclaw/` on the host (e.g., personal instructions, personal Dockerfile, worker profiles).
+
+**Global vs role-specific**: Does this apply to all agents (master + workers), or just one role? Global config goes in `global.md` or the base Dockerfile. Role-specific config goes in `master.md`, `worker.md`, or a named worker profile.
+
+| Change | Where |
+|-|-|
+| Generic agent behavior (communication, workspace) | Repo `instructions/global.md` |
+| Master-only tools or capabilities | Repo `instructions/master.md` |
+| Worker-only environment info | Repo `instructions/worker.md` |
+| User's code conventions, repos, integrations | Personal `~/.config/nanoclaw/instructions/` |
+| System packages all users need | Repo `container/Dockerfile` |
+| User's extra packages (databases, test tools) | Personal `~/.config/nanoclaw/Dockerfile` |
+| Which repos to clone, tools to install | Personal `~/.config/nanoclaw/worker-profiles/` |
+
+If you're unsure, ask the user. The key question is: would removing this break NanoClaw for other users? If yes, it's shared. If only this user cares, it's personal.
+
 ## Your Workspace
 
 Files you create are saved in `/workspace/group/`. This is bind-mounted to the host and survives container restarts. Everything outside it is ephemeral.
