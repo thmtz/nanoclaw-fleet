@@ -29,27 +29,13 @@ Host-side test tools live in `tools/`.
 
 ## Quick Smoke Test
 
-Two versions of the E2E smoke test are available:
-
-| Script | Language | Runs from | Notes |
-|-|-|-|-|
-| `tools/e2e-test.sh` | Bash | Host only | Uses `systemctl` for preflight/restart checks. ~65s. |
-| `tools/e2e-test.ts` | TypeScript | Host or container | Uses fire-and-forget IPC + polling. ~60s. |
-
-The TypeScript version (`e2e-test.ts`) is the preferred test. It works from inside the master container, which means agents can self-test after making changes. It auto-detects whether it's running on the host or in a container and adjusts accordingly (e.g., uses `host.docker.internal` for service checks when in a container).
+Run `tools/e2e-test.ts` to verify nothing major is broken. Works from both the host and inside the master container. Creates temporary workers, exercises them, and cleans up on exit. ~65 seconds.
 
 ```bash
-# From host
-npx tsx tools/e2e-test.ts
-
-# From master container
-cd /workspace/project && npx tsx tools/e2e-test.ts
-
-# Skip Neuralwatt tests (faster, ~45s)
-npx tsx tools/e2e-test.ts --skip-nw
+npx tsx tools/e2e-test.ts              # from host
+cd /workspace/project && npx tsx tools/e2e-test.ts   # from master container
+npx tsx tools/e2e-test.ts --skip-nw    # skip Neuralwatt tests (~45s)
 ```
-
-Both tests create temporary workers, exercise them, and clean up on exit. Run after any significant change.
 
 ## Host-Side Tools
 
