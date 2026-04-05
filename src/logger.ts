@@ -1,8 +1,30 @@
+/**
+ * Logging: pretty output to stdout (captured by systemd to nanoclaw.log),
+ * structured JSONL to logs/nanoclaw.jsonl for programmatic querying.
+ */
+import fs from 'fs';
+import path from 'path';
 import pino from 'pino';
+
+const logsDir = path.join(process.cwd(), 'logs');
+fs.mkdirSync(logsDir, { recursive: true });
 
 export const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } },
+  transport: {
+    targets: [
+      {
+        target: 'pino-pretty',
+        options: { colorize: true, destination: 1 }, // stdout
+        level: process.env.LOG_LEVEL || 'info',
+      },
+      {
+        target: 'pino/file',
+        options: { destination: path.join(logsDir, 'nanoclaw.jsonl') },
+        level: process.env.LOG_LEVEL || 'info',
+      },
+    ],
+  },
 });
 
 // Route uncaught errors through pino so they get timestamps in stderr
