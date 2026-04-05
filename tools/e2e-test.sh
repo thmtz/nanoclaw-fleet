@@ -4,8 +4,35 @@
 #
 # Usage: ./tools/e2e-test.sh
 #
-# Requires: nanoclaw running, Docker running, .env configured.
-# Creates and destroys a temporary worker. Takes ~60s.
+# Prerequisites:
+#   - nanoclaw service running (systemctl --user start nanoclaw)
+#   - nanoclaw-shim service running (for Neuralwatt tests; skipped if not)
+#   - Docker running
+#   - .env configured with DISCORD_GUILD_ID
+#
+# What it tests (22 checks):
+#   1. Preflight — services running, config present
+#   2. Worker creation — DB registration, workspace dir, assembled CLAUDE.md
+#   3. First boot — container spawns, Anthropic agent responds, no errors
+#   4. Session resume — kill container, respawn, agent recalls a secret code
+#   5. Neuralwatt backend — create NW worker, shim returns valid Anthropic-format
+#      response (non-streaming and streaming SSE)
+#   6. Backend switching — NW → Anthropic config update
+#   7. Credential proxy — reachable on :3001
+#   8. Destroy — DB cleanup, container stopped, workspace + session preserved
+#   9. Startup timing — reports last host startup duration
+#
+# What it does NOT test:
+#   - Master agent natural language understanding (uses IPC, not Discord messages)
+#   - Personal config (instructions, Dockerfile, init.sh)
+#   - Anthropic → NW backend switch (only tests NW → Anthropic)
+#   - Worker resume after destroy+recreate (only tests resume after container kill)
+#   - Full model switching within Neuralwatt
+#   - Content correctness of agent responses (checks structure, not semantics,
+#     except for secret code recall which is best-effort)
+#
+# Creates and destroys temporary workers. Cleans up on exit.
+# Takes ~65s. Exit code = number of failed checks (0 = all pass).
 
 set -uo pipefail
 # No set -e: we want to continue past failures and report all results
