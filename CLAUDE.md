@@ -95,9 +95,17 @@ systemctl --user restart nanoclaw
 
 ## Debugging
 
-**Host startup/shutdown timing** is logged at INFO level:
+Logs are written to two destinations: pretty-printed to stdout (captured by systemd to `logs/nanoclaw.log`) and structured JSONL to `logs/nanoclaw.jsonl` for programmatic querying.
+
 ```bash
-grep 'Startup:\|Shutdown:' logs/nanoclaw.log
+# Startup/shutdown timing
+jq 'select(.msg | startswith("Startup:") or startswith("Shutdown:"))' logs/nanoclaw.jsonl
+
+# Container startups slower than 10s
+jq 'select(.msg == "Container first output" and .startupMs > 10000)' logs/nanoclaw.jsonl
+
+# All errors
+jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 ```
 
 **Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr.
