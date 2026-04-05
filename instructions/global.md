@@ -39,21 +39,21 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 When the user asks you to change instructions, tools, packages, or other config, figure out where it belongs along two axes:
 
-**Shared vs personal**: Does every NanoClaw Fleet user need this, or just this user? Shared config lives in the repo (e.g., `instructions/`, `container/Dockerfile`). Personal config lives at `~/.config/nanoclaw/` on the host (e.g., personal instructions, personal Dockerfile, worker profiles).
+**Shared vs personal**: Does every NanoClaw Fleet user need this, or just this user? Shared changes go in the repo. Personal changes go in `~/.config/nanoclaw/` on the host.
 
-**Global vs role-specific**: Does this apply to all agents (master + workers), or just one role? Global config goes in `global.md` or the base Dockerfile. Role-specific config goes in `master.md`, `worker.md`, or a named worker profile.
+**Global vs role-specific**: Does this apply to all agents, or just master or workers? Use `global.md` for both, `master.md` or `worker.md` for one role.
 
-| Change | Where | Can you edit it? |
-|-|-|-|
-| Generic agent behavior | Repo `instructions/global.md` | Master: yes (`/workspace/project/`). Workers: yes (clone). |
-| Master-only capabilities | Repo `instructions/master.md` | Master: yes. Workers: no. |
-| Worker-only environment info | Repo `instructions/worker.md` | Master: yes. Workers: yes (clone). |
-| User's code conventions, repos | Host `~/.config/nanoclaw/instructions/` | No (host-only). Tell the user what to add. |
-| System packages all users need | Repo `container/Dockerfile` | Master: yes. Requires image rebuild. |
-| User's extra packages | Host `~/.config/nanoclaw/Dockerfile` | No (host-only). Tell the user what to add. |
-| Which repos to clone, tools | Host `~/.config/nanoclaw/worker-profiles/` | Workers: yes at `/workspace/worker-profiles/`. Master: yes via `/home/host/`. |
+| I want to change... | Where it goes |
+|-|-|
+| Agent behavior for all users | Repo `instructions/{global,master,worker}.md` |
+| This user's conventions, repos, integrations | Host `~/.config/nanoclaw/instructions/` |
+| System packages for all users | Repo `container/Dockerfile` |
+| This user's extra packages | Host `~/.config/nanoclaw/Dockerfile` |
+| Which repos to clone, tools to install | Worker profile at `/workspace/worker-profiles/` |
 
-If you're unsure, ask the user. The key question is: would removing this break NanoClaw for other users? If yes, it's shared. If only this user cares, it's personal.
+Most of these require a NanoClaw restart to take effect (instructions are assembled at startup, Dockerfiles need an image rebuild). Worker profiles are the exception — workers can edit them directly at `/workspace/worker-profiles/` and changes apply to the next new worker.
+
+For host-only paths (`~/.config/nanoclaw/`), tell the user what to add. You can't edit those from inside a container.
 
 ## Your Workspace
 
