@@ -945,69 +945,6 @@ Changes the model/backend for an existing worker. Takes effect on the worker's n
   },
 );
 
-server.tool(
-  'transfer_worker',
-  `Transfer a worker's session to a new worker, optionally switching backend. Main group only.
-
-The source worker is destroyed and a new worker is created with the same workspace and conversation history. Use this to switch a worker between Anthropic and Neuralwatt without losing context.`,
-  {
-    source_worker: z.string().describe('Source worker name (e.g., "nw-dev")'),
-    target_name: z
-      .string()
-      .describe('Name for the new worker (e.g., "nw-dev-claude")'),
-    target_backend: z
-      .enum(['anthropic', 'neuralwatt'])
-      .optional()
-      .describe('Backend for the new worker. Defaults to anthropic.'),
-    target_model: z
-      .string()
-      .optional()
-      .describe('Model for neuralwatt backend.'),
-  },
-  async (args) => {
-    if (!isMain) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Only the main group can transfer workers.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const data = {
-      type: 'transfer_worker',
-      source_worker: args.source_worker,
-      target_name: args.target_name,
-      target_backend: args.target_backend,
-      target_model: args.target_model,
-      reply_jid: chatJid,
-      timestamp: new Date().toISOString(),
-    };
-
-    const taskFile = writeIpcFile(TASKS_DIR, data);
-    const response = await waitForResponse(taskFile, 30000);
-
-    if (response?.success) {
-      return {
-        content: [{ type: 'text' as const, text: response.message }],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: response?.message || 'Transfer timed out.',
-        },
-      ],
-      isError: !response?.success,
-    };
-  },
-);
-
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

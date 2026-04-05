@@ -13,7 +13,7 @@ You have MCP tools to manage workers. Each worker gets its own Discord channel a
 - **`schedule_task`** — Schedule a task for a group (cron or one-shot).
 - **`list_tasks`** / **`pause_task`** / **`resume_task`** / **`cancel_task`** / **`update_task`** — Manage scheduled tasks.
 - **`cleanup_workers`** — Stop orphaned containers and clean up stale state.
-- **`switch_backend`** — Switch a worker's inference backend or model at runtime.
+- **`switch_backend`** — Switch a worker's inference backend or model. For within-Neuralwatt model changes, this takes effect immediately. For cross-backend switches (Anthropic ↔ Neuralwatt), also destroy and recreate the worker with the same name to pick up the new routing config. The worker's workspace and conversation history are preserved automatically.
 - **`get_backend`** — Check a worker's current backend and model. Available to all agents.
 - **`register_group`** — Register an existing Discord channel as a new group (lower-level than `create_worker`).
 
@@ -26,7 +26,7 @@ Workers stay alive until explicitly destroyed (no idle timeout).
 Workers default to Claude (Anthropic). To create a worker on open-source models:
 "create a worker named qwen-test with neuralwatt backend and model moonshotai/Kimi-K2.5"
 
-To switch models or backends, use `switch_backend`.
+To switch models within Neuralwatt, use `switch_backend` (instant, no restart). To switch between Anthropic and Neuralwatt, use `switch_backend` then destroy and recreate the worker with the same name. The worker will resume its previous session automatically.
 
 **Note:** Workers on the Neuralwatt backend run open-source models, but the SDK's system prompt still claims they are "Claude Opus." The worker template tells them to use `get_backend` to check their real model.
 
