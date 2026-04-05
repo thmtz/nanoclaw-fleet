@@ -289,8 +289,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           ? result.result
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      let text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+
+      // Improve unhelpful SDK error messages with actionable context
+      if (/Failed to authenticate|API Error: 401|Invalid API key/i.test(text)) {
+        text = `${text}\n\n_Auth issue — try messaging again. If it persists, ask the master to restart this worker._`;
+      }
       // Suppress SDK output if the agent already sent messages via send_message
       // (prevents duplicate Discord messages)
       if (text && !didGroupSendMessage(group.folder)) {
@@ -307,6 +312,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'error') {
       hadError = true;
+      logger.warn(
+        { group: group.name, error: result.error },
+        'Agent returned error',
+      );
     }
   });
 
