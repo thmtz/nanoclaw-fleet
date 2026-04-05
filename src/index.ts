@@ -1,3 +1,4 @@
+import { EventEmitter, once } from 'events';
 import fs from 'fs';
 import path from 'path';
 
@@ -81,6 +82,11 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+
+// Wake signal: fires when a new message is stored, so the message loop
+// can process it immediately instead of waiting for the next poll cycle.
+const messageWake = new EventEmitter();
+messageWake.setMaxListeners(0); // loop re-registers on every iteration
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -563,7 +569,13 @@ async function startMessageLoop(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error in message loop');
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    // Wait for either a new message event or the poll interval (whichever first).
+    // This gives near-instant response when a Discord message arrives, with the
+    // poll interval as a fallback safety net.
+    await Promise.race([
+      new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL)),
+      once(messageWake, 'wake'),
+    ]);
   }
 }
 
@@ -676,6 +688,7 @@ async function main(): Promise<void> {
         }
       }
       storeMessage(msg);
+      messageWake.emit('wake');
     },
     onChatMetadata: (
       chatJid: string,
