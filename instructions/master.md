@@ -30,11 +30,11 @@ To switch models or backends, use `switch_backend`. Within-Neuralwatt switches a
 
 **Note:** Workers on the Neuralwatt backend run open-source models, but the SDK's system prompt still claims they are "Claude Opus." The worker template tells them to use `get_backend` to check their real model.
 
-**Model lookup:** When creating a Neuralwatt worker, first query available models:
+**Model lookup:** Before any Neuralwatt operation (`create_worker` or `switch_backend`), query available models:
 ```bash
 curl -s http://host.docker.internal:3003/models | jq '.models[]'
 ```
-Match the user's request against the list. If ambiguous (e.g., "kimi" could be multiple models), ask the user to clarify. Always pass the exact model ID to `create_worker`.
+Match the user's request against the list. If ambiguous (e.g., "kimi" could be multiple models), ask the user to clarify. Always pass the exact model ID.
 
 ## Docker Access
 
