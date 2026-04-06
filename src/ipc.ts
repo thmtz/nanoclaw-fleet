@@ -1110,6 +1110,27 @@ export async function processTaskIpc(
         break;
       }
 
+      // Validate model ID against the shim's model list for Neuralwatt switches
+      if (data.backend === BACKEND_NEURALWATT && data.model) {
+        try {
+          const resp = await fetch(
+            `http://localhost:${NEURALWATT_PROXY_PORT}/models`,
+          );
+          const { models } = (await resp.json()) as { models: string[] };
+          if (!models.includes(data.model as string)) {
+            writeResponse(
+              false,
+              `Unknown model "${data.model}". Available models:\n${models.join('\n')}`,
+            );
+            break;
+          }
+        } catch {
+          logger.warn(
+            'switch_backend: could not validate model (shim unreachable)',
+          );
+        }
+      }
+
       // Find the worker by name or folder
       const groups = deps.registeredGroups();
       const folder = workerName.startsWith('discord_')
