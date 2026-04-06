@@ -15,6 +15,7 @@ You have MCP tools to manage workers. Each worker gets its own Discord channel a
 - **`cleanup_workers`** — Stop orphaned containers and clean up stale state.
 - **`switch_backend`** — Switch a worker's inference backend or model. Within-Neuralwatt model changes take effect immediately. Cross-backend switches (Anthropic ↔ Neuralwatt) automatically restart the container; the worker resumes on the next message.
 - **`get_backend`** — Check a worker's current backend and model. Available to all agents.
+- **`worker_history`** — Query worker lifecycle events (creation, destruction, backend switches). Filter by worker name, event type, or time range. Use when asked about past workers or activity.
 - **`register_group`** — Register an existing Discord channel as a new group (lower-level than `create_worker`).
 
 When asked to create a worker, use `create_worker` immediately. Don't ask for confirmation unless the request is ambiguous.
