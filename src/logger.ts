@@ -18,8 +18,12 @@ export const logger = pino({
         options: { colorize: true, destination: 1 }, // stdout
       },
       {
-        target: 'pino/file',
-        options: { destination: path.join(logsDir, 'nanoclaw.jsonl') },
+        target: 'pino-roll',
+        options: {
+          file: path.join(logsDir, 'nanoclaw.jsonl'),
+          frequency: 'daily',
+          limit: { count: 7 },
+        },
       },
     ],
   },
