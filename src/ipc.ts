@@ -16,6 +16,20 @@ import { AvailableGroup } from './container-runner.js';
 import { sanitizeFolderName } from './container-runtime.js';
 import { readEnvFile } from './env.js';
 
+/** Read the current backend for a worker. Returns 'anthropic' if not in worker-backends.json. */
+function getCurrentBackend(folder: string): string {
+  const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
+  try {
+    if (fs.existsSync(backendsPath)) {
+      const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+      return backends[folder]?.backend || 'anthropic';
+    }
+  } catch {
+    /* corrupt file */
+  }
+  return 'anthropic';
+}
+
 /** Read-modify-write worker-backends.json. Atomic via temp file. */
 function updateWorkerBackends(
   folder: string,
@@ -1112,6 +1126,11 @@ export async function processTaskIpc(
 
       const [workerJid, workerGroup] = workerEntry;
 
+      const oldBackend = getCurrentBackend(workerGroup.folder);
+      const newBackend =
+        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : 'anthropic';
+      const crossBackendSwitch = oldBackend !== newBackend;
+
       updateWorkerBackends(
         workerGroup.folder,
         data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : null,
@@ -1123,14 +1142,23 @@ export async function processTaskIpc(
       // to the wrong proxy (e.g. still Anthropic after switching to NW).
       updateWorkerEnvBackend(workerGroup.folder, data.backend as string);
 
-      // Notify the worker's channel
+      // Cross-backend switches (Anthropic <-> Neuralwatt) need a container
+      // restart because ANTHROPIC_BASE_URL is set at container start.
+      // Stop the running container; it will respawn on the next message
+      // with the correct URL. Session and workspace are preserved.
+      if (crossBackendSwitch && deps.stopGroupContainer) {
+        deps.stopGroupContainer(workerJid);
+      }
+
       const modelDesc =
         data.backend === BACKEND_NEURALWATT
           ? `${data.model || 'default Neuralwatt model'}`
           : 'Claude (Anthropic)';
       await deps.sendMessage(
         workerJid,
-        `⚙️ Your inference backend was switched to **${modelDesc}**. This takes effect on your next response.`,
+        crossBackendSwitch
+          ? `⚙️ Backend switched to **${modelDesc}**. Container restarting, send a message to resume.`
+          : `⚙️ Model switched to **${modelDesc}**. Takes effect on your next response.`,
       );
 
       const msg = `Switched ${workerGroup.name} to ${modelDesc}.`;

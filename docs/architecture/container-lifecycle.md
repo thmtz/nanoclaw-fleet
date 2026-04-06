@@ -12,7 +12,7 @@ The master agent has these lifecycle tools (master-only, enforced by `isMain` ch
 | `destroy_worker` | Deletes the Discord channel, DB records, and session state. Workspace preserved. |
 | `list_workers` | Returns all registered workers with their status |
 | `cleanup_workers` | Destroys stale or errored workers in bulk |
-| `switch_backend` | Changes a worker's inference backend or model. Cross-backend switches need a destroy/recreate cycle. |
+| `switch_backend` | Changes a worker's inference backend or model. Cross-backend switches restart the container automatically. |
 
 All agents (master and workers) also have:
 
