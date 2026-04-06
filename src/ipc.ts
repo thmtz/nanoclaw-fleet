@@ -816,13 +816,25 @@ export async function processTaskIpc(
             requiresTrigger: false, // Workers have dedicated channels — no trigger needed
           });
           // Notify the master channel that the worker was created
+          const backendDesc =
+            data.backend === BACKEND_NEURALWATT
+              ? ` on **${data.model || 'Neuralwatt'}**`
+              : '';
           if (data.reply_jid) {
             await deps.sendMessage(
               data.reply_jid,
-              `Worker created: **#${data.channel_name}** (channel <#${channelId}>)`,
+              `Worker created: **#${data.channel_name}**${backendDesc} (channel <#${channelId}>)`,
             );
           }
-          logger.info({ channelId, folder: data.folder }, 'Worker created');
+          logger.info(
+            {
+              channelId,
+              folder: data.folder,
+              backend: data.backend,
+              model: data.model,
+            },
+            'Worker created',
+          );
 
           // Refresh snapshot so master can immediately resolve by name
           refreshGroupsSnapshot(deps, sourceGroup);
@@ -840,7 +852,7 @@ export async function processTaskIpc(
 
           writeResponse(
             true,
-            `Worker created: #${data.channel_name} (channel <#${channelId}>)${capacityNote}`,
+            `Worker created: #${data.channel_name}${backendDesc} (channel <#${channelId}>)${capacityNote}`,
           );
           if (capacityNote && data.reply_jid) {
             await deps.sendMessage(data.reply_jid, capacityNote.trim());
