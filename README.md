@@ -50,7 +50,7 @@ By default, workers run on **Claude (Opus)** via the Anthropic API:
 create a worker named my-task
 ```
 
-To use an open-source model via [Neuralwatt](https://portal.neuralwatt.com), specify the backend and model:
+To use an open-source model via [Neuralwatt](https://portal.neuralwatt.com), specify the backend and model. Neuralwatt's API reports energy consumption per request (joules, watt-hours), so you can track exactly how much power each worker uses.
 
 ```
 create a worker named my-task based on neuralwatt kimi k2.5
