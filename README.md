@@ -1,10 +1,24 @@
-# NanoClaw (Agent Fleet Manager)
+# NanoClaw Fleet
 
-> Fork of [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw) — a lightweight, secure personal assistant that runs Claude agents in containers, connected to messaging channels.
+A fleet manager for isolated coding agents, built on [NanoClaw](https://github.com/qwibitai/nanoclaw). Each agent gets its own Discord channel and Docker container with pre-cloned repos and tools. You manage everything from a master channel: create workers, give them tasks, switch between contexts, tear them down when done.
 
-This fork turns NanoClaw into a **fleet manager for isolated coding agents**, all controlled from Discord. Send a message in a master channel to spin up a new agent. It gets its own Discord channel, Docker container, and pre-configured dev environment (cloned repos, tools, credentials). Tear it down when you're done. Workers are fully isolated from each other and can run on Claude or open-source models, with live model switching and per-worker usage tracking.
+I built this because I wanted to run multiple coding agents in parallel without juggling shell sessions and worktrees, and I wanted seamless handoff between desktop and mobile. Discord gives you both: each worker is just a channel you can check in on from anywhere.
 
 <img src="assets/screenshot-status.png" alt="Status dashboard showing master and five workers" width="700">
+
+## What a session looks like
+
+In `#master`:
+
+```
+create a worker named fix-auth
+create a worker named refactor-api
+create a worker named update-docs
+```
+
+Each one gets a Discord channel, a Docker container, and your repos cloned. Switch between channels to give tasks, check progress, or follow up. Come back later from your phone and pick up where you left off.
+
+Workers persist until you explicitly destroy them. If you destroy one by mistake, recreating it with the same name restores the workspace and conversation history.
 
 ## Quick Start
 
@@ -42,33 +56,50 @@ To use an open-source model via [Neuralwatt](https://portal.neuralwatt.com), spe
 create a worker named my-task based on neuralwatt kimi k2.5
 ```
 
-The master resolves fuzzy model names automatically — "kimi fast", "qwen coder", etc. all work. You don't need to know exact model identifiers.
+The master resolves fuzzy model names automatically. "kimi fast", "qwen coder", etc. all work.
 
 ### Switching Models
 
-**Within Neuralwatt** — model switches are instant, no restart needed. The translation shim re-reads the model config on every request:
+**Within Neuralwatt**, model switches are instant, no restart needed:
 
 ```
 switch my-task to qwen 3.5
 ```
 
-**Between Anthropic and Neuralwatt** — just ask the master. Workspace and chat history are preserved:
+**Between Anthropic and Neuralwatt**, just ask the master. Workspace and chat history are preserved:
 
 ```
 switch my-task to neuralwatt kimi k2.5
 ```
 
-### Viewing Energy & Usage Data
+### Listing and Destroying Workers
 
-Neuralwatt workers track per-request energy metrics (tokens, joules, watt-hours). There are several ways to see this data:
+```
+list workers
+destroy my-task
+```
 
-**Status dashboard** — ask the master to run `/status`. This shows all workers with their backend, model, uptime, and cumulative energy usage:
+### Session Restore
+
+Workers keep their workspace and conversation history after being destroyed. Recreating a worker with the same name picks up where it left off:
+
+```
+destroy my-task
+create a worker named my-task    # resumes previous session
+```
+
+The master will ask whether to resume or start fresh if a previous session exists.
+
+### Viewing Energy and Usage Data
+
+Neuralwatt workers track per-request energy metrics (tokens, joules, watt-hours).
+
+**Status dashboard**: ask the master to run `/status`:
 
 ```
 show /status
 ```
 
-Example output:
 ```
 Master · claude · up 2h 15m
 
@@ -83,22 +114,15 @@ Master · claude · up 2h 15m
 - Neuralwatt total: 12 reqs · 8.3k tokens · 0.4 Wh
 ```
 
-**On worker destruction** — when you destroy a Neuralwatt worker, lifetime usage is reported automatically.
+**On worker destruction**: lifetime usage is reported automatically for Neuralwatt workers.
 
-**Direct query** — from inside a worker or via curl:
+**Direct query**:
 ```bash
 curl http://host.docker.internal:3003/usage           # all workers
 curl http://host.docker.internal:3003/usage/discord_my-task  # single worker
 ```
 
-Anthropic workers don't return energy data — only request counts and tokens are tracked for Neuralwatt workers.
-
-### Listing and Destroying Workers
-
-```
-list workers
-destroy my-task
-```
+<img src="assets/screenshot-worker.png" alt="Worker investigating CI regression runs" width="700">
 
 ## Architecture
 
@@ -109,13 +133,11 @@ Discord Server
   #worker-beta     <-->       |         <-->  Container B (Claude or Neuralwatt)
 ```
 
-One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master does minimal thinking: it calls MCP tools (create, destroy, list, switch) with the right arguments. Workers handle all the real work.
+One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master calls MCP tools (create, destroy, list, switch) with the right arguments. Workers handle all the real work.
 
 ### Configuration Model
 
-Configuration splits along two axes: **what's shared** (in the repo, for all users) vs **what's personal** (in `~/.config/nanoclaw/`, for your setup), and **global** (applies to master + all workers) vs **role-specific** (master-only or worker-only).
-
-This applies to instructions, the container image, init scripts, and tools:
+Configuration splits along two axes: **shared** (in the repo, for all users) vs **personal** (`~/.config/nanoclaw/`, your setup), and **global** (all agents) vs **role-specific** (master-only or worker-only).
 
 | What | Repo (shared) | Personal (`~/.config/nanoclaw/`) |
 |-|-|-|
@@ -123,25 +145,17 @@ This applies to instructions, the container image, init scripts, and tools:
 | **Container image** | `container/Dockerfile` | `Dockerfile` (layered on top) |
 | **Worker config** | `worker-profiles/example.json` | `worker-profiles/default.json` + `init.sh` |
 
-At startup, NanoClaw assembles each agent's CLAUDE.md from four fragments: repo global, repo role, personal global, personal role. The container image works similarly — the repo Dockerfile is the base, and your personal Dockerfile layers on top. The repo provides generic NanoClaw behavior; your personal config adds your workflow, repos, tools, and conventions.
+At startup, NanoClaw assembles each agent's CLAUDE.md from four fragments: repo global, repo role, personal global, personal role. The container image works the same way. The repo provides generic behavior; your personal config adds your workflow, repos, tools, and conventions.
 
-See [docs/guides/personal-config.md](docs/guides/personal-config.md) for the full config reference with examples, [docs/guides/setup.md](docs/guides/setup.md) for installation, and [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md) for how each layer propagates.
+See [docs/guides/personal-config.md](docs/guides/personal-config.md) for the full config reference with examples.
 
-For goals, design principles, and detailed architecture, see [docs/architecture/overview.md](docs/architecture/overview.md).
+### Inference Backends
 
-## Inference Backends
+The system uses a translation shim (port 3003) that converts between Anthropic and OpenAI API formats. Workers always use the Claude Agent SDK. The shim handles translation transparently for Neuralwatt workers. Anthropic workers talk directly to the credential proxy (port 3001).
 
-Under the hood, the system uses a **translation shim** (port 3003) that converts between Anthropic and OpenAI API formats. Workers always use the Claude Agent SDK — the shim handles the translation transparently for Neuralwatt workers. Anthropic workers talk directly to the credential proxy (port 3001).
+For technical details: [inference routing](docs/architecture/inference-routing.md) · [model discovery](docs/architecture/model-discovery.md) · [energy tracking](docs/architecture/energy-tracking.md)
 
-For technical details: [inference routing](docs/architecture/inference-routing.md) · [model discovery](docs/architecture/model-discovery.md)
-
-<img src="assets/screenshot-worker.png" alt="Worker investigating CI regression runs" width="700">
-
-## Usage & Energy Tracking
-
-The translation shim accumulates per-request energy data from Neuralwatt responses (tokens, joules, watt-hours) and exposes it via `/usage` endpoints. Usage persists across restarts in `data/worker-usage.json`. See [Using Workers](#viewing-energy--usage-data) above for how to access this data, and [docs/architecture/energy-tracking.md](docs/architecture/energy-tracking.md) for the technical design.
-
-## Restart Behavior
+### Restart Behavior
 
 Containers run with `--rm` and are destroyed on NanoClaw restart. Everything else persists: Discord channels, SQLite registrations, repos (bind-mounted workspace), and session IDs. On restart, workers respawn on next message with full context.
 
@@ -152,7 +166,7 @@ See [docs/architecture/container-lifecycle.md](docs/architecture/container-lifec
 | Section | What's in it |
 |-|-|
 | [docs/architecture/](docs/architecture/) | How the system works (overview, routing, lifecycle, streaming) |
-| [docs/guides/](docs/guides/) | Setup, testing, troubleshooting |
+| [docs/guides/](docs/guides/) | Setup, personal config, testing, troubleshooting |
 | [docs/reference/](docs/reference/) | SDK internals |
 | [design/](design/) | Design history and archived proposals |
 
@@ -174,4 +188,4 @@ Pre-push hook runs prettier, tsc, and tests. Enable with `git config core.hooksP
 
 ## Upstream
 
-This fork tracks [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw). Pull updates with `git fetch upstream main && git merge upstream/main`, or use the `/update-nanoclaw` skill for guided cherry-picking.
+This fork tracks [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw). Use the `/migrate-nanoclaw` skill for guided upgrades, or `/update-nanoclaw` for lightweight cherry-picks.
