@@ -15,6 +15,7 @@ import {
 import { AvailableGroup } from './container-runner.js';
 import { sanitizeFolderName } from './container-runtime.js';
 import { readEnvFile } from './env.js';
+import { logWorkerEvent, readWorkerEvents } from './worker-events.js';
 
 /** Read the current backend for a worker. Returns 'anthropic' if not in worker-backends.json. */
 function getCurrentBackend(folder: string): string {
@@ -359,6 +360,10 @@ export async function processTaskIpc(
     worker_name?: string;
     reuse?: 'resume' | 'fresh';
     ports?: string[];
+    // For worker_history
+    event?: string;
+    since?: string;
+    limit?: number;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -849,6 +854,17 @@ export async function processTaskIpc(
             },
             'Worker created',
           );
+          logWorkerEvent({
+            timestamp: new Date().toISOString(),
+            event: data.reuse === 'resume' ? 'resumed' : 'created',
+            worker: data.channel_name,
+            folder: data.folder,
+            details: {
+              backend: data.backend || 'anthropic',
+              model: data.model,
+              profile: data.profile,
+            },
+          });
 
           // Refresh snapshot so master can immediately resolve by name
           refreshGroupsSnapshot(deps, sourceGroup);
@@ -1005,6 +1021,14 @@ export async function processTaskIpc(
             await deps.sendMessage(data.reply_jid, destroyMsg);
           }
           logger.info({ jid: data.jid }, 'Worker destroyed');
+          if (destroyedFolder) {
+            logWorkerEvent({
+              timestamp: new Date().toISOString(),
+              event: 'destroyed',
+              worker: targetGroup?.name || data.jid,
+              folder: destroyedFolder,
+            });
+          }
 
           // Refresh snapshot so master no longer resolves this worker
           refreshGroupsSnapshot(deps, sourceGroup);
@@ -1187,10 +1211,49 @@ export async function processTaskIpc(
         { worker: workerGroup.name, backend: data.backend, model: data.model },
         msg,
       );
+      logWorkerEvent({
+        timestamp: new Date().toISOString(),
+        event: 'backend_switched',
+        worker: workerGroup.name,
+        folder: workerGroup.folder,
+        details: {
+          from: oldBackend,
+          to: newBackend,
+          model: data.model,
+          crossBackendSwitch,
+        },
+      });
       writeResponse(true, msg);
       if (data.reply_jid) {
         await deps.sendMessage(data.reply_jid as string, msg);
       }
+      break;
+    }
+
+    case 'worker_history': {
+      if (!isMain) break;
+      const events = readWorkerEvents({
+        worker: data.worker_name as string | undefined,
+        event: data.event as string | undefined,
+        since: data.since as string | undefined,
+        limit: (data.limit as number) || 50,
+      });
+
+      if (events.length === 0) {
+        writeResponse(true, 'No matching worker events found.');
+        break;
+      }
+
+      const lines = events.map((e) => {
+        const details = e.details
+          ? ` (${Object.entries(e.details)
+              .filter(([, v]) => v != null)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join(', ')})`
+          : '';
+        return `${e.timestamp} | ${e.event} | ${e.worker}${details}`;
+      });
+      writeResponse(true, lines.join('\n'));
       break;
     }
 

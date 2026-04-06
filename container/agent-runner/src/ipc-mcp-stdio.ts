@@ -945,6 +945,74 @@ Changes the model/backend for an existing worker. Takes effect on the worker's n
   },
 );
 
+server.tool(
+  'worker_history',
+  `Query worker lifecycle events (creation, destruction, backend switches, resumes). Main group only.
+
+Returns a list of events matching the filters. Use this to answer questions like "what workers existed today?" or "when was worker X created?"`,
+  {
+    worker: z
+      .string()
+      .optional()
+      .describe('Filter by worker name (partial match)'),
+    event: z
+      .enum(['created', 'destroyed', 'backend_switched', 'resumed'])
+      .optional()
+      .describe('Filter by event type'),
+    since: z
+      .string()
+      .optional()
+      .describe(
+        'Only show events after this ISO timestamp (e.g. "2026-04-06T00:00:00Z")',
+      ),
+    limit: z
+      .number()
+      .optional()
+      .describe('Max events to return (default: 50, most recent first)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can query worker history.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'worker_history',
+      worker: args.worker,
+      event: args.event,
+      since: args.since,
+      limit: args.limit || 50,
+      timestamp: new Date().toISOString(),
+    };
+
+    const taskFile = writeIpcFile(TASKS_DIR, data);
+    const response = await waitForResponse(taskFile, 10000);
+
+    if (response?.success) {
+      return {
+        content: [{ type: 'text' as const, text: response.message }],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: response?.message || 'Worker history query timed out.',
+        },
+      ],
+      isError: !response?.success,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
