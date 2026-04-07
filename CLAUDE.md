@@ -111,6 +111,8 @@ jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 
 **Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr. View with `docker logs <container-name>`.
 
+**Worker event log** at `logs/worker-events.jsonl` tracks lifecycle events (created, destroyed, backend_switched, resumed). The master can query this via the `worker_history` MCP tool, or you can grep/jq it directly.
+
 **Per-worker audit logs** track every API call at `logs/workers/<folder>/turns.jsonl`. Each entry has: model, backend, tokens (in/out/cached), latency, energy, and stop reason. Use `tools/nc-logs.sh` to query, or the shim's `/logs` endpoints:
 
 ```bash
