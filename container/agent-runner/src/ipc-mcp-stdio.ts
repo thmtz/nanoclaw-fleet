@@ -985,7 +985,7 @@ Returns a list of events matching the filters. Use this to answer questions like
 
     const data = {
       type: 'worker_history',
-      worker: args.worker,
+      worker_name: args.worker,
       event: args.event,
       since: args.since,
       limit: args.limit || 50,
