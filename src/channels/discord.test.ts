@@ -79,8 +79,9 @@ vi.mock('discord.js', () => {
 
     channels = {
       fetch: vi.fn().mockResolvedValue({
-        send: vi.fn().mockResolvedValue(undefined),
+        send: vi.fn().mockResolvedValue({ id: 'mock-msg-id' }),
         sendTyping: vi.fn().mockResolvedValue(undefined),
+        messages: { fetch: vi.fn(), edit: vi.fn() },
       }),
     };
 
@@ -687,8 +688,9 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const mockChannel = {
-        send: vi.fn().mockResolvedValue(undefined),
+        send: vi.fn().mockResolvedValue({ id: 'mock-msg-id' }),
         sendTyping: vi.fn(),
+        messages: { fetch: vi.fn(), edit: vi.fn() },
       };
       currentClient().channels.fetch.mockResolvedValue(mockChannel);
 
@@ -736,6 +738,7 @@ describe('DiscordChannel', () => {
       const mockChannel = {
         send: vi.fn(),
         sendTyping: vi.fn().mockResolvedValue(undefined),
+        messages: { fetch: vi.fn(), edit: vi.fn() },
       };
       currentClient().channels.fetch.mockResolvedValue(mockChannel);
 
