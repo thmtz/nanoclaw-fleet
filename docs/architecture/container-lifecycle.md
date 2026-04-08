@@ -13,6 +13,7 @@ The master agent has these lifecycle tools (master-only, enforced by `isMain` ch
 | `list_workers` | Returns all registered workers with their status |
 | `cleanup_workers` | Destroys stale or errored workers in bulk |
 | `switch_backend` | Changes a worker's inference backend or model. Cross-backend switches restart the container automatically. |
+| `worker_history` | Query the worker event log (`logs/worker-events.jsonl`). Filter by worker name, event type, or time range. |
 
 All agents (master and workers) also have:
 
@@ -93,6 +94,24 @@ When the master calls `destroy_worker`:
 7. **Workspace preserved** (`groups/{folder}/`). Repos, code changes, and CLAUDE.md stay on disk.
 
 If the worker was a Neuralwatt worker, the master reports its lifetime usage stats before cleanup.
+
+## Worker Event Log
+
+All worker lifecycle events are recorded in `logs/worker-events.jsonl`, an append-only JSONL file. Each line is a JSON object:
+
+```jsonl
+{"timestamp":"2026-04-06T23:49:36.997Z","event":"created","worker":"ci-fail","folder":"discord_ci-fail","details":{"backend":"anthropic"}}
+{"timestamp":"2026-04-07T03:34:58.449Z","event":"backend_switched","worker":"baba","folder":"discord_baba","details":{"from":"anthropic","to":"neuralwatt","model":"kimi-k2.5-fast"}}
+{"timestamp":"2026-04-06T23:58:35.362Z","event":"destroyed","worker":"baba","folder":"discord_baba"}
+```
+
+**Event types:** `created`, `destroyed`, `backend_switched`, `resumed`
+
+**Fields:** `timestamp` (ISO 8601), `event`, `worker` (display name), `folder` (e.g. `discord_baba`), `details` (optional, event-specific metadata like backend/model info).
+
+The master agent can query this log via the `worker_history` MCP tool, which supports filtering by worker name (partial match), event type, time range (`since`), and result limit. Source: `src/worker-events.ts`.
+
+Events are written by `logWorkerEvent()` during create, destroy, backend switch, and resume operations in `src/ipc.ts`.
 
 ## Restart Recovery
 

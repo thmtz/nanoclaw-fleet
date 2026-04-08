@@ -18,6 +18,7 @@ const envConfig = readEnvFile([
   'MAX_CONCURRENT_CONTAINERS',
   'NANOCLAW_ENABLE_DOCKER',
   'NANOCLAW_GITHUB_TOKEN_PATH',
+  'STATUS_PIN_INTERVAL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -110,6 +111,12 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Interval (ms) for updating the pinned status message in Discord. 0 disables.
+export const STATUS_PIN_INTERVAL = parseInt(
+  process.env.STATUS_PIN_INTERVAL || envConfig.STATUS_PIN_INTERVAL || '30000',
+  10,
+);
 
 // When true, mounts /var/run/docker.sock into agent containers so they can run Docker commands.
 // Enable with NANOCLAW_ENABLE_DOCKER=true in the host environment.
