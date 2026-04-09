@@ -79,8 +79,9 @@ vi.mock('discord.js', () => {
 
     channels = {
       fetch: vi.fn().mockResolvedValue({
-        send: vi.fn().mockResolvedValue(undefined),
+        send: vi.fn().mockResolvedValue({ id: 'mock-msg-id' }),
         sendTyping: vi.fn().mockResolvedValue(undefined),
+        messages: { fetch: vi.fn(), edit: vi.fn() },
       }),
     };
 
@@ -653,7 +654,10 @@ describe('DiscordChannel', () => {
 
       await channel.sendMessage('dc:9876543210', 'Test');
 
-      expect(currentClient().channels.fetch).toHaveBeenCalledWith('9876543210');
+      expect(currentClient().channels.fetch).toHaveBeenCalledWith(
+        '9876543210',
+        { force: false },
+      );
     });
 
     it('handles send failure gracefully', async () => {
@@ -687,8 +691,9 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const mockChannel = {
-        send: vi.fn().mockResolvedValue(undefined),
+        send: vi.fn().mockResolvedValue({ id: 'mock-msg-id' }),
         sendTyping: vi.fn(),
+        messages: { fetch: vi.fn(), edit: vi.fn() },
       };
       currentClient().channels.fetch.mockResolvedValue(mockChannel);
 
@@ -736,6 +741,7 @@ describe('DiscordChannel', () => {
       const mockChannel = {
         send: vi.fn(),
         sendTyping: vi.fn().mockResolvedValue(undefined),
+        messages: { fetch: vi.fn(), edit: vi.fn() },
       };
       currentClient().channels.fetch.mockResolvedValue(mockChannel);
 

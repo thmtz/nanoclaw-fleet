@@ -24,6 +24,9 @@ export interface DiscordChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
+// Discord enforces a 2000-character limit per message.
+const DISCORD_MAX_MESSAGE_LENGTH = 2000;
+
 export class DiscordChannel implements Channel {
   name = 'discord';
 
@@ -34,6 +37,28 @@ export class DiscordChannel implements Channel {
   constructor(botToken: string, opts: DiscordChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  /** Extract the Discord channel ID from a dc:-prefixed JID. */
+  private jidToChannelId(jid: string): string {
+    if (!jid.startsWith('dc:')) {
+      throw new Error(`Expected dc: JID, got: ${jid}`);
+    }
+    return jid.slice(3);
+  }
+
+  /** Fetch a text channel by JID. Throws if not found or not text-based. */
+  private async fetchTextChannel(jid: string): Promise<TextChannel> {
+    if (!this.client) throw new Error('Discord client not initialized');
+    const channelId = this.jidToChannelId(jid);
+    // force: false lets discord.js use its internal cache (avoids API call per poll)
+    const channel = await this.client.channels.fetch(channelId, {
+      force: false,
+    });
+    if (!channel || !('messages' in channel)) {
+      throw new Error(`Discord channel not found or not text-based: ${jid}`);
+    }
+    return channel as TextChannel;
   }
 
   async connect(): Promise<void> {
@@ -192,34 +217,37 @@ export class DiscordChannel implements Channel {
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
-    if (!this.client) {
-      logger.warn('Discord client not initialized');
-      return;
-    }
+    await this.sendMessageWithId(jid, text);
+  }
 
+  /**
+   * Send a message and return its Discord message ID.
+   * Used by status-pin to track the pinned message.
+   */
+  async sendMessageWithId(
+    jid: string,
+    text: string,
+  ): Promise<string | undefined> {
     try {
-      const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
+      const textChannel = await this.fetchTextChannel(jid);
 
-      if (!channel || !('send' in channel)) {
-        logger.warn({ jid }, 'Discord channel not found or not text-based');
-        return;
-      }
-
-      const textChannel = channel as TextChannel;
-
-      // Discord has a 2000 character limit per message — split if needed
-      const MAX_LENGTH = 2000;
-      if (text.length <= MAX_LENGTH) {
-        await textChannel.send(text);
+      let firstMessageId: string | undefined;
+      if (text.length <= DISCORD_MAX_MESSAGE_LENGTH) {
+        const sent = await textChannel.send(text);
+        firstMessageId = sent.id;
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
+        for (let i = 0; i < text.length; i += DISCORD_MAX_MESSAGE_LENGTH) {
+          const sent = await textChannel.send(
+            text.slice(i, i + DISCORD_MAX_MESSAGE_LENGTH),
+          );
+          if (!firstMessageId) firstMessageId = sent.id;
         }
       }
       logger.info({ jid, length: text.length }, 'Discord message sent');
+      return firstMessageId;
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Discord message');
+      return undefined;
     }
   }
 
@@ -267,14 +295,35 @@ export class DiscordChannel implements Channel {
     }
   }
 
+  async editMessage(
+    jid: string,
+    messageId: string,
+    text: string,
+  ): Promise<void> {
+    const textChannel = await this.fetchTextChannel(jid);
+    const truncated = text.slice(0, DISCORD_MAX_MESSAGE_LENGTH);
+    if (text.length > DISCORD_MAX_MESSAGE_LENGTH) {
+      logger.warn(
+        { jid, original: text.length, truncated: DISCORD_MAX_MESSAGE_LENGTH },
+        'editMessage: content truncated',
+      );
+    }
+    await textChannel.messages.edit(messageId, truncated);
+  }
+
+  async pinMessage(jid: string, messageId: string): Promise<void> {
+    const textChannel = await this.fetchTextChannel(jid);
+    const message = await textChannel.messages.fetch(messageId);
+    if (!message.pinned) {
+      await message.pin();
+    }
+  }
+
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.client || !isTyping) return;
     try {
-      const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
-      if (channel && 'sendTyping' in channel) {
-        await (channel as TextChannel).sendTyping();
-      }
+      const textChannel = await this.fetchTextChannel(jid);
+      await textChannel.sendTyping();
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Discord typing indicator');
     }

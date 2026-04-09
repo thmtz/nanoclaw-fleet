@@ -4,6 +4,8 @@ import path from 'path';
 
 import { syncMasterProfile, syncWorkerProfiles } from './profile-sync.js';
 import { startResourceMonitor } from './resource-monitor.js';
+import { startStatusPin, markStatusOffline } from './status-pin.js';
+import type { DiscordChannel } from './channels/discord.js';
 
 import {
   ASSISTANT_NAME,
@@ -11,6 +13,7 @@ import {
   IDLE_TIMEOUT,
   MAX_CONCURRENT_CONTAINERS,
   POLL_INTERVAL,
+  STATUS_PIN_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -79,6 +82,7 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let stopStatusPin: (() => void) | undefined;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -654,6 +658,20 @@ async function main(): Promise<void> {
           logger.debug({ err }, 'Shutdown notification failed');
         }
       }
+      // Stop status pin loop before marking offline
+      stopStatusPin?.();
+
+      // Mark pinned status as offline (best-effort, 3s timeout)
+      const dcShutdown = channels.find((c) => c.name === 'discord') as
+        | DiscordChannel
+        | undefined;
+      if (dcShutdown) {
+        await markStatusOffline(mainEntry[0], {
+          editMessage: (jid, msgId, text) =>
+            dcShutdown.editMessage(jid, msgId, text),
+        });
+        sstep('status pin marked offline');
+      }
     }
 
     proxyServer.close();
@@ -802,6 +820,16 @@ async function main(): Promise<void> {
         () => queue.getActiveCount(),
       );
     }
+  }
+
+  // Start pinned status message updater (Discord only)
+  if (mainGroup && discordChannel) {
+    const dc = discordChannel as DiscordChannel;
+    stopStatusPin = startStatusPin(mainGroup[0], STATUS_PIN_INTERVAL, {
+      sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
+      editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),
+      pinMessage: (jid, msgId) => dc.pinMessage(jid, msgId),
+    });
   }
 
   step('startup complete');
