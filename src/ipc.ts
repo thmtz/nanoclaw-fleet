@@ -4,6 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import {
+  BACKEND_ANTHROPIC,
   BACKEND_NEURALWATT,
   DATA_DIR,
   type InferenceBackend,
@@ -17,18 +18,114 @@ import { sanitizeFolderName } from './container-runtime.js';
 import { readEnvFile } from './env.js';
 import { logWorkerEvent, readWorkerEvents } from './worker-events.js';
 
+/**
+ * Sanitize session transcripts when switching from Neuralwatt to Claude.
+ *
+ * Background: Neuralwatt models produce thinking blocks with empty signatures
+ * ("signature":""). When the worker is switched back to Claude, the SDK resumes
+ * the session by replaying the full JSONL transcript to Claude's API. Claude's
+ * API validates thinking block signatures and rejects empty ones with:
+ *
+ *   "messages.N.content.0: Invalid signature in thinking block"
+ *
+ * The reverse direction (Claude → NW) works fine because NW ignores signatures.
+ *
+ * This function strips thinking blocks with empty/missing signatures from all
+ * JSONL transcript files for the worker. The rest of the conversation (user
+ * messages, tool calls, text responses) is preserved, so the agent retains
+ * its memory of prior turns after the switch.
+ *
+ * Note: Modified lines are re-serialized with JSON.stringify, so any
+ * non-standard formatting in the original JSONL is normalized. This is fine
+ * since JSONL lines are independent and the SDK only cares about the data.
+ */
+function sanitizeThinkingBlocks(folder: string): number {
+  const sessionsDir = path.join(DATA_DIR, 'sessions', folder);
+
+  // Find all JSONL transcript files (main + subagent conversations)
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(sessionsDir, {
+      recursive: true,
+      withFileTypes: true,
+    });
+  } catch {
+    return 0; // Directory doesn't exist or isn't readable
+  }
+  const jsonlFiles = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+    .map((e) => path.join(e.parentPath, e.name));
+  let totalStripped = 0;
+
+  for (const filePath of jsonlFiles) {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+    let modified = false;
+
+    const newLines = lines.map((line) => {
+      if (!line.trim()) return line;
+      try {
+        const entry = JSON.parse(line);
+        // Only process assistant messages with content arrays
+        if (
+          entry.type !== 'assistant' ||
+          !Array.isArray(entry.message?.content)
+        )
+          return line;
+
+        const originalLength = entry.message.content.length;
+        entry.message.content = entry.message.content.filter(
+          (block: { type: string; signature?: string }) => {
+            if (block.type !== 'thinking') return true;
+            // Strip thinking blocks with empty or missing signatures
+            // (produced by NW models). Keep blocks with real signatures (Claude).
+            if (!block.signature) {
+              totalStripped++;
+              return false;
+            }
+            return true;
+          },
+        );
+
+        if (entry.message.content.length !== originalLength) {
+          modified = true;
+          // If all content blocks were thinking blocks, add a placeholder
+          // so the SDK doesn't choke on an empty content array.
+          if (entry.message.content.length === 0) {
+            entry.message.content.push({
+              type: 'text',
+              text: '[thinking redacted]',
+            });
+          }
+          return JSON.stringify(entry);
+        }
+        return line;
+      } catch {
+        return line; // Don't touch unparseable lines
+      }
+    });
+
+    if (modified) {
+      // Atomic write: write to temp file then rename, so a crash mid-write
+      // doesn't corrupt the transcript.
+      const tmpPath = filePath + '.tmp';
+      fs.writeFileSync(tmpPath, newLines.join('\n'));
+      fs.renameSync(tmpPath, filePath);
+    }
+  }
+
+  return totalStripped;
+}
+
 /** Read the current backend for a worker. Returns 'anthropic' if not in worker-backends.json. */
 function getCurrentBackend(folder: string): string {
   const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
   try {
-    if (fs.existsSync(backendsPath)) {
-      const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
-      return backends[folder]?.backend || 'anthropic';
-    }
+    const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+    return backends[folder]?.backend || BACKEND_ANTHROPIC;
   } catch {
-    /* corrupt file */
+    return BACKEND_ANTHROPIC; // File missing or corrupt
   }
-  return 'anthropic';
 }
 
 /** Read-modify-write worker-backends.json. Atomic via temp file. */
@@ -40,11 +137,9 @@ function updateWorkerBackends(
   const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
   let backends: Record<string, { backend: string; model?: string }> = {};
   try {
-    if (fs.existsSync(backendsPath)) {
-      backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
-    }
+    backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
   } catch {
-    /* corrupt file — start fresh */
+    /* File missing or corrupt — start fresh */
   }
 
   if (backend === BACKEND_NEURALWATT) {
@@ -1155,25 +1250,41 @@ export async function processTaskIpc(
         }
       }
 
-      // Find the worker by name or folder
+      // Find the target group by name or folder.
+      // "master" or "self" targets the main group (allows switching the
+      // master agent's own backend to Neuralwatt or back to Claude).
       const groups = deps.registeredGroups();
-      const folder = workerName.startsWith('discord_')
-        ? workerName
-        : `discord_${workerName}`;
-      const workerEntry = Object.entries(groups).find(
-        ([, g]) => g.folder === folder || g.name === workerName,
-      );
+      const isMasterTarget = workerName === 'master' || workerName === 'self';
+      let targetEntry: [string, RegisteredGroup] | undefined;
 
-      if (!workerEntry) {
-        writeResponse(false, `Worker "${workerName}" not found.`);
+      if (isMasterTarget) {
+        targetEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
+      } else {
+        const folder = workerName.startsWith('discord_')
+          ? workerName
+          : `discord_${workerName}`;
+        targetEntry = Object.entries(groups).find(
+          ([, g]) => g.folder === folder || g.name === workerName,
+        );
+      }
+
+      if (!targetEntry) {
+        writeResponse(
+          false,
+          isMasterTarget
+            ? 'Main group not found in registered groups.'
+            : `Worker "${workerName}" not found.`,
+        );
         break;
       }
 
-      const [workerJid, workerGroup] = workerEntry;
+      const [workerJid, workerGroup] = targetEntry;
 
       const oldBackend = getCurrentBackend(workerGroup.folder);
       const newBackend =
-        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : 'anthropic';
+        data.backend === BACKEND_NEURALWATT
+          ? BACKEND_NEURALWATT
+          : BACKEND_ANTHROPIC;
       const crossBackendSwitch = oldBackend !== newBackend;
 
       updateWorkerBackends(
@@ -1187,18 +1298,34 @@ export async function processTaskIpc(
       // to the wrong proxy (e.g. still Anthropic after switching to NW).
       updateWorkerEnvBackend(workerGroup.folder, data.backend as string);
 
-      // Cross-backend switches (Anthropic <-> Neuralwatt) need a container
-      // restart because ANTHROPIC_BASE_URL is set at container start.
-      // Stop the running container; it will respawn on the next message
-      // with the correct URL. Session and workspace are preserved.
-      if (crossBackendSwitch && deps.stopGroupContainer) {
-        deps.stopGroupContainer(workerJid);
+      // When switching from NW to Claude, sanitize thinking blocks in the
+      // session transcript BEFORE stopping the container. NW models produce
+      // thinking blocks with empty signatures that Claude's API rejects
+      // ("Invalid signature in thinking block"). Strip them so the session
+      // can resume cleanly on Claude.
+      // This must happen before stopGroupContainer because for the master
+      // case, stopping the container kills this very process.
+      if (
+        crossBackendSwitch &&
+        oldBackend === BACKEND_NEURALWATT &&
+        newBackend === BACKEND_ANTHROPIC
+      ) {
+        const stripped = sanitizeThinkingBlocks(workerGroup.folder);
+        if (stripped > 0) {
+          logger.info(
+            { worker: workerGroup.name, stripped },
+            'Stripped NW thinking blocks from session transcript',
+          );
+        }
       }
 
       const modelDesc =
         data.backend === BACKEND_NEURALWATT
           ? `${data.model || 'default Neuralwatt model'}`
           : 'Claude (Anthropic)';
+
+      // Send the response and log BEFORE stopping the container, since
+      // stopGroupContainer closes stdin and may kill this process (master case).
       await deps.sendMessage(
         workerJid,
         crossBackendSwitch
@@ -1211,6 +1338,16 @@ export async function processTaskIpc(
         { worker: workerGroup.name, backend: data.backend, model: data.model },
         msg,
       );
+
+      // Cross-backend switches (Anthropic <-> Neuralwatt) need a container
+      // restart because ANTHROPIC_BASE_URL is set at container start.
+      // Stop the running container; it will respawn on the next message
+      // with the correct URL. Session and workspace are preserved.
+      // NOTE: For the master case, this kills our own process — all work
+      // (sanitization, messaging, logging) must be done above this point.
+      if (crossBackendSwitch && deps.stopGroupContainer) {
+        deps.stopGroupContainer(workerJid);
+      }
       logWorkerEvent({
         timestamp: new Date().toISOString(),
         event: 'backend_switched',
