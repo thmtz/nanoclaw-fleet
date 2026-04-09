@@ -18,6 +18,9 @@ const execFileAsync = promisify(execFile);
 const STATE_KEY = 'pinned_status_message_id';
 const NC_STATUS_SCRIPT = path.resolve(process.cwd(), 'tools/nc-status.sh');
 
+// Discord API error codes
+const DISCORD_ERROR_UNKNOWN_MESSAGE = 10008; // Message was deleted or not found
+
 /** Prevent overlapping updateStatusPin calls (e.g. if nc-status.sh is slow). */
 let updateInProgress = false;
 
@@ -76,8 +79,8 @@ async function doUpdateStatusPin(
         err && typeof err === 'object' && 'code' in err
           ? (err as { code: number }).code
           : undefined;
-      if (code === 10008) {
-        // Discord API 10008 = Unknown Message (deleted)
+      if (code === DISCORD_ERROR_UNKNOWN_MESSAGE) {
+        // Message was deleted or not found
         logger.info('Pinned status message was deleted, creating new one');
       } else {
         logger.warn(
