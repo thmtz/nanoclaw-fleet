@@ -885,14 +885,14 @@ Use this when workers are stuck, container slots are full, or after a series of 
 
 server.tool(
   'switch_backend',
-  `Switch a worker's inference backend at runtime. Main group only.
+  `Switch a worker's or the master's inference backend at runtime. Main group only.
 
-Changes the model/backend for an existing worker. Takes effect on the worker's next API call (no container restart needed for model changes within Neuralwatt). Switching between Anthropic and Neuralwatt requires a container restart.`,
+Changes the model/backend for an existing worker (or the master itself). Takes effect on the next API call (no container restart needed for model changes within Neuralwatt). Switching between Anthropic and Neuralwatt requires a container restart.`,
   {
     worker_name: z
       .string()
       .describe(
-        'Worker name (e.g., "nw-dev") or folder (e.g., "discord_nw-dev")',
+        'Worker name (e.g., "nw-dev"), folder (e.g., "discord_nw-dev"), or "master" to switch the master agent\'s own backend',
       ),
     backend: z.enum(['anthropic', 'neuralwatt']).describe('Target backend'),
     model: z
