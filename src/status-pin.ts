@@ -64,7 +64,7 @@ async function doUpdateStatusPin(
     return;
   }
 
-  const fullText = `${statusText}\n\n_Updated ${formatCurrentTime(TIMEZONE)}_`;
+  const fullText = `**Last run at ${formatCurrentTime(TIMEZONE)}**\n\n${statusText}`;
 
   const existingMessageId = getRouterState(STATE_KEY);
 
