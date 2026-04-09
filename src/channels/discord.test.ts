@@ -654,7 +654,10 @@ describe('DiscordChannel', () => {
 
       await channel.sendMessage('dc:9876543210', 'Test');
 
-      expect(currentClient().channels.fetch).toHaveBeenCalledWith('9876543210');
+      expect(currentClient().channels.fetch).toHaveBeenCalledWith(
+        '9876543210',
+        { force: false },
+      );
     });
 
     it('handles send failure gracefully', async () => {

@@ -51,7 +51,10 @@ export class DiscordChannel implements Channel {
   private async fetchTextChannel(jid: string): Promise<TextChannel> {
     if (!this.client) throw new Error('Discord client not initialized');
     const channelId = this.jidToChannelId(jid);
-    const channel = await this.client.channels.fetch(channelId);
+    // force: false lets discord.js use its internal cache (avoids API call per poll)
+    const channel = await this.client.channels.fetch(channelId, {
+      force: false,
+    });
     if (!channel || !('messages' in channel)) {
       throw new Error(`Discord channel not found or not text-based: ${jid}`);
     }

@@ -17,7 +17,6 @@ const execFileAsync = promisify(execFile);
 
 const STATE_KEY = 'pinned_status_message_id';
 const NC_STATUS_SCRIPT = path.resolve(process.cwd(), 'tools/nc-status.sh');
-const STATUS_ENV = { ...process.env, NANOCLAW_ROOT: process.cwd() };
 
 /** Prevent overlapping updateStatusPin calls (e.g. if nc-status.sh is slow). */
 let updateInProgress = false;
@@ -28,14 +27,10 @@ export interface StatusPinDeps {
   pinMessage: (jid: string, messageId: string) => Promise<void>;
 }
 
-function formatTimestamp(): string {
-  return formatCurrentTime(TIMEZONE);
-}
-
 async function getStatusOutput(): Promise<string> {
   const { stdout } = await execFileAsync('bash', [NC_STATUS_SCRIPT], {
     timeout: 15_000,
-    env: STATUS_ENV,
+    env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
   });
   return stdout.trim();
 }
@@ -66,7 +61,7 @@ async function doUpdateStatusPin(
     return;
   }
 
-  const fullText = `${statusText}\n\n_Updated ${formatTimestamp()}_`;
+  const fullText = `${statusText}\n\n_Updated ${formatCurrentTime(TIMEZONE)}_`;
 
   const existingMessageId = getRouterState(STATE_KEY);
 
@@ -74,12 +69,23 @@ async function doUpdateStatusPin(
     try {
       await deps.editMessage(mainJid, existingMessageId, fullText);
       return;
-    } catch (err) {
-      // Message was deleted, permissions changed, or network error
-      logger.info(
-        { err },
-        'Pinned status message gone or inaccessible, creating new one',
-      );
+    } catch (err: unknown) {
+      // Only create a new message for permanent failures (message deleted/not found).
+      // Transient errors (rate limits, network, 500s) should skip this cycle.
+      const code =
+        err && typeof err === 'object' && 'code' in err
+          ? (err as { code: number }).code
+          : undefined;
+      if (code === 10008) {
+        // Discord API 10008 = Unknown Message (deleted)
+        logger.info('Pinned status message was deleted, creating new one');
+      } else {
+        logger.warn(
+          { err },
+          'Transient error editing status pin, skipping this cycle',
+        );
+        return;
+      }
     }
   }
 
@@ -99,6 +105,8 @@ async function doUpdateStatusPin(
       { messageId: newMessageId },
       'Created and pinned status message',
     );
+  } else {
+    logger.warn('Failed to create status message (sendMessage returned empty)');
   }
 }
 
@@ -143,7 +151,7 @@ export async function markStatusOffline(
   const messageId = getRouterState(STATE_KEY);
   if (!messageId) return;
 
-  const offlineText = `**NanoClaw offline** — _${formatTimestamp()}_`;
+  const offlineText = `**NanoClaw offline** — _${formatCurrentTime(TIMEZONE)}_`;
   await Promise.race([
     deps.editMessage(mainJid, messageId, offlineText),
     new Promise((r) => setTimeout(r, 3000)),
