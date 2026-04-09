@@ -18,23 +18,6 @@ import { readEnvFile } from './env.js';
 import { logWorkerEvent, readWorkerEvents } from './worker-events.js';
 
 /**
- * Recursively find all files matching a pattern under a directory.
- */
-function findFiles(dir: string, ext: string): string[] {
-  const results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...findFiles(fullPath, ext));
-    } else if (entry.name.endsWith(ext)) {
-      results.push(fullPath);
-    }
-  }
-  return results;
-}
-
-/**
  * Sanitize session transcripts when switching from Neuralwatt to Claude.
  *
  * Background: Neuralwatt models produce thinking blocks with empty signatures
@@ -50,13 +33,20 @@ function findFiles(dir: string, ext: string): string[] {
  * JSONL transcript files for the worker. The rest of the conversation (user
  * messages, tool calls, text responses) is preserved, so the agent retains
  * its memory of prior turns after the switch.
+ *
+ * Note: Modified lines are re-serialized with JSON.stringify, so any
+ * non-standard formatting in the original JSONL is normalized. This is fine
+ * since JSONL lines are independent and the SDK only cares about the data.
  */
 function sanitizeThinkingBlocks(folder: string): number {
   const sessionsDir = path.join(DATA_DIR, 'sessions', folder);
   if (!fs.existsSync(sessionsDir)) return 0;
 
   // Find all JSONL transcript files (main + subagent conversations)
-  const jsonlFiles = findFiles(sessionsDir, '.jsonl');
+  const jsonlFiles = fs
+    .readdirSync(sessionsDir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+    .map((e) => path.join(e.parentPath, e.name));
   let totalStripped = 0;
 
   for (const filePath of jsonlFiles) {
@@ -91,6 +81,14 @@ function sanitizeThinkingBlocks(folder: string): number {
 
         if (entry.message.content.length !== originalLength) {
           modified = true;
+          // If all content blocks were thinking blocks, add a placeholder
+          // so the SDK doesn't choke on an empty content array.
+          if (entry.message.content.length === 0) {
+            entry.message.content.push({
+              type: 'text',
+              text: '[thinking redacted]',
+            });
+          }
           return JSON.stringify(entry);
         }
         return line;
