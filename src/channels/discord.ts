@@ -305,8 +305,7 @@ export class DiscordChannel implements Channel {
         'editMessage: content truncated',
       );
     }
-    const message = await textChannel.messages.fetch(messageId);
-    await message.edit(truncated);
+    await textChannel.messages.edit(messageId, truncated);
   }
 
   async pinMessage(jid: string, messageId: string): Promise<void> {

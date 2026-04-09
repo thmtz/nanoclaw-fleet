@@ -5,6 +5,7 @@ import path from 'path';
 import { syncMasterProfile, syncWorkerProfiles } from './profile-sync.js';
 import { startResourceMonitor } from './resource-monitor.js';
 import { startStatusPin, markStatusOffline } from './status-pin.js';
+import type { DiscordChannel } from './channels/discord.js';
 
 import {
   ASSISTANT_NAME,
@@ -658,7 +659,7 @@ async function main(): Promise<void> {
       }
       // Mark pinned status as offline (best-effort, 3s timeout)
       const dcShutdown = channels.find((c) => c.name === 'discord') as
-        | import('./channels/discord.js').DiscordChannel
+        | DiscordChannel
         | undefined;
       if (dcShutdown) {
         await markStatusOffline(mainEntry[0], {
@@ -819,7 +820,7 @@ async function main(): Promise<void> {
 
   // Start pinned status message updater (Discord only)
   if (mainGroup && discordChannel) {
-    const dc = discordChannel as import('./channels/discord.js').DiscordChannel;
+    const dc = discordChannel as DiscordChannel;
     startStatusPin(mainGroup[0], STATUS_PIN_INTERVAL, {
       sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
       editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),

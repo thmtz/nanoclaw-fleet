@@ -11,6 +11,7 @@ import path from 'path';
 import { getRouterState, setRouterState } from './db.js';
 import { logger } from './logger.js';
 import { TIMEZONE } from './config.js';
+import { formatCurrentTime } from './timezone.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,14 +26,7 @@ export interface StatusPinDeps {
 }
 
 function formatTimestamp(): string {
-  return new Date().toLocaleString('en-US', {
-    timeZone: TIMEZONE,
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-    timeZoneName: 'short',
-  });
+  return formatCurrentTime(TIMEZONE);
 }
 
 async function getStatusOutput(): Promise<string> {
