@@ -1243,21 +1243,35 @@ export async function processTaskIpc(
         }
       }
 
-      // Find the worker by name or folder
+      // Find the target group by name or folder.
+      // "master" or "self" targets the main group (allows switching the
+      // master agent's own backend to Neuralwatt or back to Claude).
       const groups = deps.registeredGroups();
-      const folder = workerName.startsWith('discord_')
-        ? workerName
-        : `discord_${workerName}`;
-      const workerEntry = Object.entries(groups).find(
-        ([, g]) => g.folder === folder || g.name === workerName,
-      );
+      const isMasterTarget = workerName === 'master' || workerName === 'self';
+      let targetEntry: [string, RegisteredGroup] | undefined;
 
-      if (!workerEntry) {
-        writeResponse(false, `Worker "${workerName}" not found.`);
+      if (isMasterTarget) {
+        targetEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
+      } else {
+        const folder = workerName.startsWith('discord_')
+          ? workerName
+          : `discord_${workerName}`;
+        targetEntry = Object.entries(groups).find(
+          ([, g]) => g.folder === folder || g.name === workerName,
+        );
+      }
+
+      if (!targetEntry) {
+        writeResponse(
+          false,
+          isMasterTarget
+            ? 'Main group not found in registered groups.'
+            : `Worker "${workerName}" not found.`,
+        );
         break;
       }
 
-      const [workerJid, workerGroup] = workerEntry;
+      const [workerJid, workerGroup] = targetEntry;
 
       const oldBackend = getCurrentBackend(workerGroup.folder);
       const newBackend =
