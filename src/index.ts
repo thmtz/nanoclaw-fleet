@@ -82,6 +82,7 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let stopStatusPin: (() => void) | undefined;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -822,7 +823,6 @@ async function main(): Promise<void> {
   }
 
   // Start pinned status message updater (Discord only)
-  let stopStatusPin: (() => void) | undefined;
   if (mainGroup && discordChannel) {
     const dc = discordChannel as DiscordChannel;
     stopStatusPin = startStatusPin(mainGroup[0], STATUS_PIN_INTERVAL, {
