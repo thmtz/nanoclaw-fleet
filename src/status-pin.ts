@@ -19,6 +19,9 @@ const STATE_KEY = 'pinned_status_message_id';
 const NC_STATUS_SCRIPT = path.resolve(process.cwd(), 'tools/nc-status.sh');
 const STATUS_ENV = { ...process.env, NANOCLAW_ROOT: process.cwd() };
 
+/** Prevent overlapping updateStatusPin calls (e.g. if nc-status.sh is slow). */
+let updateInProgress = false;
+
 export interface StatusPinDeps {
   sendMessage: (jid: string, text: string) => Promise<string | undefined>;
   editMessage: (jid: string, messageId: string, text: string) => Promise<void>;
@@ -38,6 +41,22 @@ async function getStatusOutput(): Promise<string> {
 }
 
 async function updateStatusPin(
+  mainJid: string,
+  deps: StatusPinDeps,
+): Promise<void> {
+  if (updateInProgress) {
+    logger.debug('Skipping status pin update — previous update still running');
+    return;
+  }
+  updateInProgress = true;
+  try {
+    await doUpdateStatusPin(mainJid, deps);
+  } finally {
+    updateInProgress = false;
+  }
+}
+
+async function doUpdateStatusPin(
   mainJid: string,
   deps: StatusPinDeps,
 ): Promise<void> {
@@ -91,8 +110,8 @@ export function startStatusPin(
   intervalMs: number,
   deps: StatusPinDeps,
 ): () => void {
-  if (intervalMs <= 0) {
-    logger.info('Status pin disabled (interval <= 0)');
+  if (!intervalMs || intervalMs <= 0 || !Number.isFinite(intervalMs)) {
+    logger.info('Status pin disabled (interval <= 0 or invalid)');
     return () => {};
   }
 

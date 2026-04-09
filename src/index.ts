@@ -657,6 +657,9 @@ async function main(): Promise<void> {
           logger.debug({ err }, 'Shutdown notification failed');
         }
       }
+      // Stop status pin loop before marking offline
+      stopStatusPin?.();
+
       // Mark pinned status as offline (best-effort, 3s timeout)
       const dcShutdown = channels.find((c) => c.name === 'discord') as
         | DiscordChannel
@@ -819,9 +822,10 @@ async function main(): Promise<void> {
   }
 
   // Start pinned status message updater (Discord only)
+  let stopStatusPin: (() => void) | undefined;
   if (mainGroup && discordChannel) {
     const dc = discordChannel as DiscordChannel;
-    startStatusPin(mainGroup[0], STATUS_PIN_INTERVAL, {
+    stopStatusPin = startStatusPin(mainGroup[0], STATUS_PIN_INTERVAL, {
       sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
       editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),
       pinMessage: (jid, msgId) => dc.pinMessage(jid, msgId),
