@@ -106,7 +106,11 @@ function sanitizeThinkingBlocks(folder: string): number {
     });
 
     if (modified) {
-      fs.writeFileSync(filePath, newLines.join('\n'));
+      // Atomic write: write to temp file then rename, so a crash mid-write
+      // doesn't corrupt the transcript.
+      const tmpPath = filePath + '.tmp';
+      fs.writeFileSync(tmpPath, newLines.join('\n'));
+      fs.renameSync(tmpPath, filePath);
     }
   }
 
@@ -1294,18 +1298,13 @@ export async function processTaskIpc(
       // to the wrong proxy (e.g. still Anthropic after switching to NW).
       updateWorkerEnvBackend(workerGroup.folder, data.backend as string);
 
-      // Cross-backend switches (Anthropic <-> Neuralwatt) need a container
-      // restart because ANTHROPIC_BASE_URL is set at container start.
-      // Stop the running container; it will respawn on the next message
-      // with the correct URL. Session and workspace are preserved.
-      if (crossBackendSwitch && deps.stopGroupContainer) {
-        deps.stopGroupContainer(workerJid);
-      }
-
       // When switching from NW to Claude, sanitize thinking blocks in the
-      // session transcript. NW models produce thinking blocks with empty
-      // signatures that Claude's API rejects ("Invalid signature in thinking
-      // block"). Strip them so the session can resume cleanly on Claude.
+      // session transcript BEFORE stopping the container. NW models produce
+      // thinking blocks with empty signatures that Claude's API rejects
+      // ("Invalid signature in thinking block"). Strip them so the session
+      // can resume cleanly on Claude.
+      // This must happen before stopGroupContainer because for the master
+      // case, stopping the container kills this very process.
       if (
         crossBackendSwitch &&
         oldBackend === BACKEND_NEURALWATT &&
@@ -1324,6 +1323,9 @@ export async function processTaskIpc(
         data.backend === BACKEND_NEURALWATT
           ? `${data.model || 'default Neuralwatt model'}`
           : 'Claude (Anthropic)';
+
+      // Send the response and log BEFORE stopping the container, since
+      // stopGroupContainer closes stdin and may kill this process (master case).
       await deps.sendMessage(
         workerJid,
         crossBackendSwitch
@@ -1336,6 +1338,16 @@ export async function processTaskIpc(
         { worker: workerGroup.name, backend: data.backend, model: data.model },
         msg,
       );
+
+      // Cross-backend switches (Anthropic <-> Neuralwatt) need a container
+      // restart because ANTHROPIC_BASE_URL is set at container start.
+      // Stop the running container; it will respawn on the next message
+      // with the correct URL. Session and workspace are preserved.
+      // NOTE: For the master case, this kills our own process — all work
+      // (sanitization, messaging, logging) must be done above this point.
+      if (crossBackendSwitch && deps.stopGroupContainer) {
+        deps.stopGroupContainer(workerJid);
+      }
       logWorkerEvent({
         timestamp: new Date().toISOString(),
         event: 'backend_switched',
