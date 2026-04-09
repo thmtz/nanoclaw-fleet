@@ -17,6 +17,96 @@ import { sanitizeFolderName } from './container-runtime.js';
 import { readEnvFile } from './env.js';
 import { logWorkerEvent, readWorkerEvents } from './worker-events.js';
 
+/**
+ * Recursively find all files matching a pattern under a directory.
+ */
+function findFiles(dir: string, ext: string): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(dir)) return results;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findFiles(fullPath, ext));
+    } else if (entry.name.endsWith(ext)) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+/**
+ * Sanitize session transcripts when switching from Neuralwatt to Claude.
+ *
+ * Background: Neuralwatt models produce thinking blocks with empty signatures
+ * ("signature":""). When the worker is switched back to Claude, the SDK resumes
+ * the session by replaying the full JSONL transcript to Claude's API. Claude's
+ * API validates thinking block signatures and rejects empty ones with:
+ *
+ *   "messages.N.content.0: Invalid signature in thinking block"
+ *
+ * The reverse direction (Claude → NW) works fine because NW ignores signatures.
+ *
+ * This function strips thinking blocks with empty/missing signatures from all
+ * JSONL transcript files for the worker. The rest of the conversation (user
+ * messages, tool calls, text responses) is preserved, so the agent retains
+ * its memory of prior turns after the switch.
+ */
+function sanitizeThinkingBlocks(folder: string): number {
+  const sessionsDir = path.join(DATA_DIR, 'sessions', folder);
+  if (!fs.existsSync(sessionsDir)) return 0;
+
+  // Find all JSONL transcript files (main + subagent conversations)
+  const jsonlFiles = findFiles(sessionsDir, '.jsonl');
+  let totalStripped = 0;
+
+  for (const filePath of jsonlFiles) {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+    let modified = false;
+
+    const newLines = lines.map((line) => {
+      if (!line.trim()) return line;
+      try {
+        const entry = JSON.parse(line);
+        // Only process assistant messages with content arrays
+        if (
+          entry.type !== 'assistant' ||
+          !Array.isArray(entry.message?.content)
+        )
+          return line;
+
+        const originalLength = entry.message.content.length;
+        entry.message.content = entry.message.content.filter(
+          (block: { type: string; signature?: string }) => {
+            if (block.type !== 'thinking') return true;
+            // Strip thinking blocks with empty or missing signatures
+            // (produced by NW models). Keep blocks with real signatures (Claude).
+            if (!block.signature) {
+              totalStripped++;
+              return false;
+            }
+            return true;
+          },
+        );
+
+        if (entry.message.content.length !== originalLength) {
+          modified = true;
+          return JSON.stringify(entry);
+        }
+        return line;
+      } catch {
+        return line; // Don't touch unparseable lines
+      }
+    });
+
+    if (modified) {
+      fs.writeFileSync(filePath, newLines.join('\n'));
+    }
+  }
+
+  return totalStripped;
+}
+
 /** Read the current backend for a worker. Returns 'anthropic' if not in worker-backends.json. */
 function getCurrentBackend(folder: string): string {
   const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
@@ -1193,6 +1283,24 @@ export async function processTaskIpc(
       // with the correct URL. Session and workspace are preserved.
       if (crossBackendSwitch && deps.stopGroupContainer) {
         deps.stopGroupContainer(workerJid);
+      }
+
+      // When switching from NW to Claude, sanitize thinking blocks in the
+      // session transcript. NW models produce thinking blocks with empty
+      // signatures that Claude's API rejects ("Invalid signature in thinking
+      // block"). Strip them so the session can resume cleanly on Claude.
+      if (
+        crossBackendSwitch &&
+        oldBackend === BACKEND_NEURALWATT &&
+        newBackend === 'anthropic'
+      ) {
+        const stripped = sanitizeThinkingBlocks(workerGroup.folder);
+        if (stripped > 0) {
+          logger.info(
+            { worker: workerGroup.name, stripped },
+            'Stripped NW thinking blocks from session transcript',
+          );
+        }
       }
 
       const modelDesc =
