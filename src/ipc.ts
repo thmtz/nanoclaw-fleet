@@ -4,6 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import {
+  BACKEND_ANTHROPIC,
   BACKEND_NEURALWATT,
   DATA_DIR,
   type InferenceBackend,
@@ -40,13 +41,18 @@ import { logWorkerEvent, readWorkerEvents } from './worker-events.js';
  */
 function sanitizeThinkingBlocks(folder: string): number {
   const sessionsDir = path.join(DATA_DIR, 'sessions', folder);
-  if (!fs.existsSync(sessionsDir)) return 0;
 
   // Find all JSONL transcript files (main + subagent conversations)
-  const jsonlFiles = fs
-    .readdirSync(sessionsDir, { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
-    .map((e) => path.join(e.parentPath, e.name));
+  let jsonlFiles: string[];
+  try {
+    jsonlFiles = fs
+      .readdirSync(sessionsDir, { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+      .map((e) => path.join(e.parentPath, e.name));
+  } catch {
+    // Directory doesn't exist or not readable - nothing to sanitize
+    return 0;
+  }
   let totalStripped = 0;
 
   for (const filePath of jsonlFiles) {
@@ -1290,7 +1296,7 @@ export async function processTaskIpc(
       if (
         crossBackendSwitch &&
         oldBackend === BACKEND_NEURALWATT &&
-        newBackend === 'anthropic'
+        newBackend === BACKEND_ANTHROPIC
       ) {
         const stripped = sanitizeThinkingBlocks(workerGroup.folder);
         if (stripped > 0) {
