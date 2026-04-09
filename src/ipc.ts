@@ -4,6 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import {
+  BACKEND_ANTHROPIC,
   BACKEND_NEURALWATT,
   DATA_DIR,
   type InferenceBackend,
@@ -40,11 +41,18 @@ import { logWorkerEvent, readWorkerEvents } from './worker-events.js';
  */
 function sanitizeThinkingBlocks(folder: string): number {
   const sessionsDir = path.join(DATA_DIR, 'sessions', folder);
-  if (!fs.existsSync(sessionsDir)) return 0;
 
   // Find all JSONL transcript files (main + subagent conversations)
-  const jsonlFiles = fs
-    .readdirSync(sessionsDir, { recursive: true, withFileTypes: true })
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(sessionsDir, {
+      recursive: true,
+      withFileTypes: true,
+    });
+  } catch {
+    return 0; // Directory doesn't exist or isn't readable
+  }
+  const jsonlFiles = entries
     .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
     .map((e) => path.join(e.parentPath, e.name));
   let totalStripped = 0;
@@ -109,14 +117,11 @@ function sanitizeThinkingBlocks(folder: string): number {
 function getCurrentBackend(folder: string): string {
   const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
   try {
-    if (fs.existsSync(backendsPath)) {
-      const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
-      return backends[folder]?.backend || 'anthropic';
-    }
+    const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+    return backends[folder]?.backend || BACKEND_ANTHROPIC;
   } catch {
-    /* corrupt file */
+    return BACKEND_ANTHROPIC; // File missing or corrupt
   }
-  return 'anthropic';
 }
 
 /** Read-modify-write worker-backends.json. Atomic via temp file. */
@@ -128,11 +133,9 @@ function updateWorkerBackends(
   const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
   let backends: Record<string, { backend: string; model?: string }> = {};
   try {
-    if (fs.existsSync(backendsPath)) {
-      backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
-    }
+    backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
   } catch {
-    /* corrupt file — start fresh */
+    /* File missing or corrupt — start fresh */
   }
 
   if (backend === BACKEND_NEURALWATT) {
@@ -1275,7 +1278,9 @@ export async function processTaskIpc(
 
       const oldBackend = getCurrentBackend(workerGroup.folder);
       const newBackend =
-        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : 'anthropic';
+        data.backend === BACKEND_NEURALWATT
+          ? BACKEND_NEURALWATT
+          : BACKEND_ANTHROPIC;
       const crossBackendSwitch = oldBackend !== newBackend;
 
       updateWorkerBackends(
@@ -1304,7 +1309,7 @@ export async function processTaskIpc(
       if (
         crossBackendSwitch &&
         oldBackend === BACKEND_NEURALWATT &&
-        newBackend === 'anthropic'
+        newBackend === BACKEND_ANTHROPIC
       ) {
         const stripped = sanitizeThinkingBlocks(workerGroup.folder);
         if (stripped > 0) {
