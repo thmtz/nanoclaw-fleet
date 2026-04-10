@@ -814,6 +814,8 @@ ${BOLD}COMMANDS${NC}
   
   ${CYAN}rebuild${NC} [worker]       Rebuild container image
 
+  ${CYAN}test${NC} [--skip-nw]        Run e2e smoke tests (creates/destroys workers)
+
 ${BOLD}OUTPUT${NC}
   --json                 JSON output (status, logs, history, session)
 
@@ -997,6 +999,16 @@ const cmd = args[0];
 
       case 'rebuild': {
         cmdRebuild(args[1]);
+        break;
+      }
+
+      case 'test': {
+        // Thin wrapper around the e2e test script
+        const testArgs = args.slice(1).join(' ');
+        execSync(`npx tsx "${path.join(PROJECT_DIR, 'tools/e2e-test.ts')}" ${testArgs}`, {
+          stdio: 'inherit',
+          cwd: PROJECT_DIR,
+        });
         break;
       }
 
