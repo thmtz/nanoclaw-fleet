@@ -128,18 +128,30 @@ function cycleThrobber(groupFolder: string, channel: Channel): void {
   if (now - state.lastCycle < THROBBER_DEBOUNCE_MS) return;
   state.lastCycle = now;
 
-  const react = (channel as unknown as { react: (jid: string, msgId: string, emoji: string) => Promise<void> }).react.bind(channel);
-  const unreact = (channel as unknown as { unreact: (jid: string, msgId: string, emoji: string) => Promise<void> }).unreact.bind(channel);
+  const react = (
+    channel as unknown as {
+      react: (jid: string, msgId: string, emoji: string) => Promise<void>;
+    }
+  ).react.bind(channel);
+  const unreact = (
+    channel as unknown as {
+      unreact: (jid: string, msgId: string, emoji: string) => Promise<void>;
+    }
+  ).unreact.bind(channel);
 
-  const prevEmoji = THROBBER_EMOJIS[(state.idx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length];
+  const prevEmoji =
+    THROBBER_EMOJIS[
+      (state.idx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length
+    ];
   const nextEmoji = THROBBER_EMOJIS[state.idx % THROBBER_EMOJIS.length];
 
-  // Remove previous emoji before adding next to avoid double-emoji
+  // Add new emoji before removing old — keeps reaction count >= 1 so the
+  // message doesn't visually jump from having reactions to having none
   const doReact = async () => {
+    await react(state.chatJid, state.messageId, nextEmoji).catch(() => {});
     if (state.active) {
       await unreact(state.chatJid, state.messageId, prevEmoji).catch(() => {});
     }
-    await react(state.chatJid, state.messageId, nextEmoji).catch(() => {});
   };
   doReact().catch(() => {});
   state.active = true;
@@ -150,7 +162,11 @@ function clearThrobber(groupFolder: string, channel: Channel): void {
   const state = throbberState.get(groupFolder);
   if (!state?.active || !('unreact' in channel)) return;
 
-  const unreact = (channel as unknown as { unreact: (jid: string, msgId: string, emoji: string) => Promise<void> }).unreact.bind(channel);
+  const unreact = (
+    channel as unknown as {
+      unreact: (jid: string, msgId: string, emoji: string) => Promise<void>;
+    }
+  ).unreact.bind(channel);
   for (const emoji of THROBBER_EMOJIS) {
     unreact(state.chatJid, state.messageId, emoji).catch(() => {});
   }
@@ -780,8 +796,7 @@ async function startMessageLoop(): Promise<void> {
 
             // Update throbber target to the latest user message so
             // the reaction appears on the right message in warm containers
-            const latestMsgId =
-              messagesToSend[messagesToSend.length - 1]?.id;
+            const latestMsgId = messagesToSend[messagesToSend.length - 1]?.id;
             if (latestMsgId) {
               // Clear any existing throbber from the previous message
               clearThrobber(group.folder, channel);
