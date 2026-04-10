@@ -9,6 +9,7 @@ WorkingDirectory={{PROJECT_ROOT}}
 ExecStart={{NODE_PATH}} {{PROJECT_ROOT}}/dist/index.js
 Restart=always
 RestartSec=5
+KillMode=process
 
 Environment=HOME={{HOME}}
 Environment=PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin
