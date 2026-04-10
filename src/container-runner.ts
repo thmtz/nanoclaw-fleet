@@ -470,8 +470,11 @@ function buildContainerArgs(
       if (token) {
         args.push('-e', `GITHUB_TOKEN=${token}`);
       }
-    } catch {
-      // Token file missing or unreadable — git push will just fail without auth
+    } catch (err) {
+      logger.warn(
+        { err, path: GITHUB_TOKEN_PATH },
+        'GitHub token file unreadable — container git operations will lack auth',
+      );
     }
   }
 
