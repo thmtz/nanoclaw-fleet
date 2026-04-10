@@ -91,6 +91,7 @@ import {
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { generateTraceId } from './trace.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -408,6 +409,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
+  const traceId = generateTraceId();
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -417,7 +419,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, messageCount: missedMessages.length, traceId },
     'Processing messages',
   );
 
@@ -470,18 +472,23 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             : JSON.stringify(result.result);
         // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        const suppressed = !!(text && didGroupSendMessage(group.folder));
         logger.info(
-          { group: group.name },
-          `Agent output: ${raw.slice(0, 200)}`,
+          { group: group.name, traceId, suppressed, length: text.length },
+          'Agent output',
         );
         // Clear throbber when agent produces output (works for both
         // cold boot and warm piped messages)
         clearThrobber(group.folder, channel);
         // Suppress SDK output if the agent already sent messages via send_message
         // (prevents duplicate Discord messages)
-        if (text && !didGroupSendMessage(group.folder)) {
+        if (text && !suppressed) {
           await channel.sendMessage(chatJid, text);
           outputSentToUser = true;
+          logger.info(
+            { group: group.name, traceId, length: text.length },
+            'Message sent to channel',
+          );
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
@@ -496,6 +503,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
     },
     () => cycleThrobber(group.folder, channel),
+    traceId,
   );
 
   clearThrobber(group.folder, channel);
@@ -508,7 +516,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
       logger.warn(
-        { group: group.name },
+        { group: group.name, traceId },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
       );
       return true;
@@ -517,7 +525,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
     logger.warn(
-      { group: group.name },
+      { group: group.name, traceId },
       'Agent error, rolled back message cursor for retry',
     );
     return false;
@@ -532,6 +540,7 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   onHeartbeat?: () => void,
+  traceId?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -618,6 +627,7 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         includeContent,
+        traceId,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -780,14 +790,16 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
+          const pipeTraceId = generateTraceId();
+
           if (queue.sendMessage(chatJid, formatted)) {
             // Reset the send_message suppression flag for this group.
             // Without this, if the previous message used send_message,
             // the flag stays set and suppresses direct output for all
             // subsequent piped messages in the same container session.
             clearGroupSentMessage(group.folder);
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
+            logger.info(
+              { chatJid, count: messagesToSend.length, traceId: pipeTraceId },
               'Piped messages to active container',
             );
             lastAgentTimestamp[chatJid] =

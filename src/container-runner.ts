@@ -54,6 +54,7 @@ export interface ContainerInput {
   assistantName?: string;
   includeContent?: string;
   script?: string;
+  traceId?: string;
 }
 
 export interface ContainerOutput {
@@ -548,6 +549,7 @@ export async function runContainerAgent(
       containerName,
       mountCount: mounts.length,
       isMain: input.isMain,
+      traceId: input.traceId,
     },
     'Spawning container agent',
   );
@@ -621,7 +623,7 @@ export async function runContainerAgent(
               firstOutputLogged = true;
               const startupMs = Date.now() - containerSpawnTime;
               logger.info(
-                { group: group.name, containerName, startupMs },
+                { group: group.name, containerName, startupMs, traceId: input.traceId },
                 'Container first output',
               );
             }
@@ -722,6 +724,20 @@ export async function runContainerAgent(
         );
       }
 
+      // Archive container stderr so [msg #N] entries and SDK debug output
+      // survive container removal. Always written (not just on error).
+      if (stderr.trim()) {
+        const stderrDir = path.join(process.cwd(), 'logs', 'workers', group.folder);
+        fs.mkdirSync(stderrDir, { recursive: true });
+        const stderrTs = new Date().toISOString().replace(/[:.]/g, '-');
+        const stderrFile = path.join(stderrDir, `stderr-${stderrTs}.log`);
+        try {
+          fs.writeFileSync(stderrFile, stderr);
+        } catch (err) {
+          logger.warn({ group: group.name, err }, 'Failed to archive container stderr');
+        }
+      }
+
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
         const timeoutLog = path.join(logsDir, `container-${ts}.log`);
@@ -743,7 +759,7 @@ export async function runContainerAgent(
         // container being reaped after the idle period expired.
         if (hadStreamingOutput) {
           logger.info(
-            { group: group.name, containerName, duration, code },
+            { group: group.name, containerName, duration, code, traceId: input.traceId },
             'Container timed out after output (idle cleanup)',
           );
           outputChain.then(() => {
@@ -757,7 +773,7 @@ export async function runContainerAgent(
         }
 
         logger.error(
-          { group: group.name, containerName, duration, code },
+          { group: group.name, containerName, duration, code, traceId: input.traceId },
           'Container timed out with no output',
         );
 
@@ -846,6 +862,7 @@ export async function runContainerAgent(
             stderr,
             stdout,
             logFile,
+            traceId: input.traceId,
           },
           'Container exited with error',
         );
@@ -862,7 +879,7 @@ export async function runContainerAgent(
       if (onOutput) {
         outputChain.then(() => {
           logger.info(
-            { group: group.name, duration, newSessionId },
+            { group: group.name, duration, newSessionId, traceId: input.traceId },
             'Container completed (streaming mode)',
           );
           resolve({
@@ -899,6 +916,7 @@ export async function runContainerAgent(
             duration,
             status: output.status,
             hasResult: !!output.result,
+            traceId: input.traceId,
           },
           'Container completed',
         );
