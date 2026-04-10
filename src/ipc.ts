@@ -159,17 +159,16 @@ function updateWorkerBackends(
   fs.renameSync(tmpPath, backendsPath);
 }
 
-/** Update NANOCLAW_BACKEND and NANOCLAW_MODEL in worker.env so container-runner routes correctly on next spawn. */
+/** Clean stale NANOCLAW_BACKEND/MODEL from worker.env (legacy cleanup).
+ * Backend routing now comes from worker-backends.json; the container-runner
+ * injects NANOCLAW_BACKEND directly. This just strips the dead env vars. */
 export function updateWorkerEnvBackend(
   folder: string,
-  backend: InferenceBackend | string,
-  model?: string,
+  _backend: InferenceBackend | string,
+  _model?: string,
 ): void {
   const envPath = path.join(DATA_DIR, 'sessions', folder, 'worker.env');
-  if (!fs.existsSync(envPath)) {
-    logger.warn({ folder }, 'updateWorkerEnvBackend: worker.env not found');
-    return;
-  }
+  if (!fs.existsSync(envPath)) return;
   const content = fs.readFileSync(envPath, 'utf-8');
   const lines = content
     .split('\n')
@@ -177,13 +176,6 @@ export function updateWorkerEnvBackend(
       (l) =>
         !l.startsWith('NANOCLAW_BACKEND=') && !l.startsWith('NANOCLAW_MODEL='),
     );
-  if (backend === BACKEND_NEURALWATT) {
-    lines.push(`NANOCLAW_BACKEND=${BACKEND_NEURALWATT}`);
-    if (model) {
-      lines.push(`NANOCLAW_MODEL=${model}`);
-    }
-  }
-  // Preserve trailing newline if the original file had one
   const result = lines.join('\n');
   fs.writeFileSync(envPath, content.endsWith('\n') ? result + '\n' : result);
 }
@@ -1306,9 +1298,8 @@ export async function processTaskIpc(
         data.model as string | undefined,
       );
 
-      // Also update worker.env so the next container spawn routes correctly.
-      // Without this, container-runner reads the stale worker.env and routes
-      // to the wrong proxy (e.g. still Anthropic after switching to NW).
+      // Clean stale NANOCLAW_BACKEND from worker.env (legacy — routing now
+      // comes from worker-backends.json, injected by container-runner).
       updateWorkerEnvBackend(
         workerGroup.folder,
         data.backend as string,

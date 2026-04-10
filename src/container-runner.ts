@@ -370,10 +370,23 @@ function buildContainerArgs(
     args.push('-e', `DISCORD_GUILD_ID=${DISCORD_GUILD_ID}`);
   }
 
-  // Pass worker profile env vars and detect backend setting (single read).
+  // Determine backend from worker-backends.json (single source of truth).
   let useNeuralwatt = false;
   let neuralwattModel: string | null = null;
   if (groupFolder) {
+    const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
+    try {
+      const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+      const config = backends[groupFolder];
+      if (config?.backend === BACKEND_NEURALWATT) {
+        useNeuralwatt = true;
+        neuralwattModel = config.model || null;
+      }
+    } catch (err) {
+      logger.warn({ err, groupFolder }, 'Failed to read worker-backends.json — defaulting to Anthropic');
+    }
+
+    // Pass worker profile env vars (repos, tools, skills — not backend).
     const workerEnvPath = path.join(
       DATA_DIR,
       'sessions',
@@ -385,31 +398,19 @@ function buildContainerArgs(
       for (const line of envContent.split('\n')) {
         if (line.trim() && !line.startsWith('#')) {
           args.push('-e', line);
-          if (
-            line.startsWith('NANOCLAW_BACKEND=') &&
-            line.includes(BACKEND_NEURALWATT)
-          ) {
-            useNeuralwatt = true;
-          }
         }
       }
     }
 
-    // For Neuralwatt workers, read model from worker-backends.json (source of truth).
-    // Global .env may have Anthropic model like "opus" which causes mismatches.
-    if (useNeuralwatt) {
-      const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
-      try {
-        const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
-        neuralwattModel = backends[groupFolder]?.model || null;
-      } catch {
-        // File missing or corrupt — will fall back to env var below
-      }
-    }
+    // Always inject NANOCLAW_BACKEND so the container knows its backend.
+    args.push(
+      '-e',
+      `NANOCLAW_BACKEND=${useNeuralwatt ? BACKEND_NEURALWATT : 'anthropic'}`,
+    );
   }
 
   // Pass model to container agent.
-  // For Neuralwatt: use model from worker-backends.json (resolved above).
+  // For Neuralwatt: use model from worker-backends.json.
   // For Anthropic: use model from global .env (opus, sonnet, etc.).
   if (neuralwattModel) {
     args.push('-e', `NANOCLAW_MODEL=${neuralwattModel}`);
