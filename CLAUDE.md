@@ -1,52 +1,79 @@
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Personal Claude assistant with dynamic worker agents. See [README.md](README.md) for overview and [docs/architecture/overview.md](docs/architecture/overview.md) for goals and design principles.
+
+## Documentation Routing
+
+**New here?** Read [docs/architecture/overview.md](docs/architecture/overview.md) first for goals and architecture. Then [docs/guides/testing.md](docs/guides/testing.md) to understand how to verify changes.
+
+Before working on a subsystem, read the relevant doc:
+
+- **Architecture and goals:** [docs/architecture/overview.md](docs/architecture/overview.md)
+- **Worker create/destroy/resume:** [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md)
+- **Inference routing (Anthropic vs Neuralwatt):** [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md)
+- **Model discovery and fuzzy matching:** [docs/architecture/model-discovery.md](docs/architecture/model-discovery.md)
+- **Streaming SSE translation:** [docs/architecture/streaming-shim.md](docs/architecture/streaming-shim.md)
+- **E2E testing procedures:** [docs/guides/testing.md](docs/guides/testing.md)
+- **Setup from scratch:** [docs/guides/setup.md](docs/guides/setup.md)
+- **Personal config (instructions, profiles, Dockerfile):** [docs/guides/personal-config.md](docs/guides/personal-config.md)
+- **Full doc index:** [docs/README.md](docs/README.md)
+
+## Communication (Discord)
+
+When receiving messages via Discord, **always reply with an immediate ack before doing any work.** Describe what you're about to do, then do it. The user is often on mobile and needs to know you're responsive.
+
+## Workflow
+
+This repository uses **trunk-based development**:
+
+1. **Create feature branches** from `main` for all changes
+2. **Push changes as Pull Requests** targeting `main`
+3. **Rebase merge** PRs into `main` (no merge commits, no squash)
+4. Keep PRs focused and small when possible
+
+### Branch Naming
+
+Use conventional prefixes:
+
+- `feat/` — New features
+- `fix/` — Bug fixes
+- `docs/` — Documentation changes
+- `refactor/` — Code refactoring
+
+Example: `feat/dynamic-workers`, `fix/ipc-feedback`
+
+### Critical Rules
+
+- **NEVER push to any branch without explicit user request AND confirmation.**
+- **NEVER push directly to `main`.** Always use a feature branch + PR.
+- **NEVER force push** under any circumstances.
+
+### Git Hooks
+
+Enable on every fresh clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This is a per-clone setting and must be re-run after cloning to a new machine.
+
+**Pre-push hook** — blocks direct pushes to `main`. There is no exception for "small fixes." Always use a feature branch + PR, no matter how trivial the change seems.
 
 ## Quick Context
 
 Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
 
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/channels/registry.ts` | Channel registry (self-registration at startup) |
-| `src/ipc.ts` | IPC watcher and task processing |
-| `src/router.ts` | Message formatting and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
-| `src/db.ts` | SQLite operations |
-| `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
-
-## Secrets / Credentials / Proxy (OneCLI)
-
-API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
-
 ## Skills
 
-Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
-
-- **Feature skills** — merge a `skill/*` branch to add capabilities (e.g. `/add-telegram`, `/add-slack`)
-- **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
-- **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
-- **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
-
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
-
-## Contributing
-
-Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
+| Skill               | When to Use                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| `/setup`            | First-time installation, authentication, service configuration    |
+| `/customize`        | Adding channels, integrations, changing behavior                  |
+| `/debug`            | Container issues, logs, troubleshooting                           |
+| `/update-nanoclaw`  | Bring upstream NanoClaw updates into a customized install         |
+| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch     |
+| `/get-qodo-rules`   | Load org- and repo-level coding rules from Qodo before code tasks |
 
 ## Development
 
@@ -59,6 +86,7 @@ npm run build        # Compile TypeScript
 ```
 
 Service management:
+
 ```bash
 # macOS (launchd)
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
@@ -71,10 +99,75 @@ systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
 ```
 
-## Troubleshooting
+## Debugging
 
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
+Logs are written to two destinations: pretty-printed to stdout (captured by systemd to `logs/nanoclaw.log`) and structured JSONL to `logs/nanoclaw.jsonl` for programmatic querying.
 
-## Container Build Cache
+```bash
+# Startup/shutdown timing
+jq 'select(.msg | startswith("Startup:") or startswith("Shutdown:"))' logs/nanoclaw.jsonl
 
-The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+# Container startups slower than 10s
+jq 'select(.msg == "Container first output" and .startupMs > 10000)' logs/nanoclaw.jsonl
+
+# All errors
+jq 'select(.level >= 50)' logs/nanoclaw.jsonl
+```
+
+**Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr. View with `docker logs <container-name>`.
+
+**Worker event log** at `logs/worker-events.jsonl` tracks lifecycle events (created, destroyed, backend_switched, resumed). The master can query this via the `worker_history` MCP tool, or you can grep/jq it directly.
+
+**Per-worker audit logs** track every API call at `logs/workers/<folder>/turns.jsonl`. Each entry has: model, backend, tokens (in/out/cached), latency, energy, and stop reason. Use `ncf logs` to query:
+
+```bash
+ncf logs <worker>              # last 20 turns
+ncf logs <worker> --cache      # show only cache hits
+ncf logs <worker> --slow       # show only slow requests (>5s)
+ncf logs <worker> --follow     # follow container logs in real-time
+```
+
+**Host-side tools** for testing and debugging:
+
+| Tool                                                | Purpose                                                        |
+| --------------------------------------------------- | -------------------------------------------------------------- |
+| `ncf status [--json]`                               | Show all workers, containers, backends, usage                  |
+| `ncf logs <worker> [n] [--cache\|--slow\|--follow]` | Per-worker audit logs; `--follow` tails live container output  |
+| `ncf inject <channel> <msg> [--wait]`               | Inject a message; `--wait` polls for and prints the response   |
+| `ncf switch <worker> <backend> [model]`             | Switch inference backend/model                                 |
+| `ncf create <name> [--backend] [--model] [--trigger]` | Create new worker                                            |
+| `ncf destroy <worker>`                              | Destroy worker (keeps workspace)                               |
+| `ncf restart <worker> [--fresh]`                    | Restart container (optionally clear session)                   |
+| `ncf session <worker> [n]`                          | Show session transcript (default 80 lines)                     |
+| `ncf history [worker] [--since <date>] [--limit n]` | Worker lifecycle events (created, destroyed, backend switches) |
+| `ncf debug`                                         | System state dump (paths, DB, containers, proxies)             |
+| `ncf rebuild [worker]`                              | Rebuild container image                                        |
+
+Most commands accept `--json` for machine-readable output. Worker names can be specified with or without the `discord_` prefix. `ncf inject --wait` is the fastest way to verify end-to-end responsiveness.
+
+## Gotchas
+
+- **Agent-runner source auto-syncs by mtime.** Changes to MCP tools or agent-runner code take effect on next container spawn. No manual cache clearing needed. However, if the image is stale, the entrypoint recompiles TypeScript on every spawn (~2-3s). Rebuild the image (`container/build.sh`) after agent-runner changes to avoid this.
+- **Docker build cache is aggressive.** `--no-cache` alone doesn't invalidate COPY steps. Prune the builder for a truly clean rebuild.
+- **WhatsApp is a separate channel fork.** Run `/add-whatsapp` to install it after upgrading.
+
+## After Making Changes
+
+After implementing a feature or fix, check whether documentation needs updating:
+
+- **`docs/architecture/`** if system behavior changed
+- **`docs/guides/testing.md`** if new testable behaviors were added
+- **`.env.example`** if new env vars were added
+- **`instructions/`** if agent capabilities or behavior changed (global, master, or worker)
+
+**You must personally exercise your changes before declaring done.** Compiling and passing unit tests is not enough. Use `ncf inject` and `ncf switch`/`ncf create`/`ncf destroy` to send real messages, create/destroy workers, and confirm the system behaves correctly. If you changed worker lifecycle code, create a worker, message it, destroy it, and recreate with resume. If you changed the shim, curl the endpoint and verify the response. If you changed the container image or init.sh, rebuild, restart, and message a worker to confirm it boots. Check `logs/nanoclaw.log` for errors after every test. See [docs/guides/testing.md](docs/guides/testing.md) for exact commands and scenarios.
+
+## Issue Tracking
+
+This repo supports [Beads](https://github.com/steveyegge/beads) (`bd` CLI) for issue tracking, but it's optional. If beads is configured in your worker profile (`BEADS_ENABLED=1`), use it:
+
+- `bd ready` to find available work (no blockers)
+- `bd create` before writing code, `bd close` when done
+- `bd sync` at end of session to sync with git
+
+If beads is not configured, use GitHub Issues instead.

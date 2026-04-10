@@ -9,9 +9,15 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import pino from 'pino';
+
 import { MOUNT_ALLOWLIST_PATH } from './config.js';
-import { logger } from './logger.js';
 import { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
+
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: { target: 'pino-pretty', options: { colorize: true } },
+});
 
 // Cache the allowlist in memory - only reloads on process restart
 let cachedAllowlist: MountAllowlist | null = null;
@@ -149,16 +155,10 @@ function matchesBlockedPattern(
   const pathParts = realPath.split(path.sep);
 
   for (const pattern of blockedPatterns) {
-    // Check if any path component matches the pattern
     for (const part of pathParts) {
-      if (part === pattern || part.includes(pattern)) {
+      if (part === pattern) {
         return pattern;
       }
-    }
-
-    // Also check if the full path contains the pattern
-    if (realPath.includes(pattern)) {
-      return pattern;
     }
   }
 
@@ -266,27 +266,35 @@ export function validateMount(
     };
   }
 
-  // Check against blocked patterns
+  // Check if under an allowed root
+  const allowedRoot = findAllowedRoot(realPath, allowlist.allowedRoots);
   const blockedMatch = matchesBlockedPattern(
     realPath,
     allowlist.blockedPatterns,
   );
-  if (blockedMatch !== null) {
-    return {
-      allowed: false,
-      reason: `Path matches blocked pattern "${blockedMatch}": "${realPath}"`,
-    };
-  }
 
-  // Check if under an allowed root
-  const allowedRoot = findAllowedRoot(realPath, allowlist.allowedRoots);
   if (allowedRoot === null) {
+    // Not in allowedRoots — check blocked patterns, then reject
+    if (blockedMatch !== null) {
+      return {
+        allowed: false,
+        reason: `Path matches blocked pattern "${blockedMatch}": "${realPath}"`,
+      };
+    }
     return {
       allowed: false,
       reason: `Path "${realPath}" is not under any allowed root. Allowed roots: ${allowlist.allowedRoots
         .map((r) => expandPath(r.path))
         .join(', ')}`,
     };
+  }
+
+  // Log when an explicit allowedRoot overrides a blocked pattern
+  if (blockedMatch !== null) {
+    logger.info(
+      { path: realPath, pattern: blockedMatch, root: allowedRoot.path },
+      'Blocked pattern overridden by explicit allowedRoot',
+    );
   }
 
   // Determine effective readonly status

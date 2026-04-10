@@ -1,19 +1,35 @@
+import { EventEmitter, once } from 'events';
 import fs from 'fs';
 import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
+  syncMasterProfile,
+  syncWorkerProfiles,
+  loadPersonalConfig,
+} from './profile-sync.js';
+import { startResourceMonitor } from './resource-monitor.js';
+import { startStatusPin, markStatusOffline } from './status-pin.js';
+import { startWorkerStatusPins } from './worker-status-pin.js';
+import type { DiscordChannel } from './channels/discord.js';
+
+import {
   ASSISTANT_NAME,
+  CREDENTIAL_PROXY_PORT,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  MAX_CONCURRENT_CONTAINERS,
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
+  STATUS_PIN_INTERVAL,
   TIMEZONE,
+  TRIGGER_PATTERN,
 } from './config.js';
+import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -28,27 +44,33 @@ import {
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
+  PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
-  deleteSession,
   getAllTasks,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
+  getRegisteredGroup,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { startIpcWatcher } from './ipc.js';
+import {
+  clearGroupSentMessage,
+  didGroupSendMessage,
+  startIpcWatcher,
+} from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -61,6 +83,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  extractSessionCommand,
+  handleSessionCommand,
+  isSessionCommandAllowed,
+} from './session-commands.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -74,6 +101,8 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let stopStatusPin: (() => void) | undefined;
+let stopWorkerPins: (() => void) | undefined;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -98,6 +127,11 @@ function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
     },
   );
 }
+
+// Wake signal: fires when a new message is stored, so the message loop
+// can process it immediately instead of waiting for the next poll cycle.
+const messageWake = new EventEmitter();
+messageWake.setMaxListeners(0); // loop re-registers on every iteration
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -161,7 +195,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
   // Copy CLAUDE.md template into the new group folder so agents have
-  // identity and instructions from the first run.  (Fixes #1391)
+  // identity and instructions from the first run.
   const groupMdFile = path.join(groupDir, 'CLAUDE.md');
   if (!fs.existsSync(groupMdFile)) {
     const templateFile = path.join(
@@ -195,16 +229,32 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
  */
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
   const chats = getAllChats();
+  const chatJids = new Set(chats.map((c) => c.jid));
   const registeredJids = new Set(Object.keys(registeredGroups));
 
-  return chats
+  const fromChats = chats
     .filter((c) => c.jid !== '__group_sync__' && c.is_group)
     .map((c) => ({
       jid: c.jid,
       name: c.name,
       lastActivity: c.last_message_time,
       isRegistered: registeredJids.has(c.jid),
+      folder: registeredGroups[c.jid]?.folder,
     }));
+
+  // Include registered groups that haven't had any messages yet
+  // (e.g. just-created workers whose Discord channel hasn't been messaged).
+  const fromRegistered = Object.entries(registeredGroups)
+    .filter(([jid]) => !chatJids.has(jid))
+    .map(([jid, group]) => ({
+      jid,
+      name: group.name,
+      lastActivity: group.added_at || new Date().toISOString(),
+      isRegistered: true,
+      folder: group.folder,
+    }));
+
+  return [...fromChats, ...fromRegistered];
 }
 
 /** @internal - exported for testing */
@@ -239,16 +289,53 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // --- Session command interception (before trigger check) ---
+  const triggerPattern = getTriggerPattern(group.trigger);
+  const cmdResult = await handleSessionCommand({
+    missedMessages,
+    isMainGroup,
+    groupName: group.name,
+    triggerPattern,
+    timezone: TIMEZONE,
+    deps: {
+      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      setTyping: (typing) =>
+        channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) =>
+        runAgent(group, prompt, chatJid, onOutput),
+      closeStdin: () => queue.closeStdin(chatJid),
+      advanceCursor: (ts) => {
+        lastAgentTimestamp[chatJid] = ts;
+        saveState();
+      },
+      formatMessages,
+      canSenderInteract: (msg) => {
+        const hasTrigger = triggerPattern.test(msg.content.trim());
+        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        return (
+          isMainGroup ||
+          !reqTrigger ||
+          (hasTrigger &&
+            (msg.is_from_me ||
+              isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())))
+        );
+      },
+    },
+  });
+  if (cmdResult.handled) return cmdResult.success;
+  // --- End session command interception ---
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
         triggerPattern.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
-    if (!hasTrigger) return true;
+    if (!hasTrigger) {
+      return true;
+    }
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -269,6 +356,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = () => {
+    if (group.containerConfig?.disableIdleTimeout) return; // Long-lived worker — no idle reaping
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       logger.debug(
@@ -292,8 +380,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
+      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+      // Suppress SDK output if the agent already sent messages via send_message
+      // (prevents duplicate Discord messages)
+      if (text && !didGroupSendMessage(group.folder)) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -312,6 +402,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+  clearGroupSentMessage(group.folder);
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -371,16 +462,50 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Update session tracking from container output. On error, clear the
+  // session so retries start fresh instead of resuming a broken session.
+  const applySessionResult = (output: ContainerOutput) => {
+    if (!output.newSessionId) return;
+    if (output.status === 'error') {
+      delete sessions[group.folder];
+      deleteSession(group.folder);
+    } else {
+      sessions[group.folder] = output.newSessionId;
+      setSession(group.folder, output.newSessionId);
+    }
+  };
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
-        }
+        applySessionResult(output);
         await onOutput(output);
       }
     : undefined;
+
+  // Read include_files content for systemPrompt.append (compaction-safe)
+  let includeContent: string | undefined;
+  const personalConfig = loadPersonalConfig();
+  if (personalConfig.include_files?.length) {
+    const parts: string[] = [];
+    for (const filePath of personalConfig.include_files) {
+      const expandedPath = filePath.replace(/^~/, process.env.HOME || '/root');
+      try {
+        if (fs.existsSync(expandedPath)) {
+          parts.push(fs.readFileSync(expandedPath, 'utf-8').trimEnd());
+        }
+      } catch (err) {
+        logger.warn({ path: filePath, err }, 'Failed to read include file');
+      }
+    }
+    if (parts.length > 0) {
+      includeContent = parts.join('\n\n---\n\n');
+      logger.debug(
+        { files: personalConfig.include_files },
+        'Loaded include_files for systemPrompt',
+      );
+    }
+  }
 
   try {
     const output = await runContainerAgent(
@@ -392,16 +517,14 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        includeContent,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    }
+    applySessionResult(output);
 
     if (output.status === 'error') {
       // Detect stale/corrupt session — clear it so the next retry starts fresh.
@@ -447,6 +570,21 @@ async function startMessageLoop(): Promise<void> {
 
   logger.info(`NanoClaw running (default trigger: ${DEFAULT_TRIGGER})`);
 
+  // Write groups snapshot on startup so the master has current data
+  // immediately (not just after processing the first message).
+  const startupGroups = getAvailableGroups();
+  const startupRegisteredJids = new Set(Object.keys(registeredGroups));
+  for (const [, group] of Object.entries(registeredGroups)) {
+    if (group.isMain) {
+      writeGroupsSnapshot(
+        group.folder,
+        true,
+        startupGroups,
+        startupRegisteredJids,
+      );
+    }
+  }
+
   while (true) {
     try {
       const jids = Object.keys(registeredGroups);
@@ -485,13 +623,40 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.isMain === true;
+
+          // --- Session command interception (message loop) ---
+          // Scan ALL messages in the batch for a session command.
+          const triggerPattern = getTriggerPattern(group.trigger);
+          const loopCmdMsg = groupMessages.find(
+            (m) => extractSessionCommand(m.content, triggerPattern) !== null,
+          );
+
+          if (loopCmdMsg) {
+            // Only close active container if the sender is authorized — otherwise an
+            // untrusted user could kill in-flight work by sending /compact (DoS).
+            // closeStdin no-ops internally when no container is active.
+            if (
+              isSessionCommandAllowed(
+                isMainGroup,
+                loopCmdMsg.is_from_me === true,
+              )
+            ) {
+              queue.closeStdin(chatJid);
+            }
+            // Enqueue so processGroupMessages handles auth + cursor advancement.
+            // Don't pipe via IPC — slash commands need a fresh container with
+            // string prompt (not MessageStream) for SDK recognition.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          // --- End session command interception ---
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const triggerPattern = getTriggerPattern(group.trigger);
             const allowlistCfg = loadSenderAllowlist();
             const hasTrigger = groupMessages.some(
               (m) =>
@@ -515,6 +680,11 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
+            // Reset the send_message suppression flag for this group.
+            // Without this, if the previous message used send_message,
+            // the flag stays set and suppresses direct output for all
+            // subsequent piped messages in the same container session.
+            clearGroupSentMessage(group.folder);
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -537,7 +707,13 @@ async function startMessageLoop(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error in message loop');
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    // Wait for either a new message event or the poll interval (whichever first).
+    // This gives near-instant response when a Discord message arrives, with the
+    // poll interval as a fallback safety net.
+    await Promise.race([
+      new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL)),
+      once(messageWake, 'wake'),
+    ]);
   }
 }
 
@@ -569,10 +745,27 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  const t0 = Date.now();
+  let lastStep = t0;
+  const step = (label: string) => {
+    const now = Date.now();
+    const elapsed = now - t0;
+    const delta = now - lastStep;
+    lastStep = now;
+    logger.info(
+      { elapsed, delta, step: label },
+      `Startup: ${label} (+${elapsed}ms, Δ${delta}ms)`,
+    );
+  };
+
   ensureContainerSystemRunning();
+  step('container system checked');
+
   initDatabase();
-  logger.info('Database initialized');
+  step('database initialized');
+
   loadState();
+  step('state loaded');
 
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).
@@ -582,11 +775,70 @@ async function main(): Promise<void> {
 
   restoreRemoteControl();
 
+  // Start credential proxy (containers route API calls through this)
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
+  step('credential proxy started');
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
+    const s0 = Date.now();
+    let lastShutdownStep = s0;
+    const sstep = (label: string) => {
+      const now = Date.now();
+      const elapsed = now - s0;
+      const delta = now - lastShutdownStep;
+      lastShutdownStep = now;
+      logger.info(
+        { elapsed, delta, step: label },
+        `Shutdown: ${label} (+${elapsed}ms, Δ${delta}ms)`,
+      );
+    };
+
     logger.info({ signal }, 'Shutdown signal received');
+
+    // Notify master channel before tearing down (3s timeout so we don't hang)
+    const mainEntry = Object.entries(registeredGroups).find(
+      ([, g]) => g.isMain,
+    );
+    if (mainEntry) {
+      const ch = findChannel(channels, mainEntry[0]);
+      if (ch) {
+        try {
+          await Promise.race([
+            ch.sendMessage(mainEntry[0], `NanoClaw shutting down (${signal})`),
+            new Promise((r) => setTimeout(r, 3000)),
+          ]);
+        } catch (err) {
+          logger.debug({ err }, 'Shutdown notification failed');
+        }
+      }
+      // Stop status pin loop before marking offline
+      stopStatusPin?.();
+      stopWorkerPins?.();
+
+      // Mark pinned status as offline (best-effort, 3s timeout)
+      const dcShutdown = channels.find((c) => c.name === 'discord') as
+        | DiscordChannel
+        | undefined;
+      if (dcShutdown) {
+        await markStatusOffline(mainEntry[0], {
+          editMessage: (jid, msgId, text) =>
+            dcShutdown.editMessage(jid, msgId, text),
+        });
+        sstep('status pin marked offline');
+      }
+    }
+
+    proxyServer.close();
+    sstep('credential proxy closed');
     await queue.shutdown(10000);
+    sstep('queue shut down');
     for (const ch of channels) await ch.disconnect();
+    sstep('channels disconnected');
+    sstep('shutdown complete');
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -663,6 +915,7 @@ async function main(): Promise<void> {
         }
       }
       storeMessage(msg);
+      messageWake.emit('wake');
     },
     onChatMetadata: (
       chatJid: string,
@@ -674,10 +927,12 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   };
 
-  // Create and connect all registered channels.
+  // Create and connect all registered channels in parallel.
   // Each channel self-registers via the barrel import above.
   // Factories return null when credentials are missing, so unconfigured channels are skipped.
-  for (const channelName of getRegisteredChannelNames()) {
+  const channelNames = getRegisteredChannelNames();
+  const connectionPromises = channelNames.map(async (channelName) => {
+    const t1 = Date.now();
     const factory = getChannelFactory(channelName)!;
     const channel = factory(channelOpts);
     if (!channel) {
@@ -685,15 +940,25 @@ async function main(): Promise<void> {
         { channel: channelName },
         'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
       );
-      continue;
+      return null;
     }
-    channels.push(channel);
     await channel.connect();
-  }
+    const elapsed = Date.now() - t1;
+    logger.info(
+      { channel: channelName, elapsed },
+      `Channel connected (${elapsed}ms)`,
+    );
+    return channel;
+  });
+  const connectedChannels = (await Promise.all(connectionPromises)).filter(
+    Boolean,
+  ) as Channel[];
+  channels.push(...connectedChannels);
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+  step(`channels connected (${channels.length})`);
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -712,6 +977,9 @@ async function main(): Promise<void> {
       if (text) await channel.sendMessage(jid, text);
     },
   });
+  // Find the Discord channel instance for dynamic worker operations
+  const discordChannel = channels.find((ch) => ch.name === 'discord');
+
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
@@ -730,6 +998,20 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    createDiscordChannel: discordChannel?.createChannel
+      ? (guildId, name, categoryId) =>
+          discordChannel.createChannel!(guildId, name, categoryId)
+      : undefined,
+    deleteDiscordChannel: discordChannel?.deleteChannel
+      ? (channelId) => discordChannel.deleteChannel!(channelId)
+      : undefined,
+    stopGroupContainer: (jid: string) => {
+      queue.closeStdin(jid);
+    },
+    getContainerStats: () => ({
+      active: queue.getActiveCount(),
+      max: MAX_CONCURRENT_CONTAINERS,
+    }),
     onTasksChanged: () => {
       const tasks = getAllTasks();
       const taskRows = tasks.map((t) => ({
@@ -749,7 +1031,66 @@ async function main(): Promise<void> {
   });
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
+
+  step('subsystems started');
+
+  // Sync profiles: propagate profile changes to existing workers + master
+  syncWorkerProfiles();
+  syncMasterProfile();
+  step('profiles synced');
+
   recoverPendingMessages();
+
+  // Auto-respawn reverted: spawning all workers on restart causes Discord spam
+  // (each worker responds to the synthetic message). Workers spawn lazily on
+  // first real message instead. The CONTAINER RESTARTED notice in agent-runner's
+  // system prompt provides restart context when they do spawn.
+
+  // Start resource monitor — alerts #master on high memory/disk/containers
+  const mainGroup = Object.entries(registeredGroups).find(([, g]) => g.isMain);
+  if (mainGroup) {
+    const mainChannel = findChannel(channels, mainGroup[0]);
+    if (mainChannel) {
+      startResourceMonitor(
+        mainGroup[0],
+        (jid, text) => mainChannel.sendMessage(jid, text),
+        () => queue.getActiveCount(),
+      );
+    }
+  }
+
+  // Start pinned status message updater (Discord only)
+  if (mainGroup && discordChannel) {
+    const dc = discordChannel as DiscordChannel;
+    stopStatusPin = startStatusPin(mainGroup[0], STATUS_PIN_INTERVAL, {
+      sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
+      editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),
+      pinMessage: (jid, msgId) => dc.pinMessage(jid, msgId),
+    });
+
+    // Start worker status pins in each worker channel
+    stopWorkerPins = startWorkerStatusPins(STATUS_PIN_INTERVAL, {
+      sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
+      editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),
+      pinMessage: (jid, msgId) => dc.pinMessage(jid, msgId),
+      unpinMessage: (jid, msgId) => dc.unpinMessage?.(jid, msgId),
+    });
+  }
+
+  step('startup complete');
+
+  // Notify master channel that NanoClaw is online (host-level, no agent involved)
+  if (mainGroup) {
+    const ch = findChannel(channels, mainGroup[0]);
+    if (ch) {
+      const elapsedS = ((Date.now() - t0) / 1000).toFixed(1);
+      ch.sendMessage(
+        mainGroup[0],
+        `NanoClaw online (${elapsedS}s startup)`,
+      ).catch(() => {});
+    }
+  }
+
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);

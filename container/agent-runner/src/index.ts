@@ -32,6 +32,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  includeContent?: string;
   script?: string;
 }
 
@@ -72,8 +73,20 @@ class MessageStream {
   private queue: SDKUserMessage[] = [];
   private waiting: (() => void) | null = null;
   private done = false;
+  // Track how many messages pushed vs yielded to the SDK.
+  // If pushed > yielded, the SDK has stopped consuming — this was the
+  // root cause of a 30-min master outage (2026-04-10) where the SDK
+  // silently stopped iterating after a result event. These counters
+  // make that gap visible in container logs.
+  private pushed = 0;
+  private yielded = 0;
 
   push(text: string): void {
+    this.pushed++;
+    const pending = this.pushed - this.yielded;
+    log(
+      `Stream: pushed #${this.pushed} (${text.length} chars, ${pending} pending, waiting=${this.waiting !== null})`,
+    );
     this.queue.push({
       type: 'user',
       message: { role: 'user', content: text },
@@ -91,6 +104,8 @@ class MessageStream {
   async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage> {
     while (true) {
       while (this.queue.length > 0) {
+        this.yielded++;
+        log(`Stream: yielded #${this.yielded} to SDK`);
         yield this.queue.shift()!;
       }
       if (this.done) return;
@@ -123,8 +138,11 @@ function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_END_MARKER);
 }
 
+const _processStartMs = Date.now();
+
 function log(message: string): void {
-  console.error(`[agent-runner] ${message}`);
+  const elapsed = Date.now() - _processStartMs;
+  console.error(`[agent-runner +${elapsed}ms] ${message}`);
 }
 
 function getSessionSummary(
@@ -157,13 +175,48 @@ function getSessionSummary(
 }
 
 /**
+ * Send a Discord notification via IPC before compaction starts.
+ * The user sees this so they know the worker isn't stuck.
+ */
+function sendCompactionNotice(
+  chatJid: string,
+  groupFolder: string,
+  trigger: string,
+): void {
+  const IPC_MESSAGES_DIR = '/workspace/ipc/messages';
+  fs.mkdirSync(IPC_MESSAGES_DIR, { recursive: true });
+
+  const data = {
+    type: 'message',
+    chatJid,
+    text: `⏳ Compacting context (${trigger})… I'll be back in a moment.`,
+    groupFolder,
+    timestamp: new Date().toISOString(),
+  };
+
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const filepath = path.join(IPC_MESSAGES_DIR, filename);
+  const tempPath = `${filepath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tempPath, filepath);
+  log(`Sent compaction notice to Discord (${trigger})`);
+}
+
+/**
  * Archive the full transcript to conversations/ before compaction.
  */
-function createPreCompactHook(assistantName?: string): HookCallback {
+function createPreCompactHook(
+  chatJid: string,
+  groupFolder: string,
+  assistantName?: string,
+): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
     const transcriptPath = preCompact.transcript_path;
     const sessionId = preCompact.session_id;
+
+    // Notify the user via Discord before compaction
+    sendCompactionNotice(chatJid, groupFolder, preCompact.trigger || 'auto');
 
     if (!transcriptPath || !fs.existsSync(transcriptPath)) {
       log('No transcript found for archiving');
@@ -412,12 +465,24 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
+  // Build systemPrompt.append from multiple sources:
+  // 1. globalClaudeMd (workers only, from /workspace/global/CLAUDE.md)
+  // 2. includeContent (all agents, from include_files in personal config)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
+
+  const systemPromptParts: string[] = [];
+  if (globalClaudeMd) systemPromptParts.push(globalClaudeMd.trimEnd());
+  if (containerInput.includeContent)
+    systemPromptParts.push(containerInput.includeContent);
+
+  const systemPromptAppend =
+    systemPromptParts.length > 0
+      ? systemPromptParts.join('\n\n---\n\n')
+      : undefined;
 
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
@@ -438,15 +503,18 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model:
+        (process.env.NANOCLAW_MODEL as 'sonnet' | 'opus' | 'haiku') ||
+        undefined,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
+      systemPrompt: systemPromptAppend
         ? {
             type: 'preset' as const,
             preset: 'claude_code' as const,
-            append: globalClaudeMd,
+            append: systemPromptAppend,
           }
         : undefined,
       allowedTools: [
@@ -469,7 +537,9 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__slack__*',
       ],
+      disallowedTools: ['EnterPlanMode', 'ExitPlanMode'],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -484,10 +554,29 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(process.env.SLACK_USER_TOKEN
+          ? {
+              slack: {
+                command: 'npx',
+                args: ['-y', 'slack-mcp-server'],
+                env: {
+                  SLACK_MCP_XOXP_TOKEN: process.env.SLACK_USER_TOKEN,
+                },
+              },
+            }
+          : {}),
       },
       hooks: {
         PreCompact: [
-          { hooks: [createPreCompactHook(containerInput.assistantName)] },
+          {
+            hooks: [
+              createPreCompactHook(
+                containerInput.chatJid,
+                containerInput.groupFolder,
+                containerInput.assistantName,
+              ),
+            ],
+          },
         ],
       },
     },
@@ -601,10 +690,12 @@ async function runScript(script: string): Promise<ScriptResult | null> {
 }
 
 async function main(): Promise<void> {
+  log('main() start');
   let containerInput: ContainerInput;
 
   try {
     const stdinData = await readStdin();
+    log('stdin read');
     containerInput = JSON.parse(stdinData);
     try {
       fs.unlinkSync('/tmp/input.json');
@@ -646,6 +737,12 @@ async function main(): Promise<void> {
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
   }
+  // Notify the agent if this is a resumed session (container was restarted)
+  if (sessionId) {
+    const restartTime =
+      new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    prompt = `[CONTAINER RESTARTED at ${restartTime}. Your workspace and repos are intact, but any running processes (builds, tests, SSH sessions) were lost. You may have new tools or capabilities from an updated container image. If you need to reinstall tools that were lost, consider suggesting they be added to the worker profile so they persist across restarts. Do not mention this unless relevant.]\n\n${prompt}`;
+  }
   const pending = drainIpcInput();
   if (pending.length > 0) {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
@@ -674,8 +771,134 @@ async function main(): Promise<void> {
     prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
   }
 
+  // --- Slash command handling ---
+  // Only known session slash commands are handled here. This prevents
+  // accidental interception of user prompts that happen to start with '/'.
+  const KNOWN_SESSION_COMMANDS = new Set(['/compact']);
+  const trimmedPrompt = prompt.trim();
+  const isSessionSlashCommand = KNOWN_SESSION_COMMANDS.has(trimmedPrompt);
+
+  if (isSessionSlashCommand) {
+    log(`Handling session command: ${trimmedPrompt}`);
+    let slashSessionId: string | undefined;
+    let compactBoundarySeen = false;
+    let hadError = false;
+    let resultEmitted = false;
+
+    try {
+      for await (const message of query({
+        prompt: trimmedPrompt,
+        options: {
+          cwd: '/workspace/group',
+          resume: sessionId,
+          systemPrompt: undefined,
+          allowedTools: [],
+          env: sdkEnv,
+          permissionMode: 'bypassPermissions' as const,
+          allowDangerouslySkipPermissions: true,
+          settingSources: ['project', 'user'] as const,
+          hooks: {
+            PreCompact: [
+              {
+                hooks: [
+                  createPreCompactHook(
+                    containerInput.chatJid,
+                    containerInput.groupFolder,
+                    containerInput.assistantName,
+                  ),
+                ],
+              },
+            ],
+          },
+        },
+      })) {
+        const msgType =
+          message.type === 'system'
+            ? `system/${(message as { subtype?: string }).subtype}`
+            : message.type;
+        log(`[slash-cmd] type=${msgType}`);
+
+        if (message.type === 'system' && message.subtype === 'init') {
+          slashSessionId = message.session_id;
+          log(`Session after slash command: ${slashSessionId}`);
+        }
+
+        // Observe compact_boundary to confirm compaction completed
+        if (
+          message.type === 'system' &&
+          (message as { subtype?: string }).subtype === 'compact_boundary'
+        ) {
+          compactBoundarySeen = true;
+          log('Compact boundary observed — compaction completed');
+        }
+
+        if (message.type === 'result') {
+          const resultSubtype = (message as { subtype?: string }).subtype;
+          const textResult =
+            'result' in message
+              ? (message as { result?: string }).result
+              : null;
+
+          if (resultSubtype?.startsWith('error')) {
+            hadError = true;
+            writeOutput({
+              status: 'error',
+              result: null,
+              error: textResult || 'Session command failed.',
+              newSessionId: slashSessionId,
+            });
+          } else {
+            writeOutput({
+              status: 'success',
+              result: textResult || 'Conversation compacted.',
+              newSessionId: slashSessionId,
+            });
+          }
+          resultEmitted = true;
+        }
+      }
+    } catch (err) {
+      hadError = true;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      log(`Slash command error: ${errorMsg}`);
+      writeOutput({ status: 'error', result: null, error: errorMsg });
+    }
+
+    log(
+      `Slash command done. compactBoundarySeen=${compactBoundarySeen}, hadError=${hadError}`,
+    );
+
+    // Warn if compact_boundary was never observed — compaction may not have occurred
+    if (!hadError && !compactBoundarySeen) {
+      log(
+        'WARNING: compact_boundary was not observed. Compaction may not have completed.',
+      );
+    }
+
+    // Only emit final session marker if no result was emitted yet and no error occurred
+    if (!resultEmitted && !hadError) {
+      writeOutput({
+        status: 'success',
+        result: compactBoundarySeen
+          ? 'Conversation compacted.'
+          : 'Compaction requested but compact_boundary was not observed.',
+        newSessionId: slashSessionId,
+      });
+    } else if (!hadError) {
+      // Emit session-only marker so host updates session tracking
+      writeOutput({
+        status: 'success',
+        result: null,
+        newSessionId: slashSessionId,
+      });
+    }
+    return;
+  }
+  // --- End slash command handling ---
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
+  log('entering query loop');
   try {
     while (true) {
       log(

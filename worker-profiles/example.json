@@ -1,0 +1,21 @@
+{
+  "name": "example",
+  "description": "Example worker profile — copy to ~/.config/nanoclaw/worker-profiles/default.json and customize",
+
+  "repos": [
+    {"url": "git@github.com:your-org/your-repo.git", "postClone": "git config core.hooksPath .githooks"}
+  ],
+
+  "tools": [
+    "uv tool install /workspace/group/your-repo --force"
+  ],
+
+  "mounts": [
+    {"hostPath": "~/.config/your-tool", "containerPath": "your-tool", "readonly": true}
+  ],
+
+  "skills_repo": null,
+
+  "init_script": "init.sh",
+  "claude_md": "CLAUDE.worker.md"
+}

@@ -1,3 +1,11 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "slack-mcp-server"],
+      "env": {
+        "SLACK_MCP_XOXP_TOKEN": "${SLACK_USER_TOKEN}"
+      }
+    }
+  }
 }

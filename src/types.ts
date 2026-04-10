@@ -1,3 +1,7 @@
+export interface PersonalConfig {
+  include_files?: string[];
+}
+
 export interface AdditionalMount {
   hostPath: string; // Absolute path on host (supports ~ for home)
   containerPath?: string; // Optional — defaults to basename of hostPath. Mounted at /workspace/extra/{value}
@@ -29,7 +33,9 @@ export interface AllowedRoot {
 
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
+  ports?: string[]; // Docker port mappings (e.g., ["8080:8080", "8090:8090/tcp"])
   timeout?: number; // Default: 300000 (5 minutes)
+  disableIdleTimeout?: boolean; // If true, worker stays alive until explicitly destroyed
 }
 
 export interface RegisteredGroup {
@@ -95,6 +101,14 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: create a new channel on the platform (e.g., Discord guild channel).
+  createChannel?(
+    guildId: string,
+    name: string,
+    categoryId?: string,
+  ): Promise<string>;
+  // Optional: delete a channel on the platform.
+  deleteChannel?(channelId: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

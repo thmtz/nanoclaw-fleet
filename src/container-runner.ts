@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,25 +10,35 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  BACKEND_NEURALWATT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  GITHUB_TOKEN_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
+  NEURALWATT_PROXY_PORT,
   TIMEZONE,
+  WORKER_API_KEY_PREFIX,
+  WORKER_BACKENDS_FILENAME,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
+  sanitizeFolderName,
   stopContainer,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
+import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-
-const onecli = new OneCLI({ url: ONECLI_URL });
+import {
+  extractTurnsFromTranscript,
+  getTranscriptOffset,
+} from './audit-log.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -42,6 +52,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  includeContent?: string;
   script?: string;
 }
 
@@ -58,6 +69,21 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+/**
+ * Resolve a path within the worker-profiles directory.
+ * Checks ~/.config/nanoclaw/worker-profiles/ first, falls back to repo's
+ * worker-profiles/. Returns null if neither location exists.
+ */
+function resolveWorkerProfilePath(subPath?: string): string | null {
+  const homeDir = process.env.HOME || '/root';
+  const segments = ['worker-profiles', ...(subPath ? [subPath] : [])];
+  const candidates = [
+    path.join(homeDir, '.config', 'nanoclaw', ...segments),
+    path.join(process.cwd(), ...segments),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
@@ -67,19 +93,25 @@ function buildVolumeMounts(
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (store, group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
+    // Main gets full host home directory — same trust level as a direct
+    // Claude Code session. This lets the master agent edit nanoclaw code,
+    // worker profiles, other repos, dotfiles, etc.
+    const homeDir = process.env.HOME || '/home/node';
+    mounts.push({
+      hostPath: homeDir,
+      containerPath: '/home/host',
+      readonly: false,
+    });
+
+    // Also mount the project root at the familiar /workspace/project path
     mounts.push({
       hostPath: projectRoot,
       containerPath: '/workspace/project',
-      readonly: true,
+      readonly: false,
     });
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
+    // Credentials are injected by the credential proxy, never exposed to containers.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
       mounts.push({
@@ -88,15 +120,6 @@ function buildVolumeMounts(
         readonly: true,
       });
     }
-
-    // Main gets writable access to the store (SQLite DB) so it can
-    // query and write to the database directly.
-    const storeDir = path.join(projectRoot, 'store');
-    mounts.push({
-      hostPath: storeDir,
-      containerPath: '/workspace/project/store',
-      readonly: false,
-    });
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -143,6 +166,17 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  // Clear known-problematic SDK state dirs from previous runs. These accumulate
+  // from crashed containers and can confuse the SDK on startup. Only remove
+  // debug/ and backups/ — leave everything else (projects/, plugins/, todos.json,
+  // etc.) intact so the SDK can resume session/project state properly.
+  const clearDirs = ['debug', 'backups'];
+  for (const dir of clearDirs) {
+    const target = path.join(groupSessionsDir, dir);
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  }
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -211,16 +245,25 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
+  // Always sync agent-runner source — compares mtime to detect changes.
+  // Previously only copied on first run, causing stale MCP tools.
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
+    const srcMtime = Math.max(
+      ...fs
+        .readdirSync(agentRunnerSrc)
+        .map((f) => fs.statSync(path.join(agentRunnerSrc, f)).mtimeMs),
+    );
+    const dstExists = fs.existsSync(groupAgentRunnerDir);
+    const dstMtime = dstExists
+      ? Math.max(
+          ...fs
+            .readdirSync(groupAgentRunnerDir)
+            .map((f) => fs.statSync(path.join(groupAgentRunnerDir, f)).mtimeMs),
+        )
+      : 0;
+    if (!dstExists || srcMtime > dstMtime) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+      logger.debug({ group: group.folder }, 'Agent-runner source synced');
     }
   }
   mounts.push({
@@ -228,6 +271,28 @@ function buildVolumeMounts(
     containerPath: '/app/src',
     readonly: false,
   });
+
+  // Tailscale socket mount — lets containers use `tailscale ssh` via host's daemon
+  const tailscaleSock = '/var/run/tailscale/tailscaled.sock';
+  if (fs.existsSync(tailscaleSock)) {
+    mounts.push({
+      hostPath: tailscaleSock,
+      containerPath: '/var/run/tailscale/tailscaled.sock',
+      readonly: false,
+    });
+  }
+
+  // Docker socket mount (main group only, gated behind NANOCLAW_ENABLE_DOCKER)
+  if (isMain && process.env.NANOCLAW_ENABLE_DOCKER === 'true') {
+    const dockerSock = '/var/run/docker.sock';
+    if (fs.existsSync(dockerSock)) {
+      mounts.push({
+        hostPath: dockerSock,
+        containerPath: '/var/run/docker.sock',
+        readonly: false,
+      });
+    }
+  }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
@@ -239,36 +304,185 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
+  // Mount worker-specific config (init script + profiles directory)
+  if (!isMain) {
+    const initScript = resolveWorkerProfilePath('init.sh');
+    if (initScript) {
+      mounts.push({
+        hostPath: initScript,
+        containerPath: '/workspace/init.sh',
+        readonly: true,
+      });
+    }
+
+    // Workers can view and edit profiles directly at /workspace/worker-profiles/
+    const profilesDir = resolveWorkerProfilePath();
+    if (profilesDir) {
+      mounts.push({
+        hostPath: profilesDir,
+        containerPath: '/workspace/worker-profiles',
+        readonly: false,
+      });
+    }
+  }
+
   return mounts;
 }
 
-async function buildContainerArgs(
+function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
-): Promise<string[]> {
+  groupFolder?: string,
+  ports?: string[],
+): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  // Use Tailscale DNS for MagicDNS hostnames, with public fallback.
+  // 100.100.100.100 resolves Tailscale names; 1.1.1.1 handles public DNS.
+  // Without the fallback, pypi.org/github.com/etc. fail.
+  if (fs.existsSync('/var/run/tailscale/tailscaled.sock')) {
+    args.push('--dns', '100.100.100.100', '--dns', '1.1.1.1');
+  }
+
+  // Port mappings from worker profile (e.g., ["8080:8080", "8090:8090/tcp"])
+  if (ports?.length) {
+    for (const port of ports) {
+      if (/^\d+:\d+(\/\w+)?$/.test(port)) {
+        args.push('-p', port);
+      } else {
+        logger.warn({ port }, 'Ignoring invalid port mapping');
+      }
+    }
+  }
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
+  // Beads: containers reach the host's dolt server via Docker gateway
+  args.push('-e', 'BEADS_DOLT_SERVER_HOST=host.docker.internal');
+
+  // Pass Discord guild ID for dynamic worker creation
+  const { DISCORD_GUILD_ID } = readEnvFile(['DISCORD_GUILD_ID']);
+  if (DISCORD_GUILD_ID) {
+    args.push('-e', `DISCORD_GUILD_ID=${DISCORD_GUILD_ID}`);
+  }
+
+  // Pass worker profile env vars and detect backend setting (single read).
+  let useNeuralwatt = false;
+  let neuralwattModel: string | null = null;
+  if (groupFolder) {
+    const workerEnvPath = path.join(
+      DATA_DIR,
+      'sessions',
+      groupFolder,
+      'worker.env',
     );
+    if (fs.existsSync(workerEnvPath)) {
+      const envContent = fs.readFileSync(workerEnvPath, 'utf-8');
+      for (const line of envContent.split('\n')) {
+        if (line.trim() && !line.startsWith('#')) {
+          args.push('-e', line);
+          if (
+            line.startsWith('NANOCLAW_BACKEND=') &&
+            line.includes(BACKEND_NEURALWATT)
+          ) {
+            useNeuralwatt = true;
+          }
+        }
+      }
+    }
+
+    // For Neuralwatt workers, read model from worker-backends.json (source of truth).
+    // Global .env may have Anthropic model like "opus" which causes mismatches.
+    if (useNeuralwatt) {
+      const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
+      try {
+        const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+        neuralwattModel = backends[groupFolder]?.model || null;
+      } catch {
+        // File missing or corrupt — will fall back to env var below
+      }
+    }
+  }
+
+  // Pass model to container agent.
+  // For Neuralwatt: use model from worker-backends.json (resolved above).
+  // For Anthropic: use model from global .env (opus, sonnet, etc.).
+  if (neuralwattModel) {
+    args.push('-e', `NANOCLAW_MODEL=${neuralwattModel}`);
+  } else if (!useNeuralwatt) {
+    const { NANOCLAW_MODEL } = readEnvFile(['NANOCLAW_MODEL']);
+    if (NANOCLAW_MODEL) {
+      args.push('-e', `NANOCLAW_MODEL=${NANOCLAW_MODEL}`);
+    }
+  }
+
+  // Route based on backend: Anthropic workers go directly to credential proxy,
+  // Neuralwatt workers go through the translation shim.
+  if (useNeuralwatt) {
+    const workerPath = groupFolder ? `/w/${groupFolder}` : '';
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}${workerPath}`,
+    );
+    // Fake API key with valid format — the SDK validates key format locally.
+    // "placeholder" gets rejected; this passes format checks.
+    // The shim handles real auth for Neuralwatt.
+    args.push(
+      '-e',
+      'ANTHROPIC_API_KEY=sk-ant-api03-neuralwatt-shim-placeholder-000000000000000000000000000000000000000000000000-000000000000',
+    );
+    // Redirect SDK init checks (oauth/profile, usage, etc.) to the shim
+    // instead of api.anthropic.com. Without this, the SDK tries to validate
+    // the fake API key against Anthropic's real API and crashes with 401.
+    args.push(
+      '-e',
+      `CLAUDE_CODE_API_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${NEURALWATT_PROXY_PORT}`,
+    );
+  } else {
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
   }
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // Inject GitHub token so the container can push over HTTPS.
+  // The host reads the token file — it never appears as a mount inside the container.
+  if (GITHUB_TOKEN_PATH) {
+    try {
+      const token = fs.readFileSync(GITHUB_TOKEN_PATH, 'utf-8').trim();
+      if (token) {
+        args.push('-e', `GITHUB_TOKEN=${token}`);
+      }
+    } catch {
+      // Token file missing or unreadable — git push will just fail without auth
+    }
+  }
+
+  // Inject Slack user token for slack-mcp-server (read-only access to conversations).
+  const { SLACK_USER_TOKEN } = readEnvFile(['SLACK_USER_TOKEN']);
+  if (SLACK_USER_TOKEN) {
+    args.push('-e', `SLACK_USER_TOKEN=${SLACK_USER_TOKEN}`);
+  }
+
+  // Add docker group so container can access the Docker socket
+  if (process.env.NANOCLAW_ENABLE_DOCKER === 'true') {
+    try {
+      const stat = fs.statSync('/var/run/docker.sock');
+      args.push('--group-add', String(stat.gid));
+    } catch {
+      // Socket doesn't exist, skip
+    }
+  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
@@ -305,16 +519,13 @@ export async function runContainerAgent(
   fs.mkdirSync(groupDir, { recursive: true });
 
   const mounts = buildVolumeMounts(group, input.isMain);
-  const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
+  const safeName = sanitizeFolderName(group.folder);
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
+  const containerArgs = buildContainerArgs(
     mounts,
     containerName,
-    agentIdentifier,
+    group.folder,
+    group.containerConfig?.ports,
   );
 
   logger.debug(
@@ -343,6 +554,9 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  // Record transcript offset before run for post-turn audit extraction
+  const transcriptOffset = getTranscriptOffset(group.folder, input.sessionId);
+
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -355,6 +569,7 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
+    const containerSpawnTime = Date.now();
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
 
@@ -362,6 +577,7 @@ export async function runContainerAgent(
     let parseBuffer = '';
     let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
+    let firstOutputLogged = false;
 
     container.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -400,6 +616,14 @@ export async function runContainerAgent(
               newSessionId = parsed.newSessionId;
             }
             hadStreamingOutput = true;
+            if (!firstOutputLogged) {
+              firstOutputLogged = true;
+              const startupMs = Date.now() - containerSpawnTime;
+              logger.info(
+                { group: group.name, containerName, startupMs },
+                'Container first output',
+              );
+            }
             // Activity detected — reset the hard timeout
             resetTimeout();
             // Call onOutput for all markers (including null results)
@@ -440,9 +664,13 @@ export async function runContainerAgent(
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+    // Long-lived workers: set hard timeout to 24 hours (effectively infinite)
+    const effectiveTimeout = group.containerConfig?.disableIdleTimeout
+      ? 24 * 60 * 60 * 1000
+      : configTimeout;
     // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
     // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    const timeoutMs = Math.max(effectiveTimeout, IDLE_TIMEOUT + 30_000);
 
     const killOnTimeout = () => {
       timedOut = true;
@@ -450,15 +678,15 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      try {
-        stopContainer(containerName);
-      } catch (err) {
-        logger.warn(
-          { group: group.name, containerName, err },
-          'Graceful stop failed, force killing',
-        );
-        container.kill('SIGKILL');
-      }
+      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
+        if (err) {
+          logger.warn(
+            { group: group.name, containerName, err },
+            'Graceful stop failed, force killing',
+          );
+          container.kill('SIGKILL');
+        }
+      });
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);
@@ -472,6 +700,21 @@ export async function runContainerAgent(
     container.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
+
+      // Extract audit data from SDK transcript (Anthropic workers)
+      const effectiveSessionId = newSessionId || input.sessionId;
+      try {
+        extractTurnsFromTranscript(
+          group.folder,
+          effectiveSessionId,
+          transcriptOffset,
+        );
+      } catch (err) {
+        logger.debug(
+          { group: group.name, error: err },
+          'Audit extraction failed (non-fatal)',
+        );
+      }
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -721,6 +964,7 @@ export interface AvailableGroup {
   name: string;
   lastActivity: string;
   isRegistered: boolean;
+  folder?: string;
 }
 
 /**
@@ -732,7 +976,7 @@ export function writeGroupsSnapshot(
   groupFolder: string,
   isMain: boolean,
   groups: AvailableGroup[],
-  _registeredJids: Set<string>,
+  registeredJids: Set<string>,
 ): void {
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });

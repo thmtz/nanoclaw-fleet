@@ -35,3 +35,18 @@ export function formatLocalTime(utcIso: string, timezone: string): string {
     hour12: true,
   });
 }
+
+/**
+ * Format the current time as a short local timestamp (e.g. "9:48:05 PM MDT").
+ * Used for status messages and lightweight timestamps.
+ */
+export function formatCurrentTime(timezone: string): string {
+  return new Date().toLocaleString('en-US', {
+    timeZone: timezone,
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
+}

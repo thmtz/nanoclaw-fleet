@@ -1,0 +1,48 @@
+#!/bin/bash
+# Pre-push hook: block direct push to main, then run prettier + tsc
+
+# --- Block direct push to main ---
+# Read pushed refs from stdin to catch all forms: git push, git push origin HEAD:main, etc.
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        if [ "$ALLOW_MAIN" = "1" ]; then
+            echo "⚠️  ALLOW_MAIN=1 set — bypassing push protection for main"
+        else
+            echo "🚫 Direct push to 'main' is blocked."
+            echo "   Use a feature branch and open a PR instead."
+            echo ""
+            echo "   To override in an emergency:"
+            echo "     ALLOW_MAIN=1 git push"
+            exit 1
+        fi
+    fi
+done
+# --- End block direct push to main ---
+
+echo "[pre-push] Checking formatting..."
+npm run format:check 2>&1
+if [ $? -ne 0 ]; then
+  echo "[pre-push] ❌ Formatting issues. Run: npm run format"
+  exit 1
+fi
+
+echo "[pre-push] Type-checking (host)..."
+npx tsc --noEmit 2>&1
+if [ $? -ne 0 ]; then
+  echo "[pre-push] ❌ Type errors in src/."
+  exit 1
+fi
+
+echo "[pre-push] Type-checking (agent-runner)..."
+if [ -d container/agent-runner/node_modules ]; then
+  (cd container/agent-runner && npx tsc --noEmit 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "[pre-push] ❌ Type errors in container/agent-runner/."
+    echo "[pre-push] This code runs inside containers — type errors crash workers at startup."
+    exit 1
+  fi
+else
+  echo "[pre-push] ⚠ Skipping agent-runner check (run: cd container/agent-runner && npm install)"
+fi
+
+echo "[pre-push] ✅ All checks passed."

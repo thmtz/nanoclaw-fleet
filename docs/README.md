@@ -1,15 +1,43 @@
-# NanoClaw Documentation
+# Documentation
 
-The official documentation is at **[docs.nanoclaw.dev](https://docs.nanoclaw.dev)**.
+## Architecture
 
-The files in this directory are original design documents and developer references. For the most current and accurate information, use the documentation site.
+How the system works (current state of the code):
 
-| This directory | Documentation site |
-|---|---|
-| [SPEC.md](SPEC.md) | [Architecture](https://docs.nanoclaw.dev/concepts/architecture) |
-| [SECURITY.md](SECURITY.md) | [Security model](https://docs.nanoclaw.dev/concepts/security) |
-| [REQUIREMENTS.md](REQUIREMENTS.md) | [Introduction](https://docs.nanoclaw.dev/introduction) |
-| [skills-as-branches.md](skills-as-branches.md) | [Skills system](https://docs.nanoclaw.dev/integrations/skills-system) |
-| [DEBUG_CHECKLIST.md](DEBUG_CHECKLIST.md) | [Troubleshooting](https://docs.nanoclaw.dev/advanced/troubleshooting) |
-| [docker-sandboxes.md](docker-sandboxes.md) | [Docker Sandboxes](https://docs.nanoclaw.dev/advanced/docker-sandboxes) |
-| [APPLE-CONTAINER-NETWORKING.md](APPLE-CONTAINER-NETWORKING.md) | [Container runtime](https://docs.nanoclaw.dev/advanced/container-runtime) |
+- [Overview](architecture/overview.md) — Goals, design principles, 1000ft architecture
+- [Inference routing](architecture/inference-routing.md) — How API traffic flows to Anthropic or Neuralwatt
+- [Model discovery](architecture/model-discovery.md) — Fuzzy model matching for Neuralwatt
+- [Container lifecycle](architecture/container-lifecycle.md) — Create, run, destroy, resume
+- [Streaming shim](architecture/streaming-shim.md) — SSE translation for Neuralwatt
+- [Energy tracking](architecture/energy-tracking.md) — Per-worker usage metrics
+
+## Guides
+
+How to do X (step-by-step):
+
+- [Setup](guides/setup.md) — Getting started with dynamic workers on Discord
+- [Personal config](guides/personal-config.md) — Customizing instructions, profiles, and container image
+- [Testing](guides/testing.md) — Exercising every behavior end-to-end
+- [Troubleshooting](guides/troubleshooting.md) — Common issues and fixes
+
+## Reference
+
+Lookup-oriented:
+
+- [CLI reference](reference/cli.md) — ncf commands for worker management
+- [SDK internals](reference/sdk-internals.md) — Claude Agent SDK deep dive
+
+## Upstream Docs
+
+Original NanoClaw documentation (from [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw)):
+
+- [Spec](upstream/SPEC.md) — Original full specification
+- [Requirements](upstream/REQUIREMENTS.md) — Original design philosophy
+- [Security](upstream/SECURITY.md) — Security model
+- [Skills as branches](upstream/skills-as-branches.md) — Skill system design
+- [Docker sandboxes](upstream/docker-sandboxes.md) — Running in Docker Sandbox
+- [Apple Container networking](upstream/APPLE-CONTAINER-NETWORKING.md) — macOS networking
+
+## Design Docs
+
+Proposals and design history live in [/design](../design/) (separate from docs to avoid confusing current state with aspirational state).

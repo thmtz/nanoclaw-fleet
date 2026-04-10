@@ -15,7 +15,6 @@ const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
-// Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
@@ -26,7 +25,6 @@ function writeIpcFile(dir: string, data: object): string {
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
   const filepath = path.join(dir, filename);
 
-  // Atomic write: temp file then rename
   const tempPath = `${filepath}.tmp`;
   fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
   fs.renameSync(tempPath, filepath);
@@ -64,6 +62,70 @@ server.tool(
     writeIpcFile(MESSAGES_DIR, data);
 
     return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
+  },
+);
+
+server.tool(
+  'get_backend',
+  'Get the current inference backend and model for this worker. Returns backend (anthropic or neuralwatt) and the resolved model name.',
+  {},
+  async () => {
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+    const backend = process.env.NANOCLAW_BACKEND || 'anthropic';
+    const model = process.env.NANOCLAW_MODEL || 'opus';
+
+    // For Neuralwatt workers, query the shim for the live config
+    // (model can change at runtime via switch_backend)
+    if (backend === 'neuralwatt') {
+      try {
+        const resp = await fetch(`${baseUrl}/worker-config`);
+        if (resp.ok) {
+          const config = await resp.json();
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(config, null, 2),
+              },
+            ],
+          };
+        }
+      } catch (err) {
+        // Shim unreachable — fall through to env var fallback.
+        // Include source so the caller knows this isn't live config.
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  backend,
+                  model,
+                  resolved_model: model,
+                  source: 'env_fallback',
+                  warning: `Could not reach shim: ${err instanceof Error ? err.message : err}`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            { backend, model, resolved_model: model },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
   },
 );
 
@@ -117,12 +179,6 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       .optional()
       .describe(
         '(Main group only) JID of the group to schedule the task for. Defaults to the current group.',
-      ),
-    script: z
-      .string()
-      .optional()
-      .describe(
-        'Optional bash script to run before waking the agent. Script must output JSON on the last line of stdout: { "wakeAgent": boolean, "data"?: any }. If wakeAgent is false, the agent is not called. Test your script with bash -c "..." before scheduling.',
       ),
   },
   async (args) => {
@@ -193,7 +249,6 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
-      script: args.script || undefined,
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
@@ -371,12 +426,6 @@ server.tool(
       .string()
       .optional()
       .describe('New schedule value (see schedule_task for format)'),
-    script: z
-      .string()
-      .optional()
-      .describe(
-        'New script for the task. Set to empty string to remove the script.',
-      ),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -423,7 +472,6 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
     if (args.prompt !== undefined) data.prompt = args.prompt;
-    if (args.script !== undefined) data.script = args.script;
     if (args.schedule_type !== undefined)
       data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined)
@@ -451,7 +499,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     jid: z
       .string()
       .describe(
-        'The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")',
+        'The chat JID (e.g., "120363000000000001@g.us", "tg:-1001234567890", "dc:1234567890123456")',
       ),
     name: z.string().describe('Display name for the group'),
     folder: z
@@ -460,12 +508,6 @@ Use available_groups.json to find the JID for a group. The folder name must be c
         'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
       ),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
-    requiresTrigger: z
-      .boolean()
-      .optional()
-      .describe(
-        'Whether messages must start with the trigger word. Default: false (respond to all messages). Set to true for busy groups with many participants where you only want the agent to respond when explicitly mentioned.',
-      ),
   },
   async (args) => {
     if (!isMain) {
@@ -486,7 +528,6 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       name: args.name,
       folder: args.folder,
       trigger: args.trigger,
-      requiresTrigger: args.requiresTrigger ?? false,
       timestamp: new Date().toISOString(),
     };
 

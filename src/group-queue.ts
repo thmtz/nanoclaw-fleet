@@ -35,6 +35,10 @@ export class GroupQueue {
     null;
   private shuttingDown = false;
 
+  getActiveCount(): number {
+    return this.activeCount;
+  }
+
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
     if (!state) {
@@ -351,7 +355,7 @@ export class GroupQueue {
     // via idle timeout or container timeout. The --rm flag cleans them up on exit.
     // This prevents WhatsApp reconnection restarts from killing working agents.
     const activeContainers: string[] = [];
-    for (const [_jid, state] of this.groups) {
+    for (const [jid, state] of this.groups) {
       if (state.process && !state.process.killed && state.containerName) {
         activeContainers.push(state.containerName);
       }
