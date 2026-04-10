@@ -83,12 +83,12 @@ Workers have no idle timeout (disabled via `disableIdleTimeout`). They stay up i
 
 ## Destroy
 
-When the master calls `destroy_worker`:
+When the master runs `ncf destroy`:
 
 1. **Container killed** if running.
 2. **Discord channel deleted.**
 3. **Registration removed** from `registered_groups` in SQLite.
-4. **Session ID preserved** in the `sessions` table so a future `create_worker` with `reuse: "resume"` can pass it to the SDK for continuation.
+4. **Session ID preserved** in the `sessions` table so a future `ncf create` with `reuse: "resume"` can pass it to the SDK for continuation.
 5. **Session dir preserved** (`data/sessions/{folder}/.claude/`) with conversation history.
 6. **Agent-runner cache deleted** (`data/sessions/{folder}/agent-runner-src/`).
 7. **Workspace preserved** (`groups/{folder}/`). Repos, code changes, and CLAUDE.md stay on disk.
@@ -109,7 +109,7 @@ All worker lifecycle events are recorded in `logs/worker-events.jsonl`, an appen
 
 **Fields:** `timestamp` (ISO 8601), `event`, `worker` (display name), `folder` (e.g. `discord_baba`), `details` (optional, event-specific metadata like backend/model info).
 
-The master agent can query this log via the `worker_history` MCP tool, which supports filtering by worker name (partial match), event type, time range (`since`), and result limit. Source: `src/worker-events.ts`.
+The master agent can query this log via `ncf history`, which supports filtering by worker name (partial match), event type, time range (`since`), and result limit. Source: `src/worker-events.ts`.
 
 Events are written by `logWorkerEvent()` during create, destroy, backend switch, and resume operations in `src/ipc.ts`.
 
@@ -129,10 +129,10 @@ Session IDs are preserved in SQLite, so conversation context survives across res
 
 The `groups/` directory is gitignored and holds per-agent workspaces:
 
-| Directory                | What it is                                                | Created by      |
-| ------------------------ | --------------------------------------------------------- | --------------- |
-| `groups/discord_main/`   | Master agent workspace (assembled CLAUDE.md, repos, logs) | Startup sync    |
-| `groups/discord_{name}/` | Worker workspaces (repos, code, assembled CLAUDE.md)      | `create_worker` |
+| Directory                | What it is                                                | Created by   |
+| ------------------------ | --------------------------------------------------------- | ------------ |
+| `groups/discord_main/`   | Master agent workspace (assembled CLAUDE.md, repos, logs) | Startup sync |
+| `groups/discord_{name}/` | Worker workspaces (repos, code, assembled CLAUDE.md)      | `ncf create` |
 
 All `groups/` directories are ephemeral workspaces (gitignored). Agent instructions are assembled from layered fragments at startup (master) or worker creation time:
 

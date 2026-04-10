@@ -24,6 +24,7 @@ How to do X (step-by-step):
 
 Lookup-oriented:
 
+- [CLI reference](reference/cli.md) — ncf commands for worker management
 - [SDK internals](reference/sdk-internals.md) — Claude Agent SDK deep dive
 
 ## Upstream Docs

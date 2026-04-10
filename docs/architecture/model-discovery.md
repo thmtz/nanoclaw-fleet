@@ -43,6 +43,7 @@ curl -s http://localhost:3003/models/resolve/Qwen/Qwen3-Coder
 **Note:** Space-separated queries like "kimi fast" don't split correctly (spaces aren't in the delimiter set). This is a known limitation. Use hyphens instead: "kimi-fast".
 
 On no match, returns 404 with the full list of available models:
+
 ```json
 { "error": "no match for \"nonexistent\"", "available": ["moonshotai/Kimi-K2.5", ...] }
 ```
@@ -52,7 +53,7 @@ On no match, returns 404 with the full list of available models:
 When a user says "create agent foo using neuralwatt kimi-fast," the master agent:
 
 1. Calls `/models/resolve/kimi-fast` to get the model ID
-2. Passes the resolved model to the `create_worker` MCP tool
+2. Runs `ncf create foo --backend neuralwatt --model <resolved-model>`
 3. The host writes the model to `data/worker-backends.json`
 4. The shim reads this config on each request and routes to the correct model
 
@@ -60,6 +61,6 @@ The master doesn't need to know the full model catalog. It delegates resolution 
 
 ## Runtime Model Switching
 
-The `switch_backend` MCP tool (master-only) can change a Neuralwatt worker's model without destroying it. The master resolves the new model name via `/models/resolve`, then updates `data/worker-backends.json`. The shim re-reads this file on each request, so the change takes effect immediately.
+The `ncf switch` command can change a Neuralwatt worker's model without destroying it. The master resolves the new model name via `/models/resolve`, then `ncf switch` updates `data/worker-backends.json`. The shim re-reads this file on each request, so the change takes effect immediately.
 
 Switching between Anthropic and Neuralwatt backends requires destroying and recreating the worker, since the backend determines which proxy the container talks to (port 3001 vs 3003), and that's set at container startup.

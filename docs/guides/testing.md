@@ -355,11 +355,11 @@ docker logs $(docker ps -q --filter name=test-e2e) 2>&1 | tail -50
 
 ## Common Failures
 
-| Symptom                                  | Likely cause                                                | Fix                                                        |
-| ---------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
-| Worker channel created, no response      | `requires_trigger` is 1                                     | Check SQLite, should be 0 for workers                      |
-| "create_worker: missing required fields" | `DISCORD_GUILD_ID` not in container env                     | Check `.env` and container-runner.ts                       |
-| Agent doesn't know about MCP tools       | Agent-runner auto-sync failed or container hasn't restarted | Kill container, message worker again (auto-syncs by mtime) |
-| Container builds don't pick up changes   | Docker layer caching                                        | `./container/build.sh` (uses `--no-cache`)                 |
-| Worker stuck in crash loop               | Stale session state                                         | Delete `.claude/` for that worker, restart                 |
-| Shim returns 500                         | Neuralwatt API key invalid or model not found               | Check your Neuralwatt API key file, test with curl         |
+| Symptom                                | Likely cause                                                | Fix                                                        |
+| -------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
+| Worker channel created, no response    | `requires_trigger` is 1                                     | Check SQLite, should be 0 for workers                      |
+| "ncf create: missing required fields"  | `DISCORD_GUILD_ID` not in container env                     | Check `.env` and container-runner.ts                       |
+| Agent doesn't know about MCP tools     | Agent-runner auto-sync failed or container hasn't restarted | Kill container, message worker again (auto-syncs by mtime) |
+| Container builds don't pick up changes | Docker layer caching                                        | `./container/build.sh` (uses `--no-cache`)                 |
+| Worker stuck in crash loop             | Stale session state                                         | Delete `.claude/` for that worker, restart                 |
+| Shim returns 500                       | Neuralwatt API key invalid or model not found               | Check your Neuralwatt API key file, test with curl         |
