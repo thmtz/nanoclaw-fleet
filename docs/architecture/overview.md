@@ -80,6 +80,10 @@ When you need a clean slate: destroy the worker, delete its session cache, and r
 
 There is no automatic "rolling update" mechanism. This is an open design area.
 
+### Observability
+
+A single user message crosses six layers (Discord → host → container → agent SDK → API → back). Every message gets a **trace ID** (`t-<ts>-<hex>`) at the host that propagates through container input and agent-runner stderr, so you can grep one ID to follow a request end-to-end. Container stderr is archived to `logs/workers/<folder>/stderr-<ts>.log` on exit. The host writes structured JSONL with trace IDs on all message-path events. See [design/observability.md](../../design/observability.md) for the full design.
+
 ## Upstream
 
 This fork tracks [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw). The upstream project provides the core channel system, container isolation, and skill architecture. This fork adds dynamic workers, dual-backend inference, model discovery, streaming, and energy tracking.

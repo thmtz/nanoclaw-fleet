@@ -114,7 +114,22 @@ jq 'select(.msg == "Container first output" and .startupMs > 10000)' logs/nanocl
 jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 ```
 
+**Trace IDs**: Every user message gets a trace ID (`t-<timestamp>-<hex>`) that propagates from host → container → agent-runner logs. Use it to follow a single request across all layers:
+
+```bash
+# Find all host events for a trace
+jq 'select(.traceId == "t-1775854357638-9475")' logs/nanoclaw.5.jsonl
+
+# Search across host logs AND container stderr
+grep "t-1775854357638-9475" logs/nanoclaw.*.jsonl logs/workers/*/stderr-*.log
+
+# Find the trace ID for a recent message (look for "Processing messages")
+jq 'select(.msg == "Processing messages") | {traceId, group, messageCount}' logs/nanoclaw.5.jsonl | tail -5
+```
+
 **Container startup timing**: `Container first output` log entries include `startupMs` (spawn to first SDK output). The entrypoint's detailed `_profile` steps (init.sh, tsc, etc.) are logged at DEBUG level on stderr. View with `docker logs <container-name>`.
+
+**Container stderr archives** at `logs/workers/<folder>/stderr-<ts>.log` preserve agent-runner output (`[msg #N]` entries, SDK debug output, MessageStream counters) after containers exit. Last 20 files per worker are retained. These are the same logs you'd see with `docker logs` but survive container removal.
 
 **Worker event log** at `logs/worker-events.jsonl` tracks lifecycle events (created, destroyed, backend_switched, resumed). The master can query this via the `worker_history` MCP tool, or you can grep/jq it directly.
 
