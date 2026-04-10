@@ -18,14 +18,14 @@ Host-side test tools live in `tools/`.
 
 ## What Changed → What to Test
 
-| I changed... | Test by... |
-|-|-|
-| `src/ipc.ts` (worker lifecycle) | Create, message, destroy, recreate with resume (scenarios 1-4, 10-11) |
-| `src/container-runner.ts` (mounts, env) | Create a worker, exec in, check mounts and env vars (scenarios 1, 12) |
-| `container/` or `worker-profiles/` | Rebuild image, restart, message a worker (see "After Container-Side Changes" below) |
-| `tools/anthropic-shim.ts` | Restart shim, curl test, message a NW worker (see "After Shim Changes" below) |
-| `container/agent-runner/src/` (MCP tools) | Restart, message a worker, verify the tool works (auto-syncs by mtime) |
-| Inference routing or model config | Create NW worker, switch model, verify (scenarios 5-8) |
+| I changed...                              | Test by...                                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| `src/ipc.ts` (worker lifecycle)           | Create, message, destroy, recreate with resume (scenarios 1-4, 10-11)               |
+| `src/container-runner.ts` (mounts, env)   | Create a worker, exec in, check mounts and env vars (scenarios 1, 12)               |
+| `container/` or `worker-profiles/`        | Rebuild image, restart, message a worker (see "After Container-Side Changes" below) |
+| `tools/anthropic-shim.ts`                 | Restart shim, curl test, message a NW worker (see "After Shim Changes" below)       |
+| `container/agent-runner/src/` (MCP tools) | Restart, message a worker, verify the tool works (auto-syncs by mtime)              |
+| Inference routing or model config         | Create NW worker, switch model, verify (scenarios 5-8)                              |
 
 ## Quick Smoke Test
 
@@ -39,23 +39,33 @@ npx tsx tools/e2e-test.ts --skip-nw    # skip Neuralwatt tests (~45s)
 
 ## Host-Side Tools
 
-Shell scripts for interacting with NanoClaw without Discord:
+The `ncf` CLI provides unified access to all NanoClaw operations:
 
-**nc-inject.sh** — Send a message to any channel as if a user typed it:
 ```bash
-./tools/nc-inject.sh master "list all workers"
-./tools/nc-inject.sh --wait test-worker "what model are you?"
-./tools/nc-inject.sh dc:YOUR_CHANNEL_ID "hi"
+ncf status [--json]                      # Show all workers, containers, backends
+ncf logs <worker> [--cache|--slow|--follow]  # Per-worker audit logs
+ncf inject [--wait] <channel> <msg>      # Send message to any channel
+ncf switch <worker> <backend> [model]    # Switch backend/model
+ncf create <name> [--backend --model]    # Create new worker
+ncf destroy <worker>                     # Destroy worker
+ncf restart <worker> [--fresh]           # Restart container
+ncf session <worker> [lines]             # Show session transcript
+ncf history [worker]                     # Worker lifecycle events
+ncf debug                                # System state dump
+ncf rebuild                              # Rebuild container image
 ```
+
+**Examples:**
+
+```bash
+ncf inject master "list all workers"
+ncf inject --wait test-worker "what model are you?"
+ncf inject dc:YOUR_CHANNEL_ID "hi"
+ncf logs test-worker --cache            # Show cache hits
+ncf logs test-worker --follow           # Follow container logs
+```
+
 The `--wait` flag polls docker logs until the agent responds and prints the output.
-
-**nc-ipc.sh** — Send IPC commands directly (bypasses the master agent):
-```bash
-./tools/nc-ipc.sh discord_main '{"type":"create_worker","guild_id":"YOUR_GUILD_ID","channel_name":"test","folder":"discord_test","trigger":"@YourBot"}'
-./tools/nc-ipc.sh discord_main '{"type":"destroy_worker","jid":"dc:123456"}'
-./tools/nc-ipc.sh discord_main '{"type":"list_workers"}'
-```
-Note: `create_worker` via IPC requires `guild_id`, `channel_name`, `folder`, and `trigger`. The MCP tool fills in defaults from env vars, but IPC commands need all four.
 
 ## Test Scenarios
 
@@ -63,13 +73,14 @@ Note: `create_worker` via IPC requires `guild_id`, `channel_name`, `folder`, and
 
 ```bash
 # Via master agent (natural language)
-./tools/nc-inject.sh master "create a worker called test-e2e"
+ncf inject master "create a worker called test-e2e"
 
-# Via IPC (direct — requires all four fields)
-./tools/nc-ipc.sh discord_main '{"type":"create_worker","guild_id":"YOUR_GUILD_ID","channel_name":"test-e2e","folder":"discord_test-e2e","trigger":"@YourBot"}'
+# Via CLI (direct — bypasses master)
+ncf create test-e2e
 ```
 
 **Verify:**
+
 - Discord channel `#test-e2e` created
 - `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE folder='discord_test-e2e';"` shows a row
 - `ls groups/discord_test-e2e/` exists (workspace created)
@@ -77,10 +88,11 @@ Note: `create_worker` via IPC requires `guild_id`, `channel_name`, `folder`, and
 ### 2. Message a Worker
 
 ```bash
-./tools/nc-inject.sh --wait test-e2e "say hello"
+ncf inject --wait test-e2e "say hello"
 ```
 
 **Verify:**
+
 - Container spawned: `docker ps | grep test-e2e`
 - Agent responded (check `--wait` output or logs)
 - `tail -20 logs/nanoclaw.log` shows no errors
@@ -89,16 +101,17 @@ Note: `create_worker` via IPC requires `guild_id`, `channel_name`, `folder`, and
 
 ```bash
 # Send a message to establish a session
-./tools/nc-inject.sh --wait test-e2e "remember the word 'pineapple'"
+ncf inject --wait test-e2e "remember the word 'pineapple'"
 
 # Kill the container (simulates crash)
-docker kill $(docker ps -q --filter name=test-e2e)
+ncf restart test-e2e
 
-# Send another message (should spawn fresh container, resume session)
-./tools/nc-inject.sh --wait test-e2e "what word did I ask you to remember?"
+# Send another message (should resume session)
+ncf inject --wait test-e2e "what word did I ask you to remember?"
 ```
 
 **Verify:**
+
 - New container spawned
 - Session ID preserved in SQLite: `sqlite3 store/messages.db "SELECT session_id FROM sessions WHERE group_folder='discord_test-e2e';"`
 - Agent has conversation context (may lose some due to compaction, but should have the gist)
@@ -116,10 +129,11 @@ systemctl --user restart nanoclaw
 sqlite3 store/messages.db "SELECT folder FROM registered_groups WHERE is_main=0;"
 
 # Message a worker — should spawn and respond
-./tools/nc-inject.sh --wait test-e2e "are you alive?"
+ncf inject --wait test-e2e "are you alive?"
 ```
 
 **Verify:**
+
 - All workers still registered after restart
 - Workers respond to messages (fresh container spawns)
 - Workspace files intact: `ls groups/discord_test-e2e/`
@@ -128,16 +142,17 @@ sqlite3 store/messages.db "SELECT folder FROM registered_groups WHERE is_main=0;
 
 ```bash
 # Create a Neuralwatt worker
-./tools/nc-inject.sh master "create a worker called nw-test with backend neuralwatt"
+ncf inject master "create a worker called nw-test with backend neuralwatt"
 
-# Or via IPC
-./tools/nc-ipc.sh discord_main '{"type":"create_worker","guild_id":"YOUR_GUILD_ID","channel_name":"nw-test","folder":"discord_nw-test","trigger":"@YourBot","backend":"neuralwatt"}'
+# Or via CLI
+ncf create nw-test --backend neuralwatt
 
 # Message it
-./tools/nc-inject.sh --wait nw-test "what model are you running?"
+ncf inject --wait nw-test "what model are you running?"
 ```
 
 **Verify:**
+
 - Worker routes through shim: `cat data/worker-backends.json | grep nw-test`
 - Shim logs show requests: check `logs/shim.error.log`
 - Agent responds using an open-source model
@@ -155,6 +170,7 @@ curl -s http://localhost:3003/models/resolve/deepseek
 ```
 
 **Verify:**
+
 - `/models` returns a list from Neuralwatt's API
 - `/models/resolve/<query>` returns a single model ID that matches the query
 
@@ -162,13 +178,16 @@ curl -s http://localhost:3003/models/resolve/deepseek
 
 ```bash
 # Switch an existing Neuralwatt worker's model
-./tools/nc-inject.sh master "switch nw-test to qwen coder"
+ncf inject master "switch nw-test to qwen coder"
+
+# Or via CLI
+ncf switch nw-test neuralwatt qwen-coder
 
 # Verify the config changed
-cat data/worker-backends.json | python3 -m json.tool
+ncf status --json | jq '.workers[] | select(.folder=="discord_nw-test")'
 
 # Message the worker to use the new model
-./tools/nc-inject.sh --wait nw-test "what model are you now?"
+ncf inject --wait nw-test "what model are you now?"
 ```
 
 ### 8. Streaming (Neuralwatt)
@@ -190,6 +209,7 @@ curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
 ```
 
 **Verify:**
+
 - Non-streaming returns a complete JSON response in Anthropic format
 - Streaming returns SSE events (`event: message_start`, `event: content_block_delta`, etc.)
 
@@ -206,13 +226,14 @@ curl -s http://localhost:3003/usage/discord_nw-test
 ### 10. Destroy a Worker
 
 ```bash
-./tools/nc-inject.sh master "destroy test-e2e"
+ncf inject master "destroy test-e2e"
 
-# Or via IPC
-./tools/nc-ipc.sh discord_main '{"type":"destroy_worker","jid":"dc:<channel-id>"}'
+# Or via CLI
+ncf destroy test-e2e
 ```
 
 **Verify:**
+
 - Discord channel deleted
 - Registration removed: `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE folder='discord_test-e2e';"` returns nothing
 - Session ID preserved: `sqlite3 store/messages.db "SELECT * FROM sessions WHERE group_folder='discord_test-e2e';"` still has a row (for resume)
@@ -226,24 +247,27 @@ After destroying a worker, its workspace and session state are preserved on disk
 
 ```bash
 # First, destroy a worker that has done some work
-./tools/nc-inject.sh master "destroy test-e2e"
+ncf inject master "destroy test-e2e"
 
 # Recreate with the same name
-./tools/nc-inject.sh master "create a worker called test-e2e"
+ncf inject master "create a worker called test-e2e"
 # Master detects existing workspace → asks "resume" or "fresh"
 # Answer "resume"
 ```
 
 **What "resume" preserves:**
+
 - Workspace (`groups/discord_test-e2e/`): repos, code changes, CLAUDE.md
 - Session ID in SQLite: the SDK resumes the previous conversation
 - SDK state (`.claude/`): conversation history, compacted context
 
 **What "resume" rebuilds:**
+
 - Fresh container (new image, re-runs `init.sh`)
 - `init.sh` skips already-cloned repos but reinstalls tools/packages
 
 **Verify:**
+
 ```bash
 # Workspace intact
 ls groups/discord_test-e2e/
@@ -252,7 +276,7 @@ ls groups/discord_test-e2e/
 sqlite3 store/messages.db "SELECT session_id FROM sessions WHERE group_folder='discord_test-e2e';"
 
 # Message the worker — it should have conversation context
-./tools/nc-inject.sh --wait test-e2e "what were we working on?"
+ncf inject --wait test-e2e "what were we working on?"
 ```
 
 **What "fresh" does differently:** Wipes everything (workspace, session, SDK state). The worker starts completely clean as if it never existed.
@@ -281,7 +305,7 @@ When you modify `src/`, `tools/`, or other host code:
 npm run build
 npx vitest run
 systemctl --user restart nanoclaw
-./tools/nc-inject.sh --wait test-e2e "say hi" && tail -10 logs/nanoclaw.log
+ncf inject --wait test-e2e "say hi" && tail -10 logs/nanoclaw.log
 ```
 
 ## After Container-Side Changes
@@ -293,7 +317,7 @@ npm run build
 ./container/build.sh
 systemctl --user restart nanoclaw
 # Agent-runner source auto-syncs by mtime; containers respawn on next message
-./tools/nc-inject.sh --wait test-e2e "say hi"
+ncf inject --wait test-e2e "say hi"
 ```
 
 ## After Shim Changes
@@ -331,11 +355,11 @@ docker logs $(docker ps -q --filter name=test-e2e) 2>&1 | tail -50
 
 ## Common Failures
 
-| Symptom | Likely cause | Fix |
-|-|-|-|
-| Worker channel created, no response | `requires_trigger` is 1 | Check SQLite, should be 0 for workers |
-| "create_worker: missing required fields" | `DISCORD_GUILD_ID` not in container env | Check `.env` and container-runner.ts |
-| Agent doesn't know about MCP tools | Agent-runner auto-sync failed or container hasn't restarted | Kill container, message worker again (auto-syncs by mtime) |
-| Container builds don't pick up changes | Docker layer caching | `./container/build.sh` (uses `--no-cache`) |
-| Worker stuck in crash loop | Stale session state | Delete `.claude/` for that worker, restart |
-| Shim returns 500 | Neuralwatt API key invalid or model not found | Check your Neuralwatt API key file, test with curl |
+| Symptom                                  | Likely cause                                                | Fix                                                        |
+| ---------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
+| Worker channel created, no response      | `requires_trigger` is 1                                     | Check SQLite, should be 0 for workers                      |
+| "create_worker: missing required fields" | `DISCORD_GUILD_ID` not in container env                     | Check `.env` and container-runner.ts                       |
+| Agent doesn't know about MCP tools       | Agent-runner auto-sync failed or container hasn't restarted | Kill container, message worker again (auto-syncs by mtime) |
+| Container builds don't pick up changes   | Docker layer caching                                        | `./container/build.sh` (uses `--no-cache`)                 |
+| Worker stuck in crash loop               | Stale session state                                         | Delete `.claude/` for that worker, restart                 |
+| Shim returns 500                         | Neuralwatt API key invalid or model not found               | Check your Neuralwatt API key file, test with curl         |

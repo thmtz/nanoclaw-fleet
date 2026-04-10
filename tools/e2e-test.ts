@@ -115,10 +115,10 @@ function ipc(payload: Record<string, unknown>): void {
   renameSync(tmpFile, destFile);
 }
 
-// ── nc-inject helper ─────────────────────────────────────────
+// ── ncf inject helper ─────────────────────────────────────────
 
 function inject(channel: string, message: string) {
-  sh(`"${PROJECT_DIR}/tools/nc-inject.sh" "${channel}" "${message}"`, {
+  sh(`"${PROJECT_DIR}/ncf" inject "${channel}" "${message}"`, {
     timeout: 10_000,
   });
 }

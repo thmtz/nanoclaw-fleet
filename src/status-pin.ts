@@ -16,12 +16,10 @@ import { formatCurrentTime } from './timezone.js';
 const execFileAsync = promisify(execFile);
 
 const STATE_KEY = 'pinned_status_message_id';
-const NC_STATUS_SCRIPT = path.resolve(process.cwd(), 'tools/nc-status.sh');
+const NCF_CLI = path.resolve(process.cwd(), 'ncf');
 
-// Discord API error codes
-const DISCORD_ERROR_UNKNOWN_MESSAGE = 10008; // Message was deleted or not found
+const DISCORD_ERROR_UNKNOWN_MESSAGE = 10008;
 
-/** Prevent overlapping updateStatusPin calls (e.g. if nc-status.sh is slow). */
 let updateInProgress = false;
 
 export interface StatusPinDeps {
@@ -31,9 +29,8 @@ export interface StatusPinDeps {
 }
 
 async function getStatusOutput(): Promise<string> {
-  const { stdout } = await execFileAsync('bash', [NC_STATUS_SCRIPT], {
+  const { stdout } = await execFileAsync('bash', [NCF_CLI, 'status'], {
     timeout: 15_000,
-    env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
   });
   return stdout.trim();
 }
@@ -60,7 +57,7 @@ async function doUpdateStatusPin(
 ): Promise<void> {
   const statusText = await getStatusOutput();
   if (!statusText) {
-    logger.warn('nc-status.sh returned empty output');
+    logger.warn('ncf status returned empty output');
     return;
   }
 

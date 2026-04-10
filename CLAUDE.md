@@ -7,6 +7,7 @@ Personal Claude assistant with dynamic worker agents. See [README.md](README.md)
 **New here?** Read [docs/architecture/overview.md](docs/architecture/overview.md) first for goals and architecture. Then [docs/guides/testing.md](docs/guides/testing.md) to understand how to verify changes.
 
 Before working on a subsystem, read the relevant doc:
+
 - **Architecture and goals:** [docs/architecture/overview.md](docs/architecture/overview.md)
 - **Worker create/destroy/resume:** [docs/architecture/container-lifecycle.md](docs/architecture/container-lifecycle.md)
 - **Inference routing (Anthropic vs Neuralwatt):** [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md)
@@ -33,6 +34,7 @@ This repository uses **trunk-based development**:
 ### Branch Naming
 
 Use conventional prefixes:
+
 - `feat/` — New features
 - `fix/` — Bug fixes
 - `docs/` — Documentation changes
@@ -49,9 +51,11 @@ Example: `feat/dynamic-workers`, `fix/ipc-feedback`
 ### Git Hooks
 
 Enable on every fresh clone:
+
 ```bash
 git config core.hooksPath .githooks
 ```
+
 This is a per-clone setting and must be re-run after cloning to a new machine.
 
 **Pre-push hook** — blocks direct pushes to `main`. There is no exception for "small fixes." Always use a feature branch + PR, no matter how trivial the change seems.
@@ -62,14 +66,14 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 
 ## Skills
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+| Skill               | When to Use                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| `/setup`            | First-time installation, authentication, service configuration    |
+| `/customize`        | Adding channels, integrations, changing behavior                  |
+| `/debug`            | Container issues, logs, troubleshooting                           |
+| `/update-nanoclaw`  | Bring upstream NanoClaw updates into a customized install         |
+| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch     |
+| `/get-qodo-rules`   | Load org- and repo-level coding rules from Qodo before code tasks |
 
 ## Development
 
@@ -82,6 +86,7 @@ npm run build        # Compile TypeScript
 ```
 
 Service management:
+
 ```bash
 # macOS (launchd)
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
@@ -113,25 +118,30 @@ jq 'select(.level >= 50)' logs/nanoclaw.jsonl
 
 **Worker event log** at `logs/worker-events.jsonl` tracks lifecycle events (created, destroyed, backend_switched, resumed). The master can query this via the `worker_history` MCP tool, or you can grep/jq it directly.
 
-**Per-worker audit logs** track every API call at `logs/workers/<folder>/turns.jsonl`. Each entry has: model, backend, tokens (in/out/cached), latency, energy, and stop reason. Use `tools/nc-logs.sh` to query, or the shim's `/logs` endpoints:
+**Per-worker audit logs** track every API call at `logs/workers/<folder>/turns.jsonl`. Each entry has: model, backend, tokens (in/out/cached), latency, energy, and stop reason. Use `ncf logs` to query:
 
 ```bash
-tools/nc-logs.sh                          # summary of all workers
-tools/nc-logs.sh <worker> --cache         # show cache hits
-tools/nc-logs.sh <worker> --slow 5000     # requests slower than 5s
-curl http://localhost:3003/logs            # JSON summary via shim
-curl http://localhost:3003/logs/<folder>   # last 20 turns for a worker
+ncf logs <worker>              # last 20 turns
+ncf logs <worker> --cache      # show only cache hits
+ncf logs <worker> --slow       # show only slow requests (>5s)
+ncf logs <worker> --follow     # follow container logs in real-time
 ```
 
 **Host-side tools** for testing and debugging:
 
-| Tool | Purpose |
-|-|-|
-| `tools/e2e-test.ts` | Smoke test: creates a worker, messages it, tests resume, NW backend, destroy. ~65s. |
-| `tools/nc-inject.sh <channel> <msg>` | Inject a message into a channel (triggers agent response) |
-| `tools/nc-ipc.sh <group> <json>` | Send an IPC command (create/destroy workers, list, etc.) |
-| `tools/read-session.sh <group> [lines]` | Display a worker's session transcript as readable prose |
-| `tools/nc-logs.sh [worker] [--cache\|--slow]` | Query per-worker audit logs (tokens, latency, cache hits) |
+| Tool                                    | Purpose                                                        |
+| --------------------------------------- | -------------------------------------------------------------- |
+| `ncf status [--json]`                   | Show all workers, containers, backends, usage                  |
+| `ncf logs <worker>`                     | Per-worker audit logs (tokens, latency, cache)                 |
+| `ncf inject <channel> <msg>`            | Inject a message into a channel (triggers agent response)      |
+| `ncf switch <worker> <backend> [model]` | Switch inference backend/model                                 |
+| `ncf create <name>`                     | Create new worker                                              |
+| `ncf destroy <worker>`                  | Destroy worker                                                 |
+| `ncf restart <worker> [--fresh]`        | Restart container (optionally clear session)                   |
+| `ncf session <worker>`                  | Show session transcript                                        |
+| `ncf history [worker]`                  | Worker lifecycle events (created, destroyed, backend switches) |
+| `ncf debug`                             | System state dump (paths, DB, containers, proxies)             |
+| `ncf rebuild`                           | Rebuild container image                                        |
 
 ## Gotchas
 
@@ -148,7 +158,7 @@ After implementing a feature or fix, check whether documentation needs updating:
 - **`.env.example`** if new env vars were added
 - **`instructions/`** if agent capabilities or behavior changed (global, master, or worker)
 
-**You must personally exercise your changes before declaring done.** Compiling and passing unit tests is not enough. Use `tools/nc-inject.sh` and `tools/nc-ipc.sh` to send real messages, create/destroy workers, and confirm the system behaves correctly. If you changed worker lifecycle code, create a worker, message it, destroy it, and recreate with resume. If you changed the shim, curl the endpoint and verify the response. If you changed the container image or init.sh, rebuild, restart, and message a worker to confirm it boots. Check `logs/nanoclaw.log` for errors after every test. See [docs/guides/testing.md](docs/guides/testing.md) for exact commands and scenarios.
+**You must personally exercise your changes before declaring done.** Compiling and passing unit tests is not enough. Use `ncf inject` and `ncf switch`/`ncf create`/`ncf destroy` to send real messages, create/destroy workers, and confirm the system behaves correctly. If you changed worker lifecycle code, create a worker, message it, destroy it, and recreate with resume. If you changed the shim, curl the endpoint and verify the response. If you changed the container image or init.sh, rebuild, restart, and message a worker to confirm it boots. Check `logs/nanoclaw.log` for errors after every test. See [docs/guides/testing.md](docs/guides/testing.md) for exact commands and scenarios.
 
 ## Issue Tracking
 

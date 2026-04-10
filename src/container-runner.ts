@@ -19,6 +19,7 @@ import {
   NEURALWATT_PROXY_PORT,
   TIMEZONE,
   WORKER_API_KEY_PREFIX,
+  WORKER_BACKENDS_FILENAME,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -348,22 +349,15 @@ function buildContainerArgs(
   // Beads: containers reach the host's dolt server via Docker gateway
   args.push('-e', 'BEADS_DOLT_SERVER_HOST=host.docker.internal');
 
-  // Pass model selection to the container agent
-  const { NANOCLAW_MODEL, DISCORD_GUILD_ID } = readEnvFile([
-    'NANOCLAW_MODEL',
-    'DISCORD_GUILD_ID',
-  ]);
-  if (NANOCLAW_MODEL) {
-    args.push('-e', `NANOCLAW_MODEL=${NANOCLAW_MODEL}`);
-  }
-
   // Pass Discord guild ID for dynamic worker creation
+  const { DISCORD_GUILD_ID } = readEnvFile(['DISCORD_GUILD_ID']);
   if (DISCORD_GUILD_ID) {
     args.push('-e', `DISCORD_GUILD_ID=${DISCORD_GUILD_ID}`);
   }
 
   // Pass worker profile env vars and detect backend setting (single read).
   let useNeuralwatt = false;
+  let neuralwattModel: string | null = null;
   if (groupFolder) {
     const workerEnvPath = path.join(
       DATA_DIR,
@@ -384,6 +378,30 @@ function buildContainerArgs(
           }
         }
       }
+    }
+
+    // For Neuralwatt workers, read model from worker-backends.json (source of truth).
+    // Global .env may have Anthropic model like "opus" which causes mismatches.
+    if (useNeuralwatt) {
+      const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
+      try {
+        const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
+        neuralwattModel = backends[groupFolder]?.model || null;
+      } catch {
+        // File missing or corrupt — will fall back to env var below
+      }
+    }
+  }
+
+  // Pass model to container agent.
+  // For Neuralwatt: use model from worker-backends.json (resolved above).
+  // For Anthropic: use model from global .env (opus, sonnet, etc.).
+  if (neuralwattModel) {
+    args.push('-e', `NANOCLAW_MODEL=${neuralwattModel}`);
+  } else if (!useNeuralwatt) {
+    const { NANOCLAW_MODEL } = readEnvFile(['NANOCLAW_MODEL']);
+    if (NANOCLAW_MODEL) {
+      args.push('-e', `NANOCLAW_MODEL=${NANOCLAW_MODEL}`);
     }
   }
 
