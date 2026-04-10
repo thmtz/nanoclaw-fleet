@@ -600,16 +600,50 @@ function cmdSession(
   }
 
   if (json) {
+    // Compact JSONL: one line per action, easy for agents to grep/filter.
+    // Each line has: role, type, and a preview of the content.
+    // Inspired by gpuctl's per-command logging — summary inline, full
+    // content available via the raw session file if needed.
     const content = sh(`tail -n ${lines} "${file}"`, { ignoreError: true });
-    const entries: any[] = [];
     for (const line of content.split('\n').filter(Boolean)) {
       try {
-        entries.push(JSON.parse(line));
+        const entry = JSON.parse(line);
+        const m = entry.message;
+        if (!m) continue;
+        const blocks = Array.isArray(m.content) ? m.content : typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : [];
+        for (const block of blocks) {
+          const out: Record<string, unknown> = { role: m.role, type: block.type };
+          if (block.type === 'text') {
+            out.text = block.text?.slice(0, 300);
+          } else if (block.type === 'tool_use') {
+            out.tool = block.name;
+            if (block.name === 'Bash') {
+              out.command = (block.input?.command || '').split('\n')[0].slice(0, 200);
+            } else if (block.name === 'Read' || block.name === 'Edit' || block.name === 'Write') {
+              out.file = block.input?.file_path;
+            } else if (block.name === 'Grep') {
+              out.pattern = block.input?.pattern;
+              out.path = block.input?.path;
+            } else if (block.name?.includes('send_message')) {
+              out.text = block.input?.text?.slice(0, 300);
+            } else {
+              out.args = Object.keys(block.input || {});
+            }
+          } else if (block.type === 'tool_result') {
+            const resultContent = block.content;
+            if (typeof resultContent === 'string') {
+              out.result = resultContent.slice(0, 300);
+            } else if (Array.isArray(resultContent)) {
+              const textParts = resultContent.filter((r: any) => r.type === 'text').map((r: any) => r.text);
+              out.result = textParts.join('\n').slice(0, 300);
+            }
+          } else if (block.type === 'thinking') {
+            out.text = block.thinking?.slice(0, 200);
+          }
+          console.log(JSON.stringify(out));
+        }
       } catch {}
     }
-    console.log(
-      JSON.stringify({ worker, file: path.basename(file), entries }, null, 2),
-    );
     return;
   }
 
@@ -836,7 +870,8 @@ ${BOLD}COMMANDS${NC}
   ${CYAN}destroy${NC} <worker>       Destroy worker (keeps workspace)
   
   ${CYAN}session${NC} <worker> [n]   Show session transcript (default: 80 lines)
-    --live                Stream transcript in real-time (user msgs, tool calls, responses)
+    --live                Stream transcript in real-time (tool calls, responses)
+    --json                Compact JSONL — one line per action, easy to grep/filter
   
   ${CYAN}history${NC} [worker]       Show worker event history
     --since <date>       Events since date (ISO format)
