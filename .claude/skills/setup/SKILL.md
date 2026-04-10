@@ -1,341 +1,239 @@
 ---
 name: setup
-description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate messaging channels, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
+description: Run initial NanoClaw Fleet setup. Use when user wants to install dependencies, configure Discord, set up worker profiles, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
 ---
 
-# NanoClaw Setup
+# NanoClaw Fleet Setup
 
-Run setup steps automatically. Only pause when user action is required (channel authentication, configuration choices). Setup uses `bash setup.sh` for bootstrap, then `npx tsx setup/index.ts --step <name>` for all other steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
+This is a fork of NanoClaw customized for Discord-based fleet management. Setup uses `bash setup.sh` for bootstrap, then `npx tsx setup/index.ts --step <name>` for remaining steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
 
-**Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. authenticating a channel, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
+**Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. creating a Discord bot, pasting a token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
 
-**UX Note:** Use `AskUserQuestion` for multiple-choice questions only (e.g. "Docker or Apple Container?", "which channels?"). Do NOT use it when free-text input is needed (e.g. phone numbers, tokens, paths) — just ask the question in plain text and wait for the user's reply.
+**UX Note:** Use `AskUserQuestion` for all user-facing questions.
 
-## 0. Git & Fork Setup
+## Before You Start
 
-Check the git remote configuration to ensure the user has a fork and upstream is configured.
+Tell the user what setup will walk them through. If they already have some of these, each step can reuse existing credentials instead of asking again.
 
-Run:
-- `git remote -v`
+1. **Claude auth**: OAuth token (via `claude setup-token`) or Anthropic API key
+2. **Discord bot token**: from the Discord Developer Portal
+3. **Discord Guild (Server) ID**: right-click server name in Discord
+4. **Discord Channel ID** for `#master`: right-click the channel in Discord
+5. **GitHub PAT** *(optional)*: only needed if workers clone private repos
+6. **OpenAI-compatible API key** *(optional)*: only if using open-weight models
 
-**Case A — `origin` points to `qwibitai/nanoclaw` (user cloned directly):**
+## 0. Git Remote Setup
 
-The user cloned instead of forking. AskUserQuestion: "You cloned NanoClaw directly. We recommend forking so you can push your customizations. Would you like to set up a fork?"
-- Fork now (recommended) — walk them through it
-- Continue without fork — they'll only have local changes
+This fork uses `thmtz/nanoclaw-fleet` as `origin`. Upstream NanoClaw (`qwibitai/nanoclaw`) should be configured as `upstream` for pulling updates.
 
-If fork: instruct the user to fork `qwibitai/nanoclaw` on GitHub (they need to do this in their browser), then ask them for their GitHub username. Run:
-```bash
-git remote rename origin upstream
-git remote add origin https://github.com/<their-username>/nanoclaw.git
-git push --force origin main
-```
-Verify with `git remote -v`.
+Run `git remote -v`.
 
-If continue without fork: add upstream so they can still pull updates:
-```bash
-git remote add upstream https://github.com/qwibitai/nanoclaw.git
-```
+- If no `upstream` remote exists, add it:
+  ```bash
+  git remote add upstream https://github.com/qwibitai/nanoclaw.git
+  ```
+- If `origin` points to `thmtz/nanoclaw-fleet` and the user wants to push their own customizations, suggest they fork `thmtz/nanoclaw-fleet` on GitHub and update their origin.
 
-**Case B — `origin` points to user's fork, no `upstream` remote:**
-
-Add upstream:
-```bash
-git remote add upstream https://github.com/qwibitai/nanoclaw.git
-```
-
-**Case C — both `origin` (user's fork) and `upstream` (qwibitai) exist:**
-
-Already configured. Continue.
-
-**Verify:** `git remote -v` should show `origin` → user's repo, `upstream` → `qwibitai/nanoclaw.git`.
+No need to fork upstream NanoClaw directly. This repo already includes everything.
 
 ## 1. Bootstrap (Node.js + Dependencies)
 
 Run `bash setup.sh` and parse the status block.
 
-- If NODE_OK=false → Node.js is missing or too old. Use `AskUserQuestion: Would you like me to install Node.js 22?` If confirmed:
-  - macOS: `brew install node@22` (if brew available) or install nvm then `nvm install 22`
-  - Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`, or nvm
-  - After installing Node, re-run `bash setup.sh`
-- If DEPS_OK=false → Read `logs/setup.log`. Try: delete `node_modules`, re-run `bash setup.sh`. If native module build fails, install build tools (`xcode-select --install` on macOS, `build-essential` on Linux), then retry.
-- If NATIVE_OK=false → better-sqlite3 failed to load. Install build tools and re-run.
-- Record PLATFORM and IS_WSL for later steps.
+- If NODE_OK=false: Node.js is missing or too old. AskUserQuestion: "Would you like me to install Node.js 22?"
+  - macOS: `brew install node@22` or nvm
+  - Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`
+  - Re-run `bash setup.sh` after installing
+- If DEPS_OK=false: delete `node_modules`, re-run `bash setup.sh`. If native module build fails, install build tools (`build-essential` on Linux, `xcode-select --install` on macOS).
+- If NATIVE_OK=false: better-sqlite3 failed. Install build tools and re-run.
+- Record PLATFORM for later steps.
 
 ## 2. Check Environment
 
 Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
-- If HAS_AUTH=true → WhatsApp is already configured, note for step 5
-- If HAS_REGISTERED_GROUPS=true → note existing config, offer to skip or reconfigure
-- Record APPLE_CONTAINER and DOCKER values for step 3
+- Record DOCKER value for step 3
+- If HAS_ENV=true: `.env` already exists — step 4 should check it for existing credentials before asking
+- If HAS_REGISTERED_GROUPS=true: note existing config, offer to skip or reconfigure
 
-### OpenClaw Migration Detection
+## 3. Docker Setup
 
-Check for an existing OpenClaw installation:
+This fork uses Docker for worker containers (Apple Container is not supported for fleet workers).
 
-```bash
-ls -d ~/.openclaw 2>/dev/null || ls -d ~/.clawdbot 2>/dev/null
-```
+- DOCKER=running: continue to step 4
+- DOCKER=installed_not_running: `sudo systemctl start docker` (Linux) or `open -a Docker` (macOS). Wait 15s, re-check.
+- DOCKER=not_found: AskUserQuestion: "Docker is required. Install it?"
+  - Linux: `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER`
+  - macOS: `brew install --cask docker` or direct to https://docker.com/products/docker-desktop
 
-If a directory is found, AskUserQuestion:
-
-1. **Migrate now** — "Import identity, credentials, and settings from OpenClaw before continuing setup."
-2. **Fresh start** — "Skip migration and set up NanoClaw from scratch."
-3. **Migrate later** — "Continue setup now, run `/migrate-from-openclaw` anytime later."
-
-If "Migrate now": invoke `/migrate-from-openclaw`, then return here and continue at step 2a (Timezone).
-
-## 2a. Timezone
-
-Run `npx tsx setup/index.ts --step timezone` and parse the status block.
-
-- If NEEDS_USER_INPUT=true → The system timezone could not be autodetected (e.g. POSIX-style TZ like `IST-2`). AskUserQuestion: "What is your timezone?" with common options (America/New_York, Europe/London, Asia/Jerusalem, Asia/Tokyo) and an "Other" escape. Then re-run: `npx tsx setup/index.ts --step timezone -- --tz <their-answer>`.
-- If STATUS=success → Timezone is configured. Note RESOLVED_TZ for reference.
-
-## 3. Container Runtime
-
-### 3a. Choose runtime
-
-Check the preflight results for `APPLE_CONTAINER` and `DOCKER`, and the PLATFORM from step 1.
-
-- PLATFORM=linux → Docker (only option)
-- PLATFORM=macos + APPLE_CONTAINER=installed → AskUserQuestion with two options:
-  1. **Docker (recommended)** — description: "Cross-platform, better credential management, well-tested."
-  2. **Apple Container (experimental)** — description: "Native macOS runtime. Requires advanced setup."
-  If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
-- PLATFORM=macos + APPLE_CONTAINER=not_found → Docker
-
-### 3a-docker. Install Docker
-
-- DOCKER=running → continue to 4b
-- DOCKER=installed_not_running → start Docker: `open -a Docker` (macOS) or `sudo systemctl start docker` (Linux). Wait 15s, re-check with `docker info`.
-- DOCKER=not_found → Use `AskUserQuestion: Docker is required for running agents. Would you like me to install it?` If confirmed:
-  - macOS: install via `brew install --cask docker`, then `open -a Docker` and wait for it to start. If brew not available, direct to Docker Desktop download at https://docker.com/products/docker-desktop
-  - Linux: install with `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER`. Note: user may need to log out/in for group membership.
-
-### 3b. Apple Container conversion gate (if needed)
-
-**If the chosen runtime is Apple Container**, you MUST check whether the source code has already been converted from Docker to Apple Container. Do NOT skip this step. Run:
+### Build the container image
 
 ```bash
-grep -q "CONTAINER_RUNTIME_BIN = 'container'" src/container-runtime.ts && echo "ALREADY_CONVERTED" || echo "NEEDS_CONVERSION"
+./container/build.sh
 ```
 
-**If NEEDS_CONVERSION**, the source code still uses Docker as the runtime. You MUST run the `/convert-to-apple-container` skill NOW, before proceeding to the build step.
+If the build fails, read the error output. Try `docker builder prune -f` and retry.
 
-**If ALREADY_CONVERTED**, the code already uses Apple Container. Continue to 3c.
+## 4. Claude Authentication
 
-**If the chosen runtime is Docker**, no conversion is needed. Continue to 3c.
+Check `.env` for `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 
-### 3c. Build and test
+**If credentials already exist** (HAS_ENV=true from step 2 and a token/key is set): Tell the user what's configured and AskUserQuestion: "Keep existing Claude credentials, or reconfigure?" If keeping, skip to step 5.
 
-Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse the status block.
+**If no credentials exist:**
 
-**If BUILD_OK=false:** Read `logs/setup.log` tail for the build error.
-- Cache issue (stale layers): `docker builder prune -f` (Docker) or `container builder stop && container builder rm && container builder start` (Apple Container). Retry.
-- Dockerfile syntax or missing files: diagnose from the log and fix, then retry.
+AskUserQuestion: "Claude subscription (Pro/Max) or Anthropic API key?"
 
-**If TEST_OK=false but BUILD_OK=true:** The image built but won't run. Check logs — common cause is runtime not fully started. Wait a moment and retry the test.
+- **Subscription:** Tell user to run `claude setup-token` in another terminal, then paste the token as a chat message. Write `CLAUDE_CODE_OAUTH_TOKEN=<token>` to `.env`.
+- **API key:** Tell user to paste their API key as a chat message. Write `ANTHROPIC_API_KEY=<key>` to `.env`.
 
-## 4. Credential System
+## 5. Discord Setup
 
-The credential system depends on the container runtime chosen in step 3.
+This fork uses Discord exclusively. Invoke `/add-discord` to handle:
+1. Creating or configuring the Discord bot
+2. Collecting the bot token and writing it to `.env`
+3. Registering the main `#master` channel
 
-### 4a. Docker → OneCLI
-
-Install OneCLI and its CLI tool:
-
-```bash
-curl -fsSL onecli.sh/install | sh
-curl -fsSL onecli.sh/cli/install | sh
-```
-
-Verify both installed: `onecli version`. If the command is not found, the CLI was likely installed to `~/.local/bin/`. Add it to PATH for the current session and persist it:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-# Persist for future sessions (append to shell profile if not already present)
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-grep -q '.local/bin' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-```
-
-Then re-verify with `onecli version`.
-
-Point the CLI at the local OneCLI instance, the ONECLI_URL was output from the install script above:
-```bash
-onecli config set api-host ${ONECLI_URL}
-```
-
-Ensure `.env` has the OneCLI URL (create the file if it doesn't exist):
-```bash
-grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=${ONECLI_URL}' >> .env
-```
-
-Check if a secret already exists:
-```bash
-onecli secrets list
-```
-
-If an Anthropic secret is listed, confirm with user: keep or reconfigure? If keeping, skip to step 5.
-
-AskUserQuestion: Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
-
-1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription. You'll run `claude setup-token` in another terminal to get your token."
-2. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com."
-
-#### Subscription path
+**After `/add-discord` completes**, also collect the Discord Guild (Server) ID:
 
 Tell the user:
+> Right-click your Discord server name and click "Copy Server ID" (Developer Mode must be enabled in Discord settings).
 
-> Run `claude setup-token` in another terminal. It will output a token — copy it but don't paste it here.
-
-Then stop and wait for the user to confirm they have the token. Do NOT proceed until they respond.
-
-Once they confirm, they register it with OneCLI. AskUserQuestion with two options:
-
-1. **Dashboard** — description: "Best if you have a browser on this machine. Open ${ONECLI_URL} and add the secret in the UI. Use type 'anthropic' and paste your token as the value."
-2. **CLI** — description: "Best for remote/headless servers. Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_TOKEN --host-pattern api.anthropic.com`"
-
-#### API key path
-
-Tell the user to get an API key from https://console.anthropic.com/settings/keys if they don't have one.
-
-Then AskUserQuestion with two options:
-
-1. **Dashboard** — description: "Best if you have a browser on this machine. Open ${ONECLI_URL} and add the secret in the UI."
-2. **CLI** — description: "Best for remote/headless servers. Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_KEY --host-pattern api.anthropic.com`"
-
-#### After either path
-
-Ask them to let you know when done.
-
-**If the user's response happens to contain a token or key** (starts with `sk-ant-`): handle it gracefully — run the `onecli secrets create` command with that value on their behalf.
-
-**After user confirms:** verify with `onecli secrets list` that an Anthropic secret exists. If not, ask again.
-
-### 4b. Apple Container → Native Credential Proxy
-
-Apple Container is not compatible with OneCLI. The credential proxy code is already included in the apple-container branch — do NOT invoke `/use-native-credential-proxy` (it would conflict with already-applied code).
-
-Instead, just configure the credentials in `.env`:
-
-AskUserQuestion: Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
-
-1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription. Run `claude setup-token` in another terminal to get your token."
-2. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com."
-
-For subscription: tell the user to run `claude setup-token` in another terminal. Stop and wait for the user to confirm they have completed this step successfully before proceeding.
-
-Once confirmed, add the token to `.env`:
-```bash
-echo 'CLAUDE_CODE_OAUTH_TOKEN=<their-token>' >> .env
+Add to `.env`:
+```
+DISCORD_GUILD_ID=<their-guild-id>
 ```
 
-For API key: add to `.env`:
-```bash
-echo 'ANTHROPIC_API_KEY=<their-key>' >> .env
-```
+The guild ID is required for the master agent to create and delete worker channels.
 
-Verify the proxy starts: `npm run dev` should show "Credential proxy listening" in the logs.
+**Important:** The master channel must be registered with `requires_trigger = 0` and `is_main = 1` so the master agent responds to all messages without needing an @mention.
 
-## 5. Set Up Channels
+## 6. GitHub Token (for Workers)
 
-AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
-- WhatsApp (authenticates via QR code or pairing code)
-- Telegram (authenticates via bot token from @BotFather)
-- Slack (authenticates via Slack app with Socket Mode)
-- Discord (authenticates via Discord bot token)
+Workers clone private repos via HTTPS using a GitHub Personal Access Token.
 
-**Delegate to each selected channel's own skill.** Each channel skill handles its own code installation, authentication, registration, and JID resolution. This avoids duplicating channel-specific logic and ensures JIDs are always correct.
+AskUserQuestion: "Do your workers need to clone private GitHub repos?"
 
-For each selected channel, invoke its skill:
+**Yes:**
+1. Tell user to create a classic PAT at https://github.com/settings/tokens with `repo` and `workflow` scopes
+2. Save it:
+   ```bash
+   mkdir -p ~/.config/nanoclaw
+   echo "ghp_yourtoken" > ~/.config/nanoclaw/github_token
+   chmod 600 ~/.config/nanoclaw/github_token
+   ```
+3. Add to `.env`: `NANOCLAW_GITHUB_TOKEN_PATH=<path-to-token-file>`
 
-- **WhatsApp:** Invoke `/add-whatsapp`
-- **Telegram:** Invoke `/add-telegram`
-- **Slack:** Invoke `/add-slack`
-- **Discord:** Invoke `/add-discord`
+**No:** Skip this step. Workers will only be able to clone public repos.
 
-Each skill will:
-1. Install the channel code (via `git merge` of the skill branch)
-2. Collect credentials/tokens and write to `.env`
-3. Authenticate (WhatsApp QR/pairing, or verify token-based connection)
-4. Register the chat with the correct JID format
-5. Build and verify
+## 7. Worker Profiles
 
-**After all channel skills complete**, install dependencies and rebuild — channel merges may introduce new packages:
+Worker profiles define what repos, tools, and credentials each worker container gets. They live at `~/.config/nanoclaw/worker-profiles/`. See `docs/guides/personal-config.md` for the full config reference and `examples/personal-config/` for a complete example.
 
 ```bash
-npm install && npm run build
+mkdir -p ~/.config/nanoclaw/worker-profiles
+cp worker-profiles/example.json ~/.config/nanoclaw/worker-profiles/default.json
+cp worker-profiles/init.sh ~/.config/nanoclaw/worker-profiles/init.sh
+chmod +x ~/.config/nanoclaw/worker-profiles/init.sh
 ```
 
-If the build fails, read the error output and fix it (usually a missing dependency). Then continue to step 6.
+Walk the user through editing `default.json`:
 
-## 6. Mount Allowlist
+AskUserQuestion: "Which repos should workers clone on startup? (comma-separated, e.g. org/repo1, org/repo2)"
 
-AskUserQuestion: Agent access to external directories?
+Update `default.json` with their repos. If they have no specific repos, leave the default.
 
-**No:** `npx tsx setup/index.ts --step mounts -- --empty`
-**Yes:** Collect paths/permissions. `npx tsx setup/index.ts --step mounts -- --json '{"allowedRoots":[...],"blockedPatterns":[],"nonMainReadOnly":true}'`
+## 8. Personal Instructions (Optional)
 
-## 7. Start Service
+Agent instructions are assembled from repo-level fragments (`instructions/{global,master,worker}.md`) plus optional personal additions. Ask the user if they want to add personal instructions:
 
-If service already running: unload first.
+AskUserQuestion: "Do you want to add personal agent instructions? (code conventions, repo lists, integrations, etc.) You can always add these later."
+
+If yes:
+```bash
+mkdir -p ~/.config/nanoclaw/instructions
+```
+
+Create `global.md` (applies to all agents), `master.md` (master only), or `worker.md` (workers only) as needed. Help them add their conventions. Reference examples are in `examples/personal-config/instructions/`.
+
+### Personal Dockerfile (Optional)
+
+If the user has heavy packages to install (databases, test frameworks, CLI tools), they can create a personal Dockerfile that layers on top of the base image:
+
+```bash
+cat > ~/.config/nanoclaw/Dockerfile << 'EOF'
+FROM nanoclaw-agent:base
+USER root
+# Add your packages here
+USER node
+EOF
+```
+
+`container/build.sh` will automatically detect and apply this layer. Heavy packages that are the same every boot (databases, compilers, test frameworks) go in the Dockerfile. Setup that needs host context (repo cloning, credential symlinks) stays in init.sh. Per-profile tools that depend on workspace content stay in profile tools.
+
+## 9. Optional: Open-Weight Model Support
+
+AskUserQuestion: "Do you want to use open-weight models (e.g. Kimi K2.5, Qwen) in addition to Claude?"
+
+**Yes:** Collect the OpenAI-compatible endpoint URL and API key. Add to `.env`:
+```
+NEURALWATT_API_URL=<endpoint-url>
+NEURALWATT_API_KEY=<api-key>
+```
+
+The translation shim converts between Anthropic and OpenAI API formats automatically. Workers can be created with `backend: neuralwatt` to use these models.
+
+**No:** Skip. All workers will use Claude.
+
+## 10. Start Service
+
+Build and install the service:
+
+```bash
+npm run build
+```
+
+If service already running, stop it first:
+- Linux: `systemctl --user stop nanoclaw`
 - macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
-- Linux: `systemctl --user stop nanoclaw` (or `systemctl stop nanoclaw` if root)
 
 Run `npx tsx setup/index.ts --step service` and parse the status block.
 
-**If FALLBACK=wsl_no_systemd:** WSL without systemd detected. Tell user they can either enable systemd in WSL (`echo -e "[boot]\nsystemd=true" | sudo tee /etc/wsl.conf` then restart WSL) or use the generated `start-nanoclaw.sh` wrapper.
-
-**If DOCKER_GROUP_STALE=true:** The user was added to the docker group after their session started — the systemd service can't reach the Docker socket. Ask user to run these two commands:
-
-1. Immediate fix: `sudo setfacl -m u:$(whoami):rw /var/run/docker.sock`
-2. Persistent fix (re-applies after every Docker restart):
+**If DOCKER_GROUP_STALE=true:** User was added to docker group after session started. Ask user to run:
 ```bash
-sudo mkdir -p /etc/systemd/system/docker.service.d
-sudo tee /etc/systemd/system/docker.service.d/socket-acl.conf << 'EOF'
-[Service]
-ExecStartPost=/usr/bin/setfacl -m u:USERNAME:rw /var/run/docker.sock
-EOF
-sudo systemctl daemon-reload
+sudo setfacl -m u:$(whoami):rw /var/run/docker.sock
 ```
-Replace `USERNAME` with the actual username (from `whoami`). Run the two `sudo` commands separately — the `tee` heredoc first, then `daemon-reload`. After user confirms setfacl ran, re-run the service step.
+Then re-run the service step.
 
-**If SERVICE_LOADED=false:**
-- Read `logs/setup.log` for the error.
-- macOS: check `launchctl list | grep nanoclaw`. If PID=`-` and status non-zero, read `logs/nanoclaw.error.log`.
-- Linux: check `systemctl --user status nanoclaw`.
-- Re-run the service step after fixing.
+**If SERVICE_LOADED=false:** Read `logs/setup.log`, diagnose, and fix.
 
-## 8. Verify
+## 11. Verify
 
 Run `npx tsx setup/index.ts --step verify` and parse the status block.
 
-**If STATUS=failed, fix each:**
-- SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
-- SERVICE=not_found → re-run step 7
-- CREDENTIALS=missing → re-run step 4 (Docker: check `onecli secrets list`; Apple Container: check `.env` for credentials)
-- CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
-- REGISTERED_GROUPS=0 → re-invoke the channel skills from step 5
-- MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
+Fix any failures (SERVICE=stopped, CREDENTIALS=missing, REGISTERED_GROUPS=0, etc.) by re-running the relevant step.
 
-Tell user to test: send a message in their registered chat. Show: `tail -f logs/nanoclaw.log`
+Then tell the user:
+
+> Send a message in your `#master` Discord channel: "create a worker called test-worker"
+>
+> You should see:
+> 1. The master agent acknowledges the request
+> 2. A new `#test-worker` channel appears in the server
+> 3. Sending a message in `#test-worker` spawns a container and the worker responds
+>
+> If it works, you're all set! Destroy the test worker with: "destroy worker test-worker"
+
+Show: `tail -f logs/nanoclaw.log`
 
 ## Troubleshooting
 
-**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path (re-run step 7), credential system not running (Docker: check `curl ${ONECLI_URL}/api/health`; Apple Container: check `.env` credentials), missing channel credentials (re-invoke channel skill).
+**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path, missing `.env` vars, Docker not running.
 
-**Container agent fails ("Claude Code process exited with code 1"):** Ensure the container runtime is running — `open -a Docker` (macOS Docker), `container system start` (Apple Container), or `sudo systemctl start docker` (Linux). Check container logs in `groups/main/logs/container-*.log`.
+**Container agent fails:** Ensure Docker is running. Check container logs in `groups/main/logs/container-*.log`.
 
-**No response to messages:** Check trigger pattern. Main channel doesn't need prefix. Check DB: `npx tsx setup/index.ts --step verify`. Check `logs/nanoclaw.log`.
+**No response to messages:** Check trigger pattern. Main channel should have `requires_trigger = 0`. Check `logs/nanoclaw.log`.
 
-**Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For WhatsApp: check `store/auth/creds.json` exists. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
+**Worker channels not created:** Verify `DISCORD_GUILD_ID` is set in `.env` and the bot has `Manage Channels` permission.
 
-**Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` | Linux: `systemctl --user stop nanoclaw`
-
-
-## 9. Diagnostics
-
-1. Use the Read tool to read `.claude/skills/setup/diagnostics.md`.
-2. Follow every step in that file before completing setup.
+**Unload service:** Linux: `systemctl --user stop nanoclaw` | macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
