@@ -153,7 +153,7 @@ Discord Server
   #worker-beta     <-->       |         <-->  Container B (Claude or Neuralwatt)
 ```
 
-One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master calls MCP tools (create, destroy, list, switch) with the right arguments. Workers handle all the real work.
+One Discord bot. The host process routes messages by channel ID. Workers are isolated containers with their own filesystems and Claude sessions. The master uses `ncf` CLI commands to create, destroy, and switch workers. Workers handle all the real work.
 
 ### Configuration Model
 
@@ -187,7 +187,7 @@ See [docs/architecture/container-lifecycle.md](docs/architecture/container-lifec
 | ---------------------------------------- | -------------------------------------------------------------- |
 | [docs/architecture/](docs/architecture/) | How the system works (overview, routing, lifecycle, streaming) |
 | [docs/guides/](docs/guides/)             | Setup, personal config, testing, troubleshooting               |
-| [docs/reference/](docs/reference/)       | SDK internals                                                  |
+| [docs/reference/](docs/reference/)       | CLI reference, SDK internals                                   |
 | [design/](design/)                       | Design history and archived proposals                          |
 
 Full index: [docs/README.md](docs/README.md)

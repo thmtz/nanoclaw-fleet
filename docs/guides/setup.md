@@ -30,8 +30,8 @@ Whether you use `/setup` or follow the manual steps below, you'll configure:
 1. **Claude auth**: OAuth token or Anthropic API key
 2. **Discord bot token**: from the Developer Portal
 3. **Discord Guild ID + Channel ID**: copied from Discord
-4. **GitHub PAT** *(optional)*: for workers that clone private repos
-5. **OpenAI-compatible API key** *(optional)*: for open-weight models
+4. **GitHub PAT** _(optional)_: for workers that clone private repos
+5. **OpenAI-compatible API key** _(optional)_: for open-weight models
 
 Each step explains how to create these if you don't have them yet.
 
@@ -41,35 +41,35 @@ NanoClaw separates generic code from per-installation configuration. The repo co
 
 **What goes in the repo** (`nanoclaw/`):
 
-| Directory | Purpose |
-|-|-|
-| `src/` | Host process (message routing, container lifecycle, IPC) |
-| `container/` | Dockerfile, agent runner, MCP tools, skills |
-| `instructions/` | Agent instructions — global, master, and worker (assembled at startup) |
-| `worker-profiles/` | Example worker profiles — templates you copy and customize |
-| `tools/` | Utility scripts (status dashboard, shims, injection helpers) |
-| `docs/` | Architecture docs, setup guides, testing procedures |
-| `.env.example` | Template for required environment variables |
+| Directory          | Purpose                                                                |
+| ------------------ | ---------------------------------------------------------------------- |
+| `src/`             | Host process (message routing, container lifecycle, IPC)               |
+| `container/`       | Dockerfile, agent runner, MCP tools, skills                            |
+| `instructions/`    | Agent instructions — global, master, and worker (assembled at startup) |
+| `worker-profiles/` | Example worker profiles — templates you copy and customize             |
+| `tools/`           | Utility scripts (status dashboard, shims, injection helpers)           |
+| `docs/`            | Architecture docs, setup guides, testing procedures                    |
+| `.env.example`     | Template for required environment variables                            |
 
 **What goes in user config** (`~/.config/nanoclaw/`):
 
-| Path | Purpose |
-|-|-|
-| `Dockerfile` | Personal container image layer — databases, test tools, CLI tools (optional) |
-| `worker-profiles/default.json` | Your worker profile — repos to clone, credential mounts, tools to install |
-| `worker-profiles/init.sh` | Your init script — runs inside each container at boot |
-| `instructions/global.md` | Personal instructions for all agents (beads, code conventions, etc.) |
-| `instructions/master.md` | Personal master-only instructions (mounts, GPU workflow, etc.) |
-| `instructions/worker.md` | Personal worker-only instructions (mount map, repos, network) |
+| Path                           | Purpose                                                                      |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| `Dockerfile`                   | Personal container image layer — databases, test tools, CLI tools (optional) |
+| `worker-profiles/default.json` | Your worker profile — repos to clone, credential mounts, tools to install    |
+| `worker-profiles/init.sh`      | Your init script — runs inside each container at boot                        |
+| `instructions/global.md`       | Personal instructions for all agents (beads, code conventions, etc.)         |
+| `instructions/master.md`       | Personal master-only instructions (mounts, GPU workflow, etc.)               |
+| `instructions/worker.md`       | Personal worker-only instructions (mount map, repos, network)                |
 
 **Other per-installation state** (also outside the repo):
 
-| Path | Purpose |
-|-|-|
-| `.env` | Secrets and tunables (bot tokens, guild IDs, backend config, container limits) |
-| `data/` | Runtime state — SQLite database, session data, usage metrics (gitignored) |
+| Path      | Purpose                                                                                |
+| --------- | -------------------------------------------------------------------------------------- |
+| `.env`    | Secrets and tunables (bot tokens, guild IDs, backend config, container limits)         |
+| `data/`   | Runtime state — SQLite database, session data, usage metrics (gitignored)              |
 | `groups/` | Agent workspaces — assembled CLAUDE.md, cloned repos, uncommitted changes (gitignored) |
-| `logs/` | Application logs (gitignored) |
+| `logs/`   | Application logs (gitignored)                                                          |
 
 The setup steps below walk through creating your user config from the repo's examples. When you later update NanoClaw (pull new code), your `~/.config/nanoclaw/` files are untouched — only the repo-side defaults change, and you can merge those into your config as needed. See the [personal config guide](personal-config.md) for a detailed walkthrough of each config file, and [`examples/personal-config/`](../../examples/personal-config/) for a complete reference example.
 
@@ -156,6 +156,7 @@ mkdir -p ~/.config/nanoclaw/instructions
 ```
 
 The final CLAUDE.md for each agent is assembled at startup:
+
 1. `instructions/global.md` (repo — shared base for all agents)
 2. `instructions/master.md` or `instructions/worker.md` (repo — role-specific)
 3. `~/.config/nanoclaw/instructions/global.md` (personal — all agents)
@@ -196,6 +197,7 @@ create a worker called test-worker
 ```
 
 You should see:
+
 1. The master agent acknowledges the request
 2. A new `#test-worker` channel appears in the server
 3. Sending a message in `#test-worker` spawns a container and the worker responds
@@ -204,41 +206,47 @@ You should see:
 
 When NanoClaw restarts (systemd restart, host reboot, crash):
 
-| What | Survives restart? | Survives destroy? | Why |
-|-|-|-|-|
-| Discord channels | ✅ | ❌ (deleted) | Server-side |
-| Registered groups (SQLite) | ✅ | ❌ (deleted) | On-disk database |
-| Worker repos + code changes | ✅ | ✅ (kept for resume) | Bind-mounted at `groups/{worker}/` |
-| SDK session state (`.claude/`) | ✅ | ❌ (deleted) | Bind-mounted at `data/sessions/{worker}/.claude/` |
-| Running containers | ❌ | ❌ | `--rm` flag — auto-removed on exit |
-| Installed packages | ❌ | ❌ | Rebuilt by `init.sh` on next spawn |
+| What                           | Survives restart? | Survives destroy?    | Why                                               |
+| ------------------------------ | ----------------- | -------------------- | ------------------------------------------------- |
+| Discord channels               | ✅                | ❌ (deleted)         | Server-side                                       |
+| Registered groups (SQLite)     | ✅                | ❌ (deleted)         | On-disk database                                  |
+| Worker repos + code changes    | ✅                | ✅ (kept for resume) | Bind-mounted at `groups/{worker}/`                |
+| SDK session state (`.claude/`) | ✅                | ❌ (deleted)         | Bind-mounted at `data/sessions/{worker}/.claude/` |
+| Running containers             | ❌                | ❌                   | `--rm` flag — auto-removed on exit                |
+| Installed packages             | ❌                | ❌                   | Rebuilt by `init.sh` on next spawn                |
 
 **Recovery flow (restart):** NanoClaw loads groups from SQLite on startup. Next message to any worker spawns a fresh container. `init.sh` runs but skips already-cloned repos.
 
-**Recovery flow (destroy + recreate):** Workspace is preserved on disk. When `create_worker` is called with the same name, it detects the leftover workspace and asks whether to "resume" (keep repos/code, fresh SDK session) or "fresh" (wipe everything). SDK session state is always cleared on create to prevent stale state from crashing the new worker.
+**Recovery flow (destroy + recreate):** Workspace is preserved on disk. When `ncf create` is called with the same name, it detects the leftover workspace and asks whether to "resume" (keep repos/code, fresh SDK session) or "fresh" (wipe everything). SDK session state is always cleared on create to prevent stale state from crashing the new worker.
 
 ## Troubleshooting
 
 **Worker channel created but no response to messages:**
+
 - Check `requires_trigger` — workers should have `requires_trigger = 0`
 - Check logs: `tail -f logs/nanoclaw.log`
 
-**"create_worker: missing required fields":**
+**"ncf create: missing required fields":**
+
 - `DISCORD_GUILD_ID` isn't reaching the container. Verify it's in `.env` and that `container-runner.ts` forwards it.
 
-**Agent doesn't know about create_worker tool:**
+**Agent doesn't know about ncf commands:**
+
 - Stale cached source. Kill the worker container (agent-runner auto-syncs by mtime on next spawn).
 
 **Container builds don't pick up source changes:**
+
 - Docker caches COPY layers. Use `./container/build.sh` (or `docker build --no-cache`) when `container/` changes.
 - Agent-runner source auto-syncs by mtime — kill the container and message the worker again.
 
 **Repos fail to clone (403 or 404):**
+
 - Check that `NANOCLAW_GITHUB_TOKEN_PATH` is set in the systemd service and points to a valid token file.
 - The token needs `repo` scope for private repos. Classic PATs with `repo` scope work across all orgs.
 - Fine-grained PATs need per-org approval — use classic PATs for simplicity.
 - Verify: `docker exec <container> bash -c 'echo $GITHUB_TOKEN | head -c 10'`
 
 **Bot can't create channels:**
+
 - Verify the bot has `Manage Channels` permission in the Discord server.
 - Check the bot's role in Server Settings → Roles.
