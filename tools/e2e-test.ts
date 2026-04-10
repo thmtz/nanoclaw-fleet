@@ -333,6 +333,51 @@ async function testFirstBoot(workerName: string) {
   } else {
     fail(`Found ${errors.length} error(s) in logs`);
   }
+
+  // Audit log — verify turns.jsonl was written with expected fields
+  const auditPath = path.join(PROJECT_DIR, 'logs/workers', folder, 'turns.jsonl');
+  if (existsSync(auditPath)) {
+    const auditLines = readFileSync(auditPath, 'utf-8').trim().split('\n');
+    const lastEntry = JSON.parse(auditLines[auditLines.length - 1]);
+    if (lastEntry.model && lastEntry.input_tokens != null && lastEntry.latency_ms != null) {
+      pass(`Audit log written (model=${lastEntry.model}, ${lastEntry.input_tokens} in, ${lastEntry.latency_ms}ms)`);
+    } else {
+      fail('Audit log entry missing expected fields (model, input_tokens, latency_ms)');
+    }
+  } else if (responded) {
+    fail('Audit log not found after agent response');
+  }
+
+  // Worker event log — verify "created" event was recorded
+  const eventsPath = path.join(PROJECT_DIR, 'logs/worker-events.jsonl');
+  if (existsSync(eventsPath)) {
+    const createEvents = readFileSync(eventsPath, 'utf-8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l))
+      .filter((e: any) => e.folder === folder && e.event === 'created' && e.time >= t0);
+    if (createEvents.length > 0) {
+      pass('Worker event log has "created" entry');
+    } else {
+      fail('Worker event log missing "created" entry');
+    }
+  }
+
+  // ncf CLI — verify the worker appears in status
+  const statusJson = sh(`"${PROJECT_DIR}/ncf" status --json`, { ignoreError: true });
+  if (statusJson) {
+    try {
+      const status = JSON.parse(statusJson);
+      const found = status.workers?.some((w: any) => w.folder === folder);
+      if (found) {
+        pass('Worker visible in ncf status --json');
+      } else {
+        fail('Worker not found in ncf status --json');
+      }
+    } catch {
+      fail('ncf status --json returned invalid JSON');
+    }
+  }
 }
 
 // ── Scenario 3: Session resume ───────────────────────────────
@@ -634,6 +679,21 @@ async function testDestroy(workerName: string) {
     pass('Session preserved for resume');
   } else {
     fail('Session not preserved');
+  }
+
+  // Worker event log — verify "destroyed" event was recorded
+  const eventsPath = path.join(PROJECT_DIR, 'logs/worker-events.jsonl');
+  if (existsSync(eventsPath)) {
+    const destroyEvents = readFileSync(eventsPath, 'utf-8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l))
+      .filter((e: any) => e.folder === folder && e.event === 'destroyed');
+    if (destroyEvents.length > 0) {
+      pass('Worker event log has "destroyed" entry');
+    } else {
+      fail('Worker event log missing "destroyed" entry');
+    }
   }
 
   // Remove from cleanup list since we just destroyed it
