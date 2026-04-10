@@ -732,7 +732,16 @@ async function main(): Promise<void> {
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = {
     ...process.env,
-    CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
+    // Auto-compact: the SDK calculates the threshold from the model's context
+    // window. For NW workers routed through the shim, the SDK sees a Claude
+    // model name with a much larger window than the actual NW model (1M vs
+    // ~200k). Override the compact percentage so it triggers at a reasonable
+    // fill level for the actual model. Anthropic workers use the real model
+    // and don't need an override.
+    ...(process.env.NANOCLAW_BACKEND === 'neuralwatt' &&
+    !process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+      ? { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '16' }
+      : {}),
   };
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));

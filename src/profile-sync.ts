@@ -140,9 +140,15 @@ export function syncWorkerProfiles(): number {
     if (profile.skills_repo) {
       workerEnv.WORKER_SKILLS_REPO = profile.skills_repo;
     }
-    // Preserve per-worker settings not managed by the profile
-    if (existingEnv.NANOCLAW_BACKEND) {
-      workerEnv.NANOCLAW_BACKEND = existingEnv.NANOCLAW_BACKEND;
+    // Preserve per-worker custom env vars that aren't managed by the profile.
+    // NANOCLAW_BACKEND/MODEL are injected by container-runner from
+    // worker-backends.json — don't persist them here.
+    const profileKeys = new Set(Object.keys(workerEnv));
+    const skipKeys = new Set(['NANOCLAW_BACKEND', 'NANOCLAW_MODEL']);
+    for (const [k, v] of Object.entries(existingEnv)) {
+      if (!profileKeys.has(k) && !skipKeys.has(k)) {
+        workerEnv[k] = v;
+      }
     }
     fs.writeFileSync(
       envPath,

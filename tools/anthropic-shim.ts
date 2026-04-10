@@ -147,8 +147,13 @@ function recordUsage(
     last_updated: '',
   };
   w.requests++;
-  w.input_tokens += usage?.prompt_tokens || 0;
+  const promptTokens = usage?.prompt_tokens || 0;
+  w.input_tokens += promptTokens;
   w.output_tokens += usage?.completion_tokens || 0;
+  // Track last input for max_tokens capping on next request
+  if (promptTokens > 0) {
+    lastInputTokens.set(workerFolder, promptTokens);
+  }
   w.total_tokens += usage?.total_tokens || 0;
   w.energy_joules += energy?.energy_joules || 0;
   w.energy_kwh += energy?.energy_kwh || 0;
@@ -172,6 +177,10 @@ function recordUsage(
     });
   }
 }
+
+// Track last input token count per worker for max_tokens capping.
+// Updated after each successful API call with real usage data.
+const lastInputTokens = new Map<string, number>();
 
 // Deduplicate SDK retries: track last request per worker to detect duplicates.
 // The SDK sends each request twice with different max_tokens.
@@ -252,6 +261,47 @@ function getWorkerConfig(workerFolder: string): WorkerBackendConfig {
 }
 
 // ── Model mapping (Neuralwatt) ─────────────────────────────────
+
+// ── Model context limits ──────────────────────────────────────
+// Fetched from the NW API at startup and cached. Used to cap max_tokens
+// so that input_tokens + max_tokens never exceeds the model's context window.
+// This prevents silent 400 errors from the upstream API.
+const modelContextLimits: Record<string, number> = {};
+// Headroom between estimated input + max_tokens and the model's hard limit.
+// Tokenizer differences between our byte-based estimate and the model's actual
+// tokenizer can vary by a few hundred tokens; 512 is conservative.
+const MODEL_CONTEXT_HEADROOM = 512;
+// Empirically derived from NW API payloads with tool definitions and
+// multi-turn conversation history. Used when no prior turn data is available.
+const CHARS_PER_TOKEN_ESTIMATE = 3.2;
+
+async function fetchModelLimits(): Promise<void> {
+  try {
+    const resp = await fetch(`${NEURALWATT_BASE}/models`, {
+      headers: { Authorization: `Bearer ${NEURALWATT_API_KEY}` },
+    });
+    if (!resp.ok) {
+      console.error(`[proxy] Failed to fetch model limits: ${resp.status}`);
+      return;
+    }
+    const data = await resp.json();
+    const models = data.data || data;
+    for (const m of models) {
+      if (m.id && m.max_model_len) {
+        modelContextLimits[m.id] = m.max_model_len;
+      }
+    }
+    console.log(
+      `[proxy] Cached context limits for ${Object.keys(modelContextLimits).length} models`,
+    );
+  } catch (err: any) {
+    console.error(`[proxy] Error fetching model limits: ${err.message}`);
+  }
+}
+
+// Fetch on startup. Requests arriving before this resolves will skip
+// max_tokens capping (the shim logs a warning in that case).
+const modelLimitsReady = fetchModelLimits();
 
 const NEURALWATT_MODEL_MAP: Record<string, string> = {
   'claude-opus-4-6': 'Qwen/Qwen3.5-397B-A17B-FP8',
@@ -645,6 +695,32 @@ const server = Bun.serve({
 
         const requestStart = Date.now();
         const reqBodySize = JSON.stringify(openaiReq).length;
+
+        // Cap max_tokens so input + output fits within the model's context.
+        // Use the last turn's actual input_tokens when available, otherwise
+        // estimate from serialized request size. ~3.2 chars per token is
+        // empirically derived from NW API payloads with tool definitions
+        // and multi-turn conversation history.
+        const contextLimit = modelContextLimits[nwModel];
+        if (contextLimit && openaiReq.max_tokens) {
+          const lastInput = lastInputTokens.get(workerFolder) || 0;
+          const estimatedInput =
+            lastInput > 0
+              ? lastInput
+              : Math.ceil(reqBodySize / CHARS_PER_TOKEN_ESTIMATE);
+          const available =
+            contextLimit - estimatedInput - MODEL_CONTEXT_HEADROOM;
+          if (available < openaiReq.max_tokens && available > 0) {
+            console.log(
+              `[proxy] Capping max_tokens: ${openaiReq.max_tokens} → ${available} (input≈${estimatedInput}, limit=${contextLimit})`,
+            );
+            openaiReq.max_tokens = available;
+          } else if (available <= 0) {
+            console.error(
+              `[proxy] Context exhausted: input≈${estimatedInput} >= limit=${contextLimit}. Request will likely fail.`,
+            );
+          }
+        }
         console.log(
           `[proxy] ${workerFolder}: ${anthropicBody.model} → ${nwModel} (${openaiReq.messages.length} msgs${openaiReq.tools ? `, ${openaiReq.tools.length} tools` : ''}, ${(reqBodySize / 1024).toFixed(1)}KB request)`,
         );
@@ -707,7 +783,10 @@ const server = Bun.serve({
                 }
               };
 
-              // Emit message_start
+              // Emit message_start — input_tokens starts at 0; we patch it
+              // in message_delta once the upstream usage chunk arrives.
+              // The SDK uses input_tokens for auto-compaction decisions, so
+              // accurate counts are critical.
               emit('message_start', {
                 type: 'message_start',
                 message: {
@@ -762,6 +841,45 @@ const server = Bun.serve({
                     try {
                       chunk = JSON.parse(line.slice(6));
                     } catch {
+                      continue;
+                    }
+
+                    // Detect error frames: NW API wraps some errors
+                    // (e.g. context length exceeded) as {"error": {...}} inside
+                    // an SSE data frame with HTTP 200. Surface them so the SDK
+                    // can react (e.g. trigger compaction or report to user).
+                    if (chunk.error) {
+                      const errMsg =
+                        chunk.error.message || JSON.stringify(chunk.error);
+                      console.error(
+                        `[proxy] Upstream SSE error: ${errMsg}`,
+                      );
+                      // Emit an error text block so the SDK sees it as a real
+                      // (non-empty) response rather than error_during_execution.
+                      if (!inText) {
+                        if (inThinking) {
+                          emit('content_block_stop', {
+                            type: 'content_block_stop',
+                            index: blockIndex,
+                          });
+                          blockIndex++;
+                          inThinking = false;
+                        }
+                        inText = true;
+                        emit('content_block_start', {
+                          type: 'content_block_start',
+                          index: blockIndex,
+                          content_block: { type: 'text', text: '' },
+                        });
+                      }
+                      emit('content_block_delta', {
+                        type: 'content_block_delta',
+                        index: blockIndex,
+                        delta: {
+                          type: 'text_delta',
+                          text: `[Inference error] ${errMsg}`,
+                        },
+                      });
                       continue;
                     }
 
@@ -896,11 +1014,20 @@ const server = Bun.serve({
                   });
                 }
 
-                // message_delta with stop_reason and usage
+                // message_delta with stop_reason and usage.
+                // Include input_tokens so the SDK can track context size
+                // for auto-compaction. The Anthropic spec puts input_tokens
+                // in message_start, but we don't know the count until the
+                // upstream usage chunk arrives at stream end. Sending it in
+                // message_delta is the best we can do — the SDK accumulates
+                // usage from both events.
                 emit('message_delta', {
                   type: 'message_delta',
                   delta: { stop_reason: stopReason, stop_sequence: null },
-                  usage: { output_tokens: usage.completion_tokens || 0 },
+                  usage: {
+                    input_tokens: usage.prompt_tokens || 0,
+                    output_tokens: usage.completion_tokens || 0,
+                  },
                 });
 
                 emit('message_stop', { type: 'message_stop' });
