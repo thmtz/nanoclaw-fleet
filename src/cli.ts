@@ -134,7 +134,16 @@ function getContainerName(folder: string): string | null {
 
 // ── Commands ─────────────────────────────────────────────────────
 
-function cmdStatus(json: boolean) {
+function cmdStatus(json: boolean, noColor: boolean) {
+  const GREEN = noColor ? '' : '\x1b[32m';
+  const RED = noColor ? '' : '\x1b[31m';
+  const YELLOW = noColor ? '' : '\x1b[33m';
+  const CYAN = noColor ? '' : '\x1b[36m';
+  const NC = noColor ? '' : '\x1b[0m';
+  const BOLD = noColor ? '' : '\x1b[1m';
+  const STATUS_UP = noColor ? '🟢' : `${GREEN}●${NC}`;
+  const STATUS_DOWN = noColor ? '🔴' : `${RED}○${NC}`;
+  const STATUS_STOPPED = noColor ? '🟡' : `${YELLOW}○${NC}`;
   const backends = jsonRead(path.join(DATA_DIR, 'worker-backends.json')) || {};
   const usage = jsonRead(path.join(DATA_DIR, 'worker-usage.json')) || {};
   const groups =
@@ -190,7 +199,7 @@ function cmdStatus(json: boolean) {
 
   // Human output
   if (master) {
-    const status = master.container ? `${GREEN}●${NC}` : `${RED}○${NC}`;
+    const status = master.container ? STATUS_UP : STATUS_DOWN;
     console.log(
       `\n${BOLD}Master${NC}  ${status} ${CYAN}${master.model}${NC} ${master.container ? 'up' : 'down'}`,
     );
@@ -199,13 +208,14 @@ function cmdStatus(json: boolean) {
   if (workers.length > 0) {
     console.log(`\n${BOLD}Workers${NC}`);
     for (const w of workers) {
-      const status = w.container ? `${GREEN}●${NC}` : `${YELLOW}○${NC}`;
+      const status = w.container ? STATUS_UP : STATUS_STOPPED;
       const usage =
         w.requests > 0
           ? `  ${w.requests} reqs, ${(w.tokens / 1000).toFixed(1)}k tok`
           : '';
+      const displayName = w.name.replace(/^devbox server /, '');
       console.log(
-        `  ${status} ${w.name.padEnd(20)} ${CYAN}${w.model.padEnd(25)}${NC} ${w.container ? 'up' : 'stopped'}${usage}`,
+        `  ${status} ${displayName.padEnd(12)} ${CYAN}${w.model.padEnd(20)}${NC} ${w.container ? 'up' : 'stopped'}${usage}`,
       );
     }
   } else {
@@ -777,7 +787,8 @@ const cmd = args[0];
     switch (cmd) {
       case 'status': {
         const json = args.includes('--json');
-        cmdStatus(json);
+        const noColor = args.includes('--no-color');
+        cmdStatus(json, noColor);
         break;
       }
 

@@ -29,9 +29,13 @@ export interface StatusPinDeps {
 }
 
 async function getStatusOutput(): Promise<string> {
-  const { stdout } = await execFileAsync('bash', [NCF_CLI, 'status'], {
-    timeout: 15_000,
-  });
+  const { stdout } = await execFileAsync(
+    'bash',
+    [NCF_CLI, 'status', '--no-color'],
+    {
+      timeout: 15_000,
+    },
+  );
   return stdout.trim();
 }
 
