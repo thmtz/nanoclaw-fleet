@@ -790,9 +790,8 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          const pipeTraceId = generateTraceId();
-
           if (queue.sendMessage(chatJid, formatted)) {
+            const pipeTraceId = generateTraceId();
             // Reset the send_message suppression flag for this group.
             // Without this, if the previous message used send_message,
             // the flag stays set and suppresses direct output for all

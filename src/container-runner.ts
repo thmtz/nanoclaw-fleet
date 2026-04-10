@@ -44,6 +44,7 @@ import {
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const MAX_STDERR_ARCHIVES = 20;
 
 export interface ContainerInput {
   prompt: string;
@@ -741,7 +742,7 @@ export async function runContainerAgent(
             .readdirSync(stderrDir)
             .filter((f) => f.startsWith('stderr-') && f.endsWith('.log'))
             .sort();
-          const excess = stderrFiles.slice(0, -20);
+          const excess = stderrFiles.slice(0, -MAX_STDERR_ARCHIVES);
           for (const f of excess) {
             fs.unlinkSync(path.join(stderrDir, f));
           }
