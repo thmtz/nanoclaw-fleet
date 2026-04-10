@@ -317,7 +317,13 @@ function resolveNeuralwattModel(
   configModel?: string,
 ): string {
   if (configModel) return configModel;
-  return NEURALWATT_MODEL_MAP[anthropicModel] || DEFAULT_NEURALWATT_MODEL;
+  const mapped = NEURALWATT_MODEL_MAP[anthropicModel];
+  if (!mapped) {
+    console.warn(
+      `[proxy] Unknown model "${anthropicModel}" — falling back to ${DEFAULT_NEURALWATT_MODEL}`,
+    );
+  }
+  return mapped || DEFAULT_NEURALWATT_MODEL;
 }
 
 // ── Anthropic → OpenAI translation ─────────────────────────────

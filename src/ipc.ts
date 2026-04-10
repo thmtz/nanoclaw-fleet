@@ -49,8 +49,11 @@ function sanitizeThinkingBlocks(folder: string): number {
       recursive: true,
       withFileTypes: true,
     });
-  } catch {
-    return 0; // Directory doesn't exist or isn't readable
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      logger.warn({ err, folder }, 'Failed to read sessions directory');
+    }
+    return 0;
   }
   const jsonlFiles = entries
     .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
@@ -216,11 +219,15 @@ async function fetchWorkerUsage(
     const resp = await fetch(
       `http://localhost:${NEURALWATT_PROXY_PORT}/usage/${folder}`,
     );
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      logger.debug({ folder, status: resp.status }, 'Shim usage fetch failed');
+      return null;
+    }
     const data = await resp.json();
     if ((data as any).error) return null;
     return data as Record<string, number>;
-  } catch {
+  } catch (err) {
+    logger.debug({ err, folder }, 'Shim usage fetch error (shim may not be running)');
     return null;
   }
 }
