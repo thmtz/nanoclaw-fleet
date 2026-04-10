@@ -34,6 +34,7 @@ interface ContainerInput {
   assistantName?: string;
   includeContent?: string;
   script?: string;
+  traceId?: string;
 }
 
 interface ContainerOutput {
@@ -139,10 +140,12 @@ function writeOutput(output: ContainerOutput): void {
 }
 
 const _processStartMs = Date.now();
+let _traceId: string | undefined;
 
 function log(message: string): void {
   const elapsed = Date.now() - _processStartMs;
-  console.error(`[agent-runner +${elapsed}ms] ${message}`);
+  const trace = _traceId ? ` ${_traceId}` : '';
+  console.error(`[agent-runner +${elapsed}ms${trace}] ${message}`);
 }
 
 function getSessionSummary(
@@ -702,6 +705,7 @@ async function main(): Promise<void> {
     } catch {
       /* may not exist */
     }
+    _traceId = containerInput.traceId;
     log(`Received input for group: ${containerInput.groupFolder}`);
   } catch (err) {
     writeOutput({
