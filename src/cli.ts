@@ -526,7 +526,28 @@ function cmdDestroy(worker: string) {
   console.log('  Workspace will be preserved');
 }
 
-function cmdSession(worker: string, lines: number, json: boolean) {
+// jq filter for rendering session JSONL as a human-readable transcript
+const SESSION_JQ_FILTER = `
+  select(.message) |
+  .message as $m |
+  if $m.role == "user" then
+    ($m.content // [] | if type == "array" then
+      [.[] | select(.type == "text") | .text] | join("\\n")
+    else . end) | if . != "" then "👤 USER:\\n" + .[0:500] else empty end
+  elif $m.role == "assistant" then
+    ($m.content // [] | if type == "array" then
+      [.[] |
+        if .type == "text" then "💬 " + .text
+        elif .type == "tool_use" then "🔧 " + .name + "(" + (.input | keys | join(", ")) + ")"
+        elif .type == "tool_result" then "📎 result(" + .tool_use_id[0:8] + ")"
+        elif .type == "thinking" then "💭 " + .thinking[0:200]
+        else empty end
+      ] | join("\\n")
+    else empty end) | if . != "" then "🤖 ASSISTANT:\\n" + . else empty end
+  else empty end
+`.trim();
+
+function getSessionFile(worker: string): string | null {
   const folder = normalizeWorker(worker);
   const sessionDir = path.join(
     DATA_DIR,
@@ -535,7 +556,20 @@ function cmdSession(worker: string, lines: number, json: boolean) {
     '.claude/projects/-workspace-group',
   );
 
-  if (!existsSync(sessionDir)) {
+  if (!existsSync(sessionDir)) return null;
+
+  const jsonlFiles = readdirSync(sessionDir)
+    .filter((f) => f.endsWith('.jsonl'))
+    .sort()
+    .reverse();
+
+  if (jsonlFiles.length === 0) return null;
+  return path.join(sessionDir, jsonlFiles[0]);
+}
+
+function cmdSession(worker: string, lines: number, json: boolean, live: boolean) {
+  const file = getSessionFile(worker);
+  if (!file) {
     if (json) {
       console.log(JSON.stringify({ error: `No session for ${worker}` }));
     } else {
@@ -544,21 +578,17 @@ function cmdSession(worker: string, lines: number, json: boolean) {
     process.exit(1);
   }
 
-  const jsonlFiles = readdirSync(sessionDir)
-    .filter((f) => f.endsWith('.jsonl'))
-    .sort()
-    .reverse();
-
-  if (jsonlFiles.length === 0) {
-    if (json) {
-      console.log(JSON.stringify({ error: 'No session files' }));
-    } else {
-      console.error(`${RED}No session files${NC}`);
-    }
-    process.exit(1);
+  if (live) {
+    // Stream the session transcript in real-time using tail -f piped through jq.
+    // Shows user messages, assistant text, tool calls, and thinking blocks
+    // as they happen — useful for debugging agent behavior live.
+    console.log(`${CYAN}Live session transcript (Ctrl+C to stop)${NC}\n`);
+    execSync(
+      `tail -f "${file}" | jq --unbuffered -r '${SESSION_JQ_FILTER}'`,
+      { stdio: 'inherit', timeout: TIMEOUTS.FOLLOW },
+    );
+    return;
   }
-
-  const file = path.join(sessionDir, jsonlFiles[0]);
 
   if (json) {
     const content = sh(`tail -n ${lines} "${file}"`, { ignoreError: true });
@@ -569,31 +599,14 @@ function cmdSession(worker: string, lines: number, json: boolean) {
       } catch {}
     }
     console.log(
-      JSON.stringify({ worker, file: jsonlFiles[0], entries }, null, 2),
+      JSON.stringify({ worker, file: path.basename(file), entries }, null, 2),
     );
     return;
   }
 
-  console.log(`${CYAN}Session: ${jsonlFiles[0]}${NC}\n`);
+  console.log(`${CYAN}Session: ${path.basename(file)}${NC}\n`);
 
-  sh(`tail -n ${lines} "${file}" | jq -r '
-    select(.message) |
-    .message as $m |
-    if $m.role == "user" then
-      ($m.content // [] | if type == "array" then
-        [.[] | select(.type == "text") | .text] | join("\\n")
-      else . end) | if . != "" then "👤 USER:\\n" + .[0:500] else empty end
-    elif $m.role == "assistant" then
-      ($m.content // [] | if type == "array" then
-        [.[] |
-          if .type == "text" then "💬 " + .text
-          elif .type == "tool_use" then "🔧 " + .name + "(" + (.input | keys | join(", ")) + ")"
-          elif .type == "thinking" then "💭 " + .thinking[0:200]
-          else empty end
-        ] | join("\\n")
-      else empty end) | if . != "" then "🤖 ASSISTANT:\\n" + . else empty end
-    else empty end
-  '`);
+  sh(`tail -n ${lines} "${file}" | jq -r '${SESSION_JQ_FILTER}'`);
 }
 
 function cmdHistory(
@@ -810,6 +823,7 @@ ${BOLD}COMMANDS${NC}
   ${CYAN}destroy${NC} <worker>       Destroy worker (keeps workspace)
   
   ${CYAN}session${NC} <worker> [n]   Show session transcript (default: 80 lines)
+    --live                Stream transcript in real-time (user msgs, tool calls, responses)
   
   ${CYAN}history${NC} [worker]       Show worker event history
     --since <date>       Events since date (ISO format)
@@ -975,11 +989,12 @@ const cmd = args[0];
         const json = args.includes('--json');
         if (!worker) {
           console.error(
-            `${RED}Usage: ncf session <worker> [lines] [--json]${NC}`,
+            `${RED}Usage: ncf session <worker> [lines] [--json] [--live]${NC}`,
           );
           process.exit(1);
         }
-        cmdSession(worker, lines, json);
+        const live = args.includes('--live');
+        cmdSession(worker, lines, json, live);
         break;
       }
 
