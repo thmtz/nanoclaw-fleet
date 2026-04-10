@@ -1130,10 +1130,9 @@ async function main(): Promise<void> {
       active: queue.getActiveCount(),
       max: MAX_CONCURRENT_CONTAINERS,
     }),
-    onAgentMessageSent: (sourceGroup: string) => {
-      const channel = channels.find((ch) => ch.name === 'discord');
-      if (channel) clearThrobber(sourceGroup, channel);
-    },
+    // Don't clear throbber on send_message — the agent may send an
+    // intermediate ack ("On it...") while still working. The throbber
+    // clears when the final SDK result arrives in the output callback.
     onTasksChanged: () => {
       const tasks = getAllTasks();
       const taskRows = tasks.map((t) => ({

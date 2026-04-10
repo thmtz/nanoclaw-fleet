@@ -276,9 +276,6 @@ export interface IpcDeps {
   getContainerStats?: () => { active: number; max: number };
   // Callback when tasks change via IPC (broadcasts updated snapshots)
   onTasksChanged?: () => void;
-  // Called when an agent sends a message via IPC — used to clear the
-  // reaction throbber since the agent has produced visible output
-  onAgentMessageSent?: (sourceGroup: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -357,7 +354,6 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
                   markGroupSentMessage(sourceGroup);
-                  deps.onAgentMessageSent?.(sourceGroup);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
