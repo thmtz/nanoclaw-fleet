@@ -21,7 +21,7 @@ Host-side test tools live in `tools/`.
 | I changed...                              | Test by...                                                                          |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- |
 | `src/ipc.ts` (worker lifecycle)           | Create, message, destroy, recreate with resume (scenarios 1-4, 10-11)               |
-| `src/container-runner.ts` (mounts, env)   | Create a worker, exec in, check mounts and env vars (scenarios 1, 12)               |
+| `src/container-runner.ts` (mounts, env)   | Create a worker, exec in, check mounts and env vars (scenarios 1, 12). Check trace IDs in JSONL. |
 | `container/` or `worker-profiles/`        | Rebuild image, restart, message a worker (see "After Container-Side Changes" below) |
 | `tools/anthropic-shim.ts`                 | Restart shim, curl test, message a NW worker (see "After Shim Changes" below)       |
 | `container/agent-runner/src/` (MCP tools) | Restart, message a worker, verify the tool works (auto-syncs by mtime)              |
@@ -377,6 +377,18 @@ docker logs $(docker ps -q --filter name=test-e2e) 2>&1 | tail -50
 # Enable shim debug logging (verbose request/response)
 # Set SHIM_DEBUG=1 in the shim's environment, then restart
 ```
+
+**Tracing a request end-to-end:** Every user message gets a trace ID (format: `t-<timestamp>-<hex>`) that appears in both host JSONL and container stderr. To trace a failed or slow request:
+
+```bash
+# 1. Find the trace ID from recent host logs
+jq 'select(.msg == "Processing messages")' logs/nanoclaw.5.jsonl | tail -3
+
+# 2. Follow it across all layers
+grep "t-1775854357638-9475" logs/nanoclaw.*.jsonl logs/workers/*/stderr-*.log
+```
+
+Container stderr is archived to `logs/workers/<folder>/stderr-<ts>.log` on every container exit (last 20 per worker), so trace IDs remain searchable after containers are removed.
 
 ## Common Failures
 

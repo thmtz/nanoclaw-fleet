@@ -1,6 +1,6 @@
 # Unified Observability for NanoClaw Fleet
 
-Status: DRAFT
+Status: IN PROGRESS
 Author: thmtz | Created: 2026-04-10
 
 ## Problem
@@ -189,11 +189,11 @@ $ ncf trace t-1775852707-a3f --json   # same data as JSONL
 
 ## Implementation Order
 
-1. **Trace IDs.** Generate in host message handler, propagate through container input, agent-runner, shim. This unblocks everything else.
-2. **Host event log enrichment.** Add trace IDs and missing events (suppression, throbber, piping) to nanoclaw.jsonl.
-3. **Container stderr archival.** Write stderr to file on all container exits.
+1. ~~**Trace IDs.** Generate in host message handler, propagate through container input, agent-runner, shim.~~ **Done.** Format: `t-<ts>-<hex>`. Generated in host, passed via ContainerInput, included in agent-runner `[msg #N]` stderr lines.
+2. ~~**Host event log enrichment.** Add trace IDs and missing events (suppression, throbber, piping) to nanoclaw.jsonl.~~ **Done.** Added trace IDs to all message-path log entries. New events: `Agent output` (with `suppressed` flag), `Message sent to channel`, `Piped messages to active container`.
+3. ~~**Container stderr archival.** Write stderr to file on all container exits.~~ **Done.** Written to `logs/workers/<folder>/stderr-<ts>.log`. 20-file retention per worker.
 4. **Turn index enrichment.** Add `id`, `trace_id`, `tools_called`, `detail` pointer to turns.jsonl.
 5. **Detail files.** Add `turns/` directory with full API payloads behind `NANOCLAW_VERBOSE_LOGS`.
 6. **`ncf trace` command.** Cross-layer timeline assembly.
 
-Steps 1-3 are the foundation. Steps 4-6 build on it.
+Steps 1-3 (foundation) are complete. Steps 4-6 build on them.
