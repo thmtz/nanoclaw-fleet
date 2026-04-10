@@ -527,25 +527,29 @@ function cmdDestroy(worker: string) {
 }
 
 // jq filter for rendering session JSONL as a human-readable transcript
-const SESSION_JQ_FILTER = `
-  select(.message) |
-  .message as $m |
-  if $m.role == "user" then
-    ($m.content // [] | if type == "array" then
-      [.[] | select(.type == "text") | .text] | join("\\n")
-    else . end) | if . != "" then "👤 USER:\\n" + .[0:500] else empty end
-  elif $m.role == "assistant" then
-    ($m.content // [] | if type == "array" then
-      [.[] |
-        if .type == "text" then "💬 " + .text
-        elif .type == "tool_use" then "🔧 " + .name + "(" + (.input | keys | join(", ")) + ")"
-        elif .type == "tool_result" then "📎 result(" + .tool_use_id[0:8] + ")"
-        elif .type == "thinking" then "💭 " + .thinking[0:200]
-        else empty end
-      ] | join("\\n")
-    else empty end) | if . != "" then "🤖 ASSISTANT:\\n" + . else empty end
-  else empty end
-`.trim();
+// jq filter for rendering session JSONL — outputs one line per content block.
+// Avoids join("\n") which causes shell quoting issues in execSync.
+const SESSION_JQ_FILTER =
+  'select(.message) | .message | ' +
+  'if .role == "user" then ' +
+  '  (.content // [] | if type == "string" then "👤 " + .[0:500] elif type == "array" then (.[] | ' +
+  '    if .type == "text" then "👤 " + .text[0:500] ' +
+  '    elif .type == "tool_result" then "📎 " + (.content // [] | if type == "array" then (.[] | select(.type == "text") | .text[0:300]) elif type == "string" then .[0:300] else "(result)" end) ' +
+  '    else empty end) else empty end) ' +
+  'elif .role == "assistant" then ' +
+  '  (.content // [] | .[] | ' +
+  '    if .type == "text" then "💬 " + .text[0:500] ' +
+  '    elif .type == "tool_use" then ' +
+  '      if .name == "Bash" then "🔧 $ " + (.input.command // "?")[0:200] ' +
+  '      elif .name == "Read" then "🔧 Read " + (.input.file_path // "?") ' +
+  '      elif .name == "Edit" then "🔧 Edit " + (.input.file_path // "?") ' +
+  '      elif .name == "Write" then "🔧 Write " + (.input.file_path // "?") ' +
+  '      elif .name == "Grep" then "🔧 Grep " + (.input.pattern // "?") ' +
+  '      elif (.name | test("send_message")) then "📤 " + (.input.text // "?")[0:300] ' +
+  '      else "🔧 " + .name + "(" + (.input | keys | join(", ")) + ")" end ' +
+  '    elif .type == "thinking" then "💭 " + .thinking[0:200] ' +
+  '    else empty end) ' +
+  'else empty end';
 
 function getSessionFile(worker: string): string | null {
   const folder = normalizeWorker(worker);
@@ -567,7 +571,12 @@ function getSessionFile(worker: string): string | null {
   return path.join(sessionDir, jsonlFiles[0]);
 }
 
-function cmdSession(worker: string, lines: number, json: boolean, live: boolean) {
+function cmdSession(
+  worker: string,
+  lines: number,
+  json: boolean,
+  live: boolean,
+) {
   const file = getSessionFile(worker);
   if (!file) {
     if (json) {
@@ -583,10 +592,10 @@ function cmdSession(worker: string, lines: number, json: boolean, live: boolean)
     // Shows user messages, assistant text, tool calls, and thinking blocks
     // as they happen — useful for debugging agent behavior live.
     console.log(`${CYAN}Live session transcript (Ctrl+C to stop)${NC}\n`);
-    execSync(
-      `tail -f "${file}" | jq --unbuffered -r '${SESSION_JQ_FILTER}'`,
-      { stdio: 'inherit', timeout: TIMEOUTS.FOLLOW },
-    );
+    execSync(`tail -f "${file}" | jq --unbuffered -r '${SESSION_JQ_FILTER}'`, {
+      stdio: 'inherit',
+      timeout: TIMEOUTS.FOLLOW,
+    });
     return;
   }
 
@@ -606,7 +615,11 @@ function cmdSession(worker: string, lines: number, json: boolean, live: boolean)
 
   console.log(`${CYAN}Session: ${path.basename(file)}${NC}\n`);
 
-  sh(`tail -n ${lines} "${file}" | jq -r '${SESSION_JQ_FILTER}'`);
+  // Use stdio: inherit so jq output streams directly to terminal
+  execSync(`tail -n ${lines} "${file}" | jq -r '${SESSION_JQ_FILTER}'`, {
+    stdio: 'inherit',
+    timeout: TIMEOUTS.DEFAULT,
+  });
 }
 
 function cmdHistory(
