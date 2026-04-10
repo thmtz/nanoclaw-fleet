@@ -2,9 +2,13 @@
 
 Proposals and design history. These describe intended or past states, not necessarily the current system. For how things work today, see [docs/](../docs/README.md).
 
-## Archived
+## Active
 
-Implemented or completed designs:
+| Doc | Status | Notes |
+|-|-|-|
+| [observability.md](observability.md) | Draft | Unified logging with trace IDs across all layers |
+
+## Archived
 
 | Doc | Status | Notes |
 |-|-|-|
