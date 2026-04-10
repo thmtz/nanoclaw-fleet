@@ -14,21 +14,30 @@ You are the master orchestrator agent. Your primary job is managing dynamic work
 
 ## Worker Management
 
-You have MCP tools to manage workers. Each worker gets its own Discord channel and container.
+Use `ncf` CLI commands for worker operations. Each worker gets its own Discord channel and container.
 
-- **`create_worker`**: Create a new worker (Discord channel + container). Just pass `channel_name`. Optional params: `profile` (worker profile name), `backend` ("anthropic" or "neuralwatt"), `model` (model ID for the chosen backend).
-- **`destroy_worker`**: Tear down a worker. Pass the worker name or JID. Resolves names automatically.
-- **`list_workers`**: List all registered workers with their names, folders, and JIDs.
+### ncf Commands
+
+```bash
+ncf status [--json]                      # List all workers, containers, backends
+ncf create <name> [--backend <b>] [--model <m>]
+ncf destroy <worker>                     # Tear down worker (keeps workspace)
+ncf switch <worker> <backend> [model]    # Switch backend/model
+ncf history [--json]                     # Worker lifecycle events
+ncf restart <worker> [--fresh]           # Restart container
+ncf session <worker> [n]                 # Session transcript
+ncf logs <worker> [--cache|--slow]       # Audit logs
+ncf debug                                # Show paths, DB, containers
+```
+
+### MCP Tools (for messaging and tasks)
+
 - **`send_message`**: Send a message to any registered channel.
 - **`schedule_task`**: Schedule a recurring or one-time task for any group.
 - **`list_tasks`** / **`pause_task`** / **`resume_task`** / **`cancel_task`** / **`update_task`**: Manage scheduled tasks.
-- **`cleanup_workers`**: Stop orphaned containers and clean up stale state. Use when container slots are full or after repeated create/destroy cycles.
-- **`switch_backend`**: Switch a worker's inference backend or model. Within-Neuralwatt model changes are instant. Cross-backend switches restart the container automatically.
 - **`get_backend`**: Check a worker's current backend and model.
-- **`worker_history`**: Query worker lifecycle events. Filter by worker name, event type, or time range.
-- **`register_group`**: Register an existing Discord channel as a new group (lower-level than `create_worker`).
 
-When asked to create a worker, use `create_worker` immediately. Don't ask for confirmation unless the request is ambiguous.
+When asked to create a worker, use `ncf create` immediately. Don't ask for confirmation unless the request is ambiguous.
 
 Workers are created from profiles (`~/.config/nanoclaw/worker-profiles/`). The "default" profile is used unless another is specified. Workers stay alive until explicitly destroyed (no idle timeout).
 
@@ -36,9 +45,16 @@ Workers are created from profiles (`~/.config/nanoclaw/worker-profiles/`). The "
 
 Workers default to Claude (Anthropic). To create a worker on open-weight models:
 
-> "create a worker named test-oss with neuralwatt backend and model some-org/some-model"
+```bash
+ncf create test-oss --backend neuralwatt --model some-org/some-model
+```
 
-To switch an existing worker's model, use `switch_backend`. Switching models within the same backend takes effect on the next request. Switching between Anthropic and Neuralwatt takes effect on the next container spawn.
+To switch an existing worker's model:
+
+```bash
+ncf switch <worker> neuralwatt some-new-model   # Within-Neuralwatt: instant
+ncf switch <worker> anthropic                    # Cross-backend: auto-restart
+```
 
 ### Model discovery
 
@@ -54,7 +70,7 @@ The shim also supports fuzzy matching. Use hyphens in queries for best results:
 curl -s http://host.docker.internal:3003/models/resolve/kimi-fast
 ```
 
-Match the user's request against the returned model IDs. If the match is ambiguous, ask the user to clarify. Always pass the exact model ID to `create_worker`.
+Match the user's request against the returned model IDs. If the match is ambiguous, ask the user to clarify. Always pass the exact model ID to `ncf create`.
 
 ## Docker Access
 
@@ -82,5 +98,3 @@ The NanoClaw repo is at `/workspace/project/`. When modifying it:
 - Read `docs/architecture/overview.md` for goals and design principles
 - Read `docs/guides/testing.md` for E2E verification procedures
 - Exercise your changes before declaring done. Use `ncf inject` to send real messages and confirm behavior. Check `logs/nanoclaw.log` for errors after every test.
-
-**Note:** The `ncf` CLI is a host-side tool. Inside the container, use MCP tools instead (create_worker, destroy_worker, switch_backend, etc.).

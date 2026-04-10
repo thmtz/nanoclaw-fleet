@@ -41,7 +41,7 @@ The **host process** runs the message loop, polls for new messages, spawns conta
 
 Two proxies handle credentials and API translation. The **credential proxy** (port 3001) injects OAuth tokens for Anthropic workers. The **translation shim** (port 3003) converts between Anthropic and OpenAI API formats for Neuralwatt workers, including streaming SSE.
 
-Inside each container, the **agent runner** wraps the Claude Agent SDK and exposes MCP tools (send_message, schedule_task, create_worker, etc.). **Worker profiles** define what each worker gets at boot: repos to clone, tools to install, credentials to mount.
+Inside each container, the **agent runner** wraps the Claude Agent SDK and exposes MCP tools (send_message, schedule_task, etc.). Worker management (create, destroy, switch) uses the `ncf` CLI. **Worker profiles** define what each worker gets at boot: repos to clone, tools to install, credentials to mount.
 
 ### Inference Routing
 
@@ -55,10 +55,11 @@ The shim translates request/response format (Anthropic ↔ OpenAI) and handles s
 ### Model Discovery
 
 The shim exposes:
+
 - `GET /models` — lists all available Neuralwatt models
 - `GET /models/resolve/<query>` — fuzzy-matches a natural language query to a model ID
 
-The master agent uses these to resolve "kimi fast" → `moonshotai/Kimi-K2.5-fast` before passing the model to `create_worker`. See [model-discovery.md](model-discovery.md) for details.
+The master agent uses these to resolve "kimi fast" → `moonshotai/Kimi-K2.5-fast` before passing the model to `ncf create`. See [model-discovery.md](model-discovery.md) for details.
 
 ### Storage and Persistence
 
@@ -69,6 +70,7 @@ Worker state is spread across SQLite, session directories, and the workspace. De
 Session resume is valuable, but it's in tension with container updates. When you change `init.sh`, rebuild the container image, or update worker-profile tools, existing workers keep running on stale containers. New containers get the updates, but `init.sh` skips already-cloned repos.
 
 Current approach:
+
 - **Container image updates** take effect on next container spawn (restart or destroy/recreate)
 - **init.sh changes** take effect on next spawn, but skip already-completed steps (e.g. repos already cloned)
 - **Agent-runner source** is auto-synced by mtime on each container spawn. Changes take effect automatically.
