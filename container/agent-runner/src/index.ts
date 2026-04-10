@@ -468,17 +468,29 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Build systemPrompt.append from multiple sources:
-  // 1. globalClaudeMd (workers only, from /workspace/global/CLAUDE.md)
-  // 2. includeContent (all agents, from include_files in personal config)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  // Build systemPrompt.append from multiple sources.
+  // Everything here goes into the system prompt (sent every API call),
+  // so it survives context compaction. CLAUDE.md loaded via settingSources
+  // only appears in the first user message and is lost after compaction.
+  const systemPromptParts: string[] = [];
+
+  // 1. Per-worker CLAUDE.md (assembled by profile-sync from repo + personal instructions)
+  const workerClaudeMdPath = '/workspace/group/CLAUDE.md';
+  if (fs.existsSync(workerClaudeMdPath)) {
+    systemPromptParts.push(
+      fs.readFileSync(workerClaudeMdPath, 'utf-8').trimEnd(),
+    );
   }
 
-  const systemPromptParts: string[] = [];
-  if (globalClaudeMd) systemPromptParts.push(globalClaudeMd.trimEnd());
+  // 2. Global CLAUDE.md (workers only, shared context across all workers)
+  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+    systemPromptParts.push(
+      fs.readFileSync(globalClaudeMdPath, 'utf-8').trimEnd(),
+    );
+  }
+
+  // 3. includeContent (all agents, from include_files in personal config)
   if (containerInput.includeContent)
     systemPromptParts.push(containerInput.includeContent);
 

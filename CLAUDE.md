@@ -145,7 +145,7 @@ systemctl --user unset-environment SHIM_DUMP
 systemctl --user restart nanoclaw-shim
 ```
 
-**How instructions reach the model**: Worker instructions are assembled from repo + personal fragments by profile-sync into `groups/<folder>/CLAUDE.md`. The SDK auto-discovers this file (via `cwd: '/workspace/group'`) and injects it as a `<system-reminder>` block with `# claudeMd` inside the user message — not in the system prompt. The `systemPrompt.append` path (global CLAUDE.md, include_files) does go into the actual system prompt. The SDK session transcript JSONL (`data/sessions/<folder>/.claude/.../*.jsonl`) does **not** capture the system prompt — use `SHIM_DUMP` or the credential proxy logs to see the full API payload.
+**How instructions reach the model**: Worker instructions are assembled from repo + personal fragments by profile-sync into `groups/<folder>/CLAUDE.md`. The agent-runner reads this file at startup and injects it into `systemPrompt.append`, which puts it in the actual system prompt sent on every API call. This survives context compaction. Global CLAUDE.md and `include_files` content take the same path. The SDK session transcript JSONL (`data/sessions/<folder>/.claude/.../*.jsonl`) does **not** capture the system prompt — use `SHIM_DUMP` to see the full API payload.
 
 **Per-worker audit logs** track every API call at `logs/workers/<folder>/turns.jsonl`. Each entry has: model, backend, tokens (in/out/cached), latency, energy, and stop reason. Use `ncf logs` to query:
 
