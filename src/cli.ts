@@ -1005,10 +1005,13 @@ const cmd = args[0];
       case 'test': {
         // Thin wrapper around the e2e test script
         const testArgs = args.slice(1).join(' ');
-        execSync(`npx tsx "${path.join(PROJECT_DIR, 'tools/e2e-test.ts')}" ${testArgs}`, {
-          stdio: 'inherit',
-          cwd: PROJECT_DIR,
-        });
+        execSync(
+          `npx tsx "${path.join(PROJECT_DIR, 'tools/e2e-test.ts')}" ${testArgs}`,
+          {
+            stdio: 'inherit',
+            cwd: PROJECT_DIR,
+          },
+        );
         break;
       }
 
