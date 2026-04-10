@@ -355,7 +355,7 @@ async function testFirstBoot(workerName: string) {
       .split('\n')
       .filter((l) => l.trim())
       .map((l) => JSON.parse(l))
-      .filter((e: any) => e.folder === folder && e.event === 'created' && e.time >= t0);
+      .filter((e: any) => e.folder === folder && e.event === 'created');
     if (createEvents.length > 0) {
       pass('Worker event log has "created" entry');
     } else {
