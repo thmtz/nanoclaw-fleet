@@ -14,6 +14,7 @@ const envConfig = readEnvFile([
   'CONTAINER_TIMEOUT',
   'CONTAINER_MAX_OUTPUT_SIZE',
   'CREDENTIAL_PROXY_PORT',
+  'DISCORD_ALLOWED_BOT_IDS',
   'NEURALWATT_PROXY_PORT',
   'IDLE_TIMEOUT',
   'MAX_CONCURRENT_CONTAINERS',
@@ -87,6 +88,19 @@ export type InferenceBackend =
 export const WORKER_BACKENDS_FILENAME = 'worker-backends.json';
 export const WORKER_API_KEY_PREFIX = 'sk-ant-worker-';
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
+
+// Optional: bot IDs that NanoClaw should treat as human users (comma-separated).
+// Used for E2E testing with a separate debug bot that sends messages as a "user".
+export const DISCORD_ALLOWED_BOT_IDS = new Set(
+  (
+    process.env.DISCORD_ALLOWED_BOT_IDS ||
+    envConfig.DISCORD_ALLOWED_BOT_IDS ||
+    ''
+  )
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,

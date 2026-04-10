@@ -337,6 +337,31 @@ curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
 tail logs/shim.error.log
 ```
 
+## Debug Bot (True E2E Testing)
+
+`ncf inject` bypasses Discord — messages go directly to the DB. For true end-to-end testing through Discord (message → bot receives → agent processes → bot responds), use a separate debug bot:
+
+1. Create a second Discord bot (e.g., "NanoClaw Debug") in the Developer Portal
+2. Invite it to the same server with `Send Messages`, `Read Message History`, `Add Reactions`, `View Channels`
+3. Enable **Message Content Intent** in the bot settings
+4. Save the token at `~/.config/nanoclaw/debug_bot_token`
+5. Add the bot's user ID to `.env`: `DISCORD_ALLOWED_BOT_IDS=<bot-user-id>`
+6. Restart NanoClaw
+
+The `DISCORD_ALLOWED_BOT_IDS` setting tells NanoClaw to treat messages from that bot as if they came from a human user (normally all bot messages are ignored).
+
+```bash
+# Send a message as the debug bot
+DEBUG_TOKEN=$(cat ~/.config/nanoclaw/debug_bot_token)
+curl -s -X POST -H "Authorization: Bot $DEBUG_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content":"hello from debug bot"}' \
+  "https://discord.com/api/v10/channels/<channel-id>/messages"
+
+# Read messages
+curl -s -H "Authorization: Bot $DEBUG_TOKEN" \
+  "https://discord.com/api/v10/channels/<channel-id>/messages?limit=5"
+```
+
 ## Reading Logs
 
 ```bash

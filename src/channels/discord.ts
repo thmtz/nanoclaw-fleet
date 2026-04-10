@@ -7,7 +7,11 @@ import {
   TextChannel,
 } from 'discord.js';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  DISCORD_ALLOWED_BOT_IDS,
+  TRIGGER_PATTERN,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -72,8 +76,11 @@ export class DiscordChannel implements Channel {
     });
 
     this.client.on(Events.MessageCreate, async (message: Message) => {
-      // Ignore bot messages (including own)
-      if (message.author.bot) return;
+      // Ignore bot messages, unless the bot is in the allowed list
+      // (used for E2E testing with a separate debug bot)
+      if (message.author.bot) {
+        if (!DISCORD_ALLOWED_BOT_IDS.has(message.author.id)) return;
+      }
 
       const channelId = message.channelId;
       const chatJid = `dc:${channelId}`;
@@ -331,11 +338,7 @@ export class DiscordChannel implements Channel {
     }
   }
 
-  async react(
-    jid: string,
-    messageId: string,
-    emoji: string,
-  ): Promise<void> {
+  async react(jid: string, messageId: string, emoji: string): Promise<void> {
     try {
       const textChannel = await this.fetchTextChannel(jid);
       const message = await textChannel.messages.fetch(messageId);
@@ -345,11 +348,7 @@ export class DiscordChannel implements Channel {
     }
   }
 
-  async unreact(
-    jid: string,
-    messageId: string,
-    emoji: string,
-  ): Promise<void> {
+  async unreact(jid: string, messageId: string, emoji: string): Promise<void> {
     try {
       if (!this.client?.user) return;
       const textChannel = await this.fetchTextChannel(jid);

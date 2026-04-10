@@ -383,34 +383,73 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let throbberActive = false;
 
   // Channel-agnostic react/unreact — only fires if the channel supports it
-  const channelReact = 'react' in channel
-    ? (channel as unknown as { react: (jid: string, msgId: string, emoji: string) => Promise<void> }).react.bind(channel)
-    : null;
-  const channelUnreact = 'unreact' in channel
-    ? (channel as unknown as { unreact: (jid: string, msgId: string, emoji: string) => Promise<void> }).unreact.bind(channel)
-    : null;
+  const channelReact =
+    'react' in channel
+      ? (
+          channel as unknown as {
+            react: (jid: string, msgId: string, emoji: string) => Promise<void>;
+          }
+        ).react.bind(channel)
+      : null;
+  const channelUnreact =
+    'unreact' in channel
+      ? (
+          channel as unknown as {
+            unreact: (
+              jid: string,
+              msgId: string,
+              emoji: string,
+            ) => Promise<void>;
+          }
+        ).unreact.bind(channel)
+      : null;
 
   const cycleThrobber = () => {
-    if (!lastMessageId || !channelReact) return;
+    if (!lastMessageId || !channelReact) {
+      logger.debug(
+        {
+          group: group.name,
+          hasMessageId: !!lastMessageId,
+          hasReact: !!channelReact,
+        },
+        'Throbber: skipped (missing messageId or react)',
+      );
+      return;
+    }
     const now = Date.now();
     if (now - throbberLastCycle < THROBBER_DEBOUNCE_MS) return;
     throbberLastCycle = now;
 
-    const prevEmoji = THROBBER_EMOJIS[(throbberIdx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length];
+    const prevEmoji =
+      THROBBER_EMOJIS[
+        (throbberIdx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length
+      ];
     const nextEmoji = THROBBER_EMOJIS[throbberIdx % THROBBER_EMOJIS.length];
 
-    if (throbberActive && channelUnreact) {
-      channelUnreact(chatJid, lastMessageId, prevEmoji).catch(() => {});
-    }
-    channelReact(chatJid, lastMessageId, nextEmoji).catch(() => {});
+    logger.debug(
+      { group: group.name, messageId: lastMessageId, emoji: nextEmoji },
+      'Throbber: cycling',
+    );
+
+    // Remove previous emoji before adding next — sequential to avoid
+    // momentary double-emoji (Discord rate limit: 4 req/s shared bucket)
+    const doReact = async () => {
+      if (throbberActive && channelUnreact) {
+        await channelUnreact(chatJid, lastMessageId, prevEmoji).catch(() => {});
+      }
+      await channelReact(chatJid, lastMessageId, nextEmoji).catch(() => {});
+    };
+    doReact().catch(() => {});
     throbberActive = true;
     throbberIdx++;
   };
 
   const clearThrobber = () => {
     if (!throbberActive || !lastMessageId || !channelUnreact) return;
-    const currentEmoji = THROBBER_EMOJIS[(throbberIdx - 1) % THROBBER_EMOJIS.length];
-    channelUnreact(chatJid, lastMessageId, currentEmoji).catch(() => {});
+    // Remove all throbber emojis to handle any race conditions
+    for (const emoji of THROBBER_EMOJIS) {
+      channelUnreact(chatJid, lastMessageId, emoji).catch(() => {});
+    }
     throbberActive = false;
   };
 
