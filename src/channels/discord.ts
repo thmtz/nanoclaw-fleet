@@ -319,6 +319,18 @@ export class DiscordChannel implements Channel {
     }
   }
 
+  async unpinMessage(jid: string, messageId: string): Promise<void> {
+    const textChannel = await this.fetchTextChannel(jid);
+    try {
+      const message = await textChannel.messages.fetch(messageId);
+      if (message.pinned) {
+        await message.unpin();
+      }
+    } catch {
+      // Message may have been deleted
+    }
+  }
+
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.client || !isTyping) return;
     try {
