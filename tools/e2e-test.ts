@@ -154,6 +154,9 @@ async function cleanup() {
   info('Cleaning up test workers...');
   for (const name of workersToCleanup) {
     const folder = `discord_${name}`;
+    const safeName = folder.replace(/_/g, '-');
+
+    // Try IPC destroy first (handles Discord channel deletion)
     const jid = sqlite(
       `SELECT jid FROM registered_groups WHERE folder='${folder}';`,
     );
@@ -162,7 +165,20 @@ async function cleanup() {
         ipc({ type: 'destroy_worker', jid });
       } catch {}
     }
-    await sleep(2000);
+
+    // Wait briefly for IPC to process, then force-clean regardless
+    await sleep(3000);
+
+    // Stop container if still running
+    sh(`docker stop nanoclaw-${safeName} 2>/dev/null || true`, {
+      ignoreError: true,
+      timeout: 10_000,
+    });
+
+    // Force-remove DB registration (in case IPC destroy didn't fire)
+    sqlite(`DELETE FROM registered_groups WHERE folder='${folder}';`);
+    sqlite(`DELETE FROM sessions WHERE group_folder='${folder}';`);
+
     // Clean up local state
     const groupDir = path.join(PROJECT_DIR, 'groups', folder);
     const sessionDir = path.join(PROJECT_DIR, 'data/sessions', folder);
@@ -170,7 +186,6 @@ async function cleanup() {
       rmSync(groupDir, { recursive: true, force: true });
     if (existsSync(sessionDir))
       rmSync(sessionDir, { recursive: true, force: true });
-    sqlite(`DELETE FROM sessions WHERE group_folder='${folder}';`);
   }
 }
 
