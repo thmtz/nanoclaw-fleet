@@ -37,7 +37,7 @@ Each agent's `CLAUDE.md` is assembled from four fragments at startup:
 
 Repo instructions set baseline behavior (communication style, first-boot, workspace layout). Personal instructions add your conventions (code design, PR workflow, repo list, mount map). You never edit repo instructions for personal preferences; add a personal fragment instead.
 
-**How they reach the model**: The assembled CLAUDE.md is written to `groups/<folder>/CLAUDE.md` and bind-mounted into the container at `/workspace/group/`. The SDK auto-discovers it (via `cwd: '/workspace/group'`) and injects it as a `<system-reminder>` block inside the user message on every API call. Files from `include_files` take a different path — they go into `systemPrompt.append`, which lands in the actual system prompt. Both survive conversation compaction.
+**How they reach the model**: The assembled CLAUDE.md is written to `groups/<folder>/CLAUDE.md` and bind-mounted into the container at `/workspace/group/`. The SDK auto-discovers it (via `cwd: '/workspace/group'`) and injects it as a `<system-reminder>` block inside the **first user message** of the session. On subsequent API calls, the model sees it via conversation history — but after compaction, it gets summarized and the original instructions are lost. Files from `include_files` take a different path — they go into `systemPrompt.append`, which lands in the actual system prompt and is sent on **every** API call, surviving compaction fully. Put your most critical instructions in `include_files` for durability.
 
 ### Including External Files
 
