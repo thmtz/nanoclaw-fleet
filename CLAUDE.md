@@ -145,6 +145,23 @@ ncf logs <worker> --follow     # follow container logs in real-time
 
 Most commands accept `--json` for machine-readable output. Worker names can be specified with or without the `discord_` prefix. `ncf inject --wait` is the fastest way to verify end-to-end responsiveness.
 
+**Debug bot for E2E testing:** A separate Discord bot (`~/.config/nanoclaw/debug_bot_token`) is allowlisted via `DISCORD_ALLOWED_BOT_IDS` in `.env`. Use it to send messages as a "user" through Discord and verify the full path (Discord → NanoClaw → agent → Discord response). **Prefer the debug bot over `ncf inject`** for testing — inject bypasses Discord entirely, so it can't verify message delivery, reactions, or formatting. The debug bot tests the real path.
+
+```bash
+# Read messages from a channel
+DEBUG_TOKEN=$(cat ~/.config/nanoclaw/debug_bot_token)
+curl -s -H "Authorization: Bot $DEBUG_TOKEN" \
+  "https://discord.com/api/v10/channels/<channel-id>/messages?limit=5"
+
+# Send a message as the debug bot
+curl -s -X POST -H "Authorization: Bot $DEBUG_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"your message"}' \
+  "https://discord.com/api/v10/channels/<channel-id>/messages"
+```
+
+See `docs/guides/testing.md` for full setup instructions.
+
 ## Gotchas
 
 - **Agent-runner source auto-syncs by mtime.** Changes to MCP tools or agent-runner code take effect on next container spawn. No manual cache clearing needed. However, if the image is stale, the entrypoint recompiles TypeScript on every spawn (~2-3s). Rebuild the image (`container/build.sh`) after agent-runner changes to avoid this.

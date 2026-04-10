@@ -770,7 +770,12 @@ function cmdFollowLogs(worker: string) {
     process.exit(1);
   }
   console.log(`${CYAN}Following logs for ${container}...${NC}\n`);
-  sh(`docker logs -f "${container}"`, { timeout: TIMEOUTS.FOLLOW });
+  // Use stdio: 'inherit' so logs stream to the terminal in real-time
+  // (execSync with 'pipe' would buffer everything until the command exits)
+  execSync(`docker logs -f "${container}"`, {
+    timeout: TIMEOUTS.FOLLOW,
+    stdio: 'inherit',
+  });
 }
 
 function printHelp() {
