@@ -527,27 +527,31 @@ function cmdDestroy(worker: string) {
 }
 
 // jq filter for rendering session JSONL as a human-readable transcript
-// jq filter for rendering session JSONL — outputs one line per content block.
-// Avoids join("\n") which causes shell quoting issues in execSync.
+// jq filter for rendering session JSONL as a human-readable transcript.
+// Role headers with separator lines, indented tool calls (→ call, ← result).
+// Filters out <internal> tags. Truncates long output.
 const SESSION_JQ_FILTER =
   'select(.message) | .message | ' +
   'if .role == "user" then ' +
-  '  (.content // [] | if type == "string" then "👤 " + .[0:500] elif type == "array" then (.[] | ' +
-  '    if .type == "text" then "👤 " + .text[0:500] ' +
-  '    elif .type == "tool_result" then "📎 " + (.content // [] | if type == "array" then (.[] | select(.type == "text") | .text[0:300]) elif type == "string" then .[0:300] else "(result)" end) ' +
+  '  (.content // [] | if type == "string" then "\\n-- USER " + ("-" * 40) + "\\n" + .[0:500] ' +
+  '  elif type == "array" then (.[] | ' +
+  '    if .type == "text" then "\\n-- USER " + ("-" * 40) + "\\n" + .text[0:500] ' +
+  '    elif .type == "tool_result" then "  <- " + (.content // [] | if type == "array" then (.[] | select(.type == "text") | .text[0:300]) elif type == "string" then .[0:300] else "(result)" end) ' +
   '    else empty end) else empty end) ' +
   'elif .role == "assistant" then ' +
   '  (.content // [] | .[] | ' +
-  '    if .type == "text" then "💬 " + .text[0:500] ' +
+  '    if .type == "text" then ' +
+  '      if (.text | test("^<internal>")) then empty ' +
+  '      else "\\n-- ASSISTANT " + ("-" * 36) + "\\n" + .text[0:500] end ' +
   '    elif .type == "tool_use" then ' +
-  '      if .name == "Bash" then "🔧 $ " + (.input.command // "?")[0:200] ' +
-  '      elif .name == "Read" then "🔧 Read " + (.input.file_path // "?") ' +
-  '      elif .name == "Edit" then "🔧 Edit " + (.input.file_path // "?") ' +
-  '      elif .name == "Write" then "🔧 Write " + (.input.file_path // "?") ' +
-  '      elif .name == "Grep" then "🔧 Grep " + (.input.pattern // "?") ' +
-  '      elif (.name | test("send_message")) then "📤 " + (.input.text // "?")[0:300] ' +
-  '      else "🔧 " + .name + "(" + (.input | keys | join(", ")) + ")" end ' +
-  '    elif .type == "thinking" then "💭 " + .thinking[0:200] ' +
+  '      if .name == "Bash" then "  -> $ " + (.input.command // "?")[0:200] ' +
+  '      elif .name == "Read" then "  -> read " + (.input.file_path // "?") ' +
+  '      elif .name == "Edit" then "  -> edit " + (.input.file_path // "?") ' +
+  '      elif .name == "Write" then "  -> write " + (.input.file_path // "?") ' +
+  '      elif .name == "Grep" then "  -> grep " + (.input.pattern // "?") ' +
+  '      elif (.name | test("send_message")) then "  -> send: " + (.input.text // "?")[0:300] ' +
+  '      else "  -> " + .name + "(" + (.input | keys | join(", ")) + ")" end ' +
+  '    elif .type == "thinking" then "  (thinking) " + .thinking[0:150] ' +
   '    else empty end) ' +
   'else empty end';
 
@@ -610,16 +614,29 @@ function cmdSession(
         const entry = JSON.parse(line);
         const m = entry.message;
         if (!m) continue;
-        const blocks = Array.isArray(m.content) ? m.content : typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : [];
+        const blocks = Array.isArray(m.content)
+          ? m.content
+          : typeof m.content === 'string'
+            ? [{ type: 'text', text: m.content }]
+            : [];
         for (const block of blocks) {
-          const out: Record<string, unknown> = { role: m.role, type: block.type };
+          const out: Record<string, unknown> = {
+            role: m.role,
+            type: block.type,
+          };
           if (block.type === 'text') {
             out.text = block.text?.slice(0, 300);
           } else if (block.type === 'tool_use') {
             out.tool = block.name;
             if (block.name === 'Bash') {
-              out.command = (block.input?.command || '').split('\n')[0].slice(0, 200);
-            } else if (block.name === 'Read' || block.name === 'Edit' || block.name === 'Write') {
+              out.command = (block.input?.command || '')
+                .split('\n')[0]
+                .slice(0, 200);
+            } else if (
+              block.name === 'Read' ||
+              block.name === 'Edit' ||
+              block.name === 'Write'
+            ) {
               out.file = block.input?.file_path;
             } else if (block.name === 'Grep') {
               out.pattern = block.input?.pattern;
@@ -634,7 +651,9 @@ function cmdSession(
             if (typeof resultContent === 'string') {
               out.result = resultContent.slice(0, 300);
             } else if (Array.isArray(resultContent)) {
-              const textParts = resultContent.filter((r: any) => r.type === 'text').map((r: any) => r.text);
+              const textParts = resultContent
+                .filter((r: any) => r.type === 'text')
+                .map((r: any) => r.text);
               out.result = textParts.join('\n').slice(0, 300);
             }
           } else if (block.type === 'thinking') {
