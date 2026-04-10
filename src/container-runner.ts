@@ -383,7 +383,10 @@ function buildContainerArgs(
         neuralwattModel = config.model || null;
       }
     } catch (err) {
-      logger.warn({ err, groupFolder }, 'Failed to read worker-backends.json — defaulting to Anthropic');
+      logger.warn(
+        { err, groupFolder },
+        'Failed to read worker-backends.json — defaulting to Anthropic',
+      );
     }
 
     // Pass worker profile env vars (repos, tools, skills — not backend).
