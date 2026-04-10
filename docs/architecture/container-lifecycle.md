@@ -2,31 +2,30 @@
 
 How workers are created, run, destroyed, and resumed.
 
-## MCP Tools
+## Worker Management
 
-The master agent has these lifecycle tools (master-only, enforced by `isMain` check):
+Workers are managed via `ncf` CLI commands:
 
-| Tool | What it does |
-|-|-|
-| `create_worker` | Creates a Discord channel + registers the group + prepares the workspace |
-| `destroy_worker` | Deletes the Discord channel, DB records, and session state. Workspace preserved. |
-| `list_workers` | Returns all registered workers with their status |
-| `cleanup_workers` | Destroys stale or errored workers in bulk |
-| `switch_backend` | Changes a worker's inference backend or model. Cross-backend switches restart the container automatically. |
-| `worker_history` | Query the worker event log (`logs/worker-events.jsonl`). Filter by worker name, event type, or time range. |
+| Command       | What it does                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
+| `ncf create`  | Creates a Discord channel + registers the group + prepares the workspace                                   |
+| `ncf destroy` | Deletes the Discord channel, DB records, and session state. Workspace preserved.                           |
+| `ncf status`  | Returns all registered workers with their status                                                           |
+| `ncf switch`  | Changes a worker's inference backend or model. Cross-backend switches restart the container automatically. |
+| `ncf history` | Query the worker event log (`logs/worker-events.jsonl`). Filter by worker name, event type, or time range. |
 
-All agents (master and workers) also have:
+MCP tools available to all agents:
 
-| Tool | What it does |
-|-|-|
-| `send_message` | Send a message to the channel while still running |
-| `schedule_task` | Create a scheduled/recurring task |
-| `list_tasks` / `pause_task` / `resume_task` / `cancel_task` / `update_task` | Manage scheduled tasks |
-| `register_group` | Register a new channel-to-container mapping (master-only in practice) |
+| Tool                                                                        | What it does                                                          |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `send_message`                                                              | Send a message to the channel while still running                     |
+| `schedule_task`                                                             | Create a scheduled/recurring task                                     |
+| `list_tasks` / `pause_task` / `resume_task` / `cancel_task` / `update_task` | Manage scheduled tasks                                                |
+| `register_group`                                                            | Register a new channel-to-container mapping (master-only in practice) |
 
 ## Create
 
-When the master calls `create_worker`:
+When the master runs `ncf create`:
 
 1. **Name collision check.** If a workspace already exists at `groups/{folder}/`, the master is prompted to choose "resume" (keep repos, fresh session) or "fresh" (wipe everything).
 2. **Discord channel created** in the configured guild.
@@ -54,26 +53,27 @@ When the first message arrives in a worker channel:
 
 The container image supports two layers:
 
-| Layer | Location | What goes here |
-|-|-|-|
-| **Public base** | `container/Dockerfile` | Packages every NanoClaw user needs (node, git, chromium, claude-code, rust, python) |
-| **Personal** | `~/.config/nanoclaw/Dockerfile` | Your additions (databases, test frameworks, CLI tools). Optional. |
+| Layer           | Location                        | What goes here                                                                      |
+| --------------- | ------------------------------- | ----------------------------------------------------------------------------------- |
+| **Public base** | `container/Dockerfile`          | Packages every NanoClaw user needs (node, git, chromium, claude-code, rust, python) |
+| **Personal**    | `~/.config/nanoclaw/Dockerfile` | Your additions (databases, test frameworks, CLI tools). Optional.                   |
 
 `container/build.sh` builds the base image, then layers the personal Dockerfile on top if it exists. The personal Dockerfile should start with `FROM nanoclaw-agent:base`.
 
 ### Dockerfile vs init.sh vs profile tools
 
-| Where | What goes here | When it runs |
-|-|-|-|
-| **Dockerfile** | Packages that are the same every time and slow to install. Split between public base and personal layer. | Image build (once) |
-| **init.sh** | Setup that needs host context: cloning repos (needs SSH keys), symlinking credentials from mounts, configuring service connections. Idempotent. | Every container spawn |
-| **Profile tools** | Installs that depend on workspace content (e.g., `uv tool install /workspace/group/myproject`). | Every container spawn, after init.sh |
+| Where             | What goes here                                                                                                                                  | When it runs                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| **Dockerfile**    | Packages that are the same every time and slow to install. Split between public base and personal layer.                                        | Image build (once)                   |
+| **init.sh**       | Setup that needs host context: cloning repos (needs SSH keys), symlinking credentials from mounts, configuring service connections. Idempotent. | Every container spawn                |
+| **Profile tools** | Installs that depend on workspace content (e.g., `uv tool install /workspace/group/myproject`).                                                 | Every container spawn, after init.sh |
 
 If an install takes more than a few seconds and is the same across all workers, move it to a Dockerfile layer.
 
 ## Running
 
 The container stays alive until:
+
 - The master destroys it
 - NanoClaw restarts (containers run with `--rm`)
 - The container crashes (OOM, agent error, etc.)
@@ -129,10 +129,10 @@ Session IDs are preserved in SQLite, so conversation context survives across res
 
 The `groups/` directory is gitignored and holds per-agent workspaces:
 
-| Directory | What it is | Created by |
-|-|-|-|
-| `groups/discord_main/` | Master agent workspace (assembled CLAUDE.md, repos, logs) | Startup sync |
-| `groups/discord_{name}/` | Worker workspaces (repos, code, assembled CLAUDE.md) | `create_worker` |
+| Directory                | What it is                                                | Created by      |
+| ------------------------ | --------------------------------------------------------- | --------------- |
+| `groups/discord_main/`   | Master agent workspace (assembled CLAUDE.md, repos, logs) | Startup sync    |
+| `groups/discord_{name}/` | Worker workspaces (repos, code, assembled CLAUDE.md)      | `create_worker` |
 
 All `groups/` directories are ephemeral workspaces (gitignored). Agent instructions are assembled from layered fragments at startup (master) or worker creation time:
 
@@ -145,13 +145,13 @@ The assembled result is written to `groups/{folder}/CLAUDE.md`. See `profile-syn
 
 ## Storage Layers
 
-| Layer | Location | Survives container death? | Survives destroy? | Survives "fresh" recreate? |
-|-|-|-|-|-|
-| Registration | SQLite `registered_groups` | Yes | No | No |
-| Session ID | SQLite `sessions` table | Yes | Yes (for resume) | No |
-| SDK state | `data/sessions/{folder}/.claude/` | Yes | Yes (for resume) | No |
-| Agent-runner cache | `data/sessions/{folder}/agent-runner-src/` | Yes | No | No |
-| Workspace | `groups/{folder}/` | Yes | Yes | No |
+| Layer              | Location                                   | Survives container death? | Survives destroy? | Survives "fresh" recreate? |
+| ------------------ | ------------------------------------------ | ------------------------- | ----------------- | -------------------------- |
+| Registration       | SQLite `registered_groups`                 | Yes                       | No                | No                         |
+| Session ID         | SQLite `sessions` table                    | Yes                       | Yes (for resume)  | No                         |
+| SDK state          | `data/sessions/{folder}/.claude/`          | Yes                       | Yes (for resume)  | No                         |
+| Agent-runner cache | `data/sessions/{folder}/agent-runner-src/` | Yes                       | No                | No                         |
+| Workspace          | `groups/{folder}/`                         | Yes                       | Yes               | No                         |
 
 ## Updating Workers
 

@@ -3,7 +3,7 @@
  * ncf — NanoClaw Fleet CLI
  *
  * Unified command-line tool for managing NanoClaw workers and containers.
- * Works from the host machine. For agent-internal operations, use MCP tools.
+ * Works from both host machine and inside containers.
  *
  * Usage:
  *   ncf status                    Show all workers and containers
@@ -33,6 +33,9 @@ const PROJECT_DIR = path.resolve(import.meta.dirname!, '..');
 const DB_PATH = path.join(PROJECT_DIR, 'store/messages.db');
 const DATA_DIR = path.join(PROJECT_DIR, 'data');
 const LOGS_DIR = path.join(PROJECT_DIR, 'logs/workers');
+
+const IN_CONTAINER = existsSync('/workspace/project');
+const HOST_PREFIX = IN_CONTAINER ? 'host.docker.internal' : 'localhost';
 
 const TIMEOUTS = {
   DEFAULT: 30_000,
@@ -211,12 +214,21 @@ function cmdStatus(json: boolean) {
   console.log();
 }
 
-function cmdLogs(worker: string, n: number, filter: 'cache' | 'slow' | null) {
+function cmdLogs(
+  worker: string,
+  n: number,
+  filter: 'cache' | 'slow' | null,
+  json: boolean,
+) {
   const folder = normalizeWorker(worker);
   const file = path.join(LOGS_DIR, folder, 'turns.jsonl');
 
   if (!existsSync(file)) {
-    console.error(`${RED}No logs for ${worker}${NC}`);
+    if (json) {
+      console.log(JSON.stringify({ error: `No logs for ${worker}` }));
+    } else {
+      console.error(`${RED}No logs for ${worker}${NC}`);
+    }
     process.exit(1);
   }
 
@@ -246,6 +258,7 @@ function cmdLogs(worker: string, n: number, filter: 'cache' | 'slow' | null) {
 
   lines = lines.slice(-n);
 
+  const entries: any[] = [];
   for (const line of lines) {
     let j: any;
     try {
@@ -253,13 +266,21 @@ function cmdLogs(worker: string, n: number, filter: 'cache' | 'slow' | null) {
     } catch {
       continue;
     }
-    const ts = j.ts?.slice(11, 19) || '?';
-    const model = (j.model || '?').slice(0, 35);
-    const cached = j.cached_tokens ? ` cached=${j.cached_tokens}` : '';
-    const latency = j.latency_ms ? ` ${j.latency_ms}ms` : '';
-    console.log(
-      `${ts}  ${model.padEnd(35)}  in=${j.input_tokens}${cached}  out=${j.output_tokens}${latency}`,
-    );
+    if (json) {
+      entries.push(j);
+    } else {
+      const ts = j.ts?.slice(11, 19) || '?';
+      const model = (j.model || '?').slice(0, 35);
+      const cached = j.cached_tokens ? ` cached=${j.cached_tokens}` : '';
+      const latency = j.latency_ms ? ` ${j.latency_ms}ms` : '';
+      console.log(
+        `${ts}  ${model.padEnd(35)}  in=${j.input_tokens}${cached}  out=${j.output_tokens}${latency}`,
+      );
+    }
+  }
+
+  if (json) {
+    console.log(JSON.stringify({ worker, entries }, null, 2));
   }
 }
 
@@ -427,7 +448,7 @@ function cmdDestroy(worker: string) {
   console.log('  Workspace will be preserved');
 }
 
-function cmdSession(worker: string, lines: number) {
+function cmdSession(worker: string, lines: number, json: boolean) {
   const folder = normalizeWorker(worker);
   const sessionDir = path.join(
     DATA_DIR,
@@ -437,7 +458,11 @@ function cmdSession(worker: string, lines: number) {
   );
 
   if (!existsSync(sessionDir)) {
-    console.error(`${RED}No session for ${worker}${NC}`);
+    if (json) {
+      console.log(JSON.stringify({ error: `No session for ${worker}` }));
+    } else {
+      console.error(`${RED}No session for ${worker}${NC}`);
+    }
     process.exit(1);
   }
 
@@ -447,11 +472,30 @@ function cmdSession(worker: string, lines: number) {
     .reverse();
 
   if (jsonlFiles.length === 0) {
-    console.error(`${RED}No session files${NC}`);
+    if (json) {
+      console.log(JSON.stringify({ error: 'No session files' }));
+    } else {
+      console.error(`${RED}No session files${NC}`);
+    }
     process.exit(1);
   }
 
   const file = path.join(sessionDir, jsonlFiles[0]);
+
+  if (json) {
+    const content = sh(`tail -n ${lines} "${file}"`, { ignoreError: true });
+    const entries: any[] = [];
+    for (const line of content.split('\n').filter(Boolean)) {
+      try {
+        entries.push(JSON.parse(line));
+      } catch {}
+    }
+    console.log(
+      JSON.stringify({ worker, file: jsonlFiles[0], entries }, null, 2),
+    );
+    return;
+  }
+
   console.log(`${CYAN}Session: ${jsonlFiles[0]}${NC}\n`);
 
   sh(`tail -n ${lines} "${file}" | jq -r '
@@ -474,11 +518,20 @@ function cmdSession(worker: string, lines: number) {
   '`);
 }
 
-function cmdHistory(worker?: string, since?: string, limit: number = 50) {
+function cmdHistory(
+  worker?: string,
+  since?: string,
+  limit: number = 50,
+  json: boolean = false,
+) {
   const eventsFile = path.join(PROJECT_DIR, 'logs/worker-events.jsonl');
 
   if (!existsSync(eventsFile)) {
-    console.log(`${YELLOW}No worker event history${NC}`);
+    if (json) {
+      console.log(JSON.stringify({ events: [] }));
+    } else {
+      console.log(`${YELLOW}No worker event history${NC}`);
+    }
     return;
   }
 
@@ -509,6 +562,11 @@ function cmdHistory(worker?: string, since?: string, limit: number = 50) {
   }
 
   filtered = filtered.slice(-limit).reverse();
+
+  if (json) {
+    console.log(JSON.stringify({ events: filtered }, null, 2));
+    return;
+  }
 
   if (filtered.length === 0) {
     console.log(`${YELLOW}No events found${NC}`);
@@ -594,11 +652,11 @@ function cmdDebug() {
     }) || '3003';
 
   const proxyUp = sh(
-    `curl -s -o /dev/null -w "%{http_code}" http://localhost:${proxyPort}/ 2>/dev/null`,
+    `curl -s -o /dev/null -w "%{http_code}" http://${HOST_PREFIX}:${proxyPort}/ 2>/dev/null`,
     { ignoreError: true },
   );
   const nwUp = sh(
-    `curl -s -o /dev/null -w "%{http_code}" http://localhost:${nwPort}/models 2>/dev/null`,
+    `curl -s -o /dev/null -w "%{http_code}" http://${HOST_PREFIX}:${nwPort}/models 2>/dev/null`,
     { ignoreError: true },
   );
 
@@ -679,7 +737,7 @@ ${BOLD}COMMANDS${NC}
   ${CYAN}rebuild${NC} [worker]       Rebuild container image
 
 ${BOLD}OUTPUT${NC}
-  --json                 JSON output (status only)
+  --json                 JSON output (status, logs, history, session)
 
 ${BOLD}EXAMPLES${NC}
   ncf status
@@ -727,7 +785,7 @@ const cmd = args[0];
         const worker = args[1];
         if (!worker) {
           console.error(
-            `${RED}Usage: ncf logs <worker> [n] [--cache|--slow|--follow]${NC}`,
+            `${RED}Usage: ncf logs <worker> [n] [--cache|--slow|--follow|--json]${NC}`,
           );
           process.exit(1);
         }
@@ -735,13 +793,14 @@ const cmd = args[0];
           cmdFollowLogs(worker);
           break;
         }
+        const json = args.includes('--json');
         const n = parseInt(args.find((a) => /^\d+$/.test(a)) || '20');
         const filter = args.includes('--cache')
           ? 'cache'
           : args.includes('--slow')
             ? 'slow'
             : null;
-        cmdLogs(worker, n, filter);
+        cmdLogs(worker, n, filter, json);
         break;
       }
 
@@ -816,11 +875,14 @@ const cmd = args[0];
       case 'session': {
         const worker = args[1];
         const lines = parseInt(args[2]) || 80;
+        const json = args.includes('--json');
         if (!worker) {
-          console.error(`${RED}Usage: ncf session <worker> [lines]${NC}`);
+          console.error(
+            `${RED}Usage: ncf session <worker> [lines] [--json]${NC}`,
+          );
           process.exit(1);
         }
-        cmdSession(worker, lines);
+        cmdSession(worker, lines, json);
         break;
       }
 
@@ -830,6 +892,7 @@ const cmd = args[0];
       }
 
       case 'history': {
+        const json = args.includes('--json');
         const workerIdx = args.findIndex(
           (a) => !a.startsWith('--') && a !== 'history',
         );
@@ -838,7 +901,7 @@ const cmd = args[0];
         const since = sinceIdx > 0 ? args[sinceIdx + 1] : undefined;
         const limitIdx = args.indexOf('--limit');
         const limit = limitIdx > 0 ? parseInt(args[limitIdx + 1]) || 50 : 50;
-        cmdHistory(worker, since, limit);
+        cmdHistory(worker, since, limit, json);
         break;
       }
 
