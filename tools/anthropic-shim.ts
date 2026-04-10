@@ -21,6 +21,21 @@
 import fs from 'fs';
 import path from 'path';
 
+// ── Timestamped logging ─────────────────────────────────────
+// Bun's console doesn't add timestamps. All shim log lines need them
+// for correlation with container logs and turns.jsonl.
+const INSTANCE_ID = Math.random().toString(36).slice(2, 8);
+
+function log(msg: string): void {
+  const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+  console.log(`${ts} ${msg}`);
+}
+
+function logError(msg: string): void {
+  const ts = new Date().toISOString().slice(11, 23);
+  console.error(`${ts} ${msg}`);
+}
+
 const PORT = Number(process.env.SHIM_PORT || '3003');
 const NEURALWATT_BASE = (
   process.env.NEURALWATT_BASE_URL || 'https://api.neuralwatt.com/v1'
@@ -64,6 +79,7 @@ interface WorkerUsage {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  last_input_tokens?: number;
   total_tokens: number;
   energy_joules: number;
   energy_kwh: number;
@@ -150,8 +166,10 @@ function recordUsage(
   const promptTokens = usage?.prompt_tokens || 0;
   w.input_tokens += promptTokens;
   w.output_tokens += usage?.completion_tokens || 0;
-  // Track last input for max_tokens capping on next request
+  // Track last input for max_tokens capping — persisted in workerUsage
+  // so it survives shim restarts.
   if (promptTokens > 0) {
+    w.last_input_tokens = promptTokens;
     lastInputTokens.set(workerFolder, promptTokens);
   }
   w.total_tokens += usage?.total_tokens || 0;
@@ -179,7 +197,7 @@ function recordUsage(
 }
 
 // Track last input token count per worker for max_tokens capping.
-// Updated after each successful API call with real usage data.
+// Hydrated from persisted workerUsage after loadUsage() runs below.
 const lastInputTokens = new Map<string, number>();
 
 // Deduplicate SDK retries: track last request per worker to detect duplicates.
@@ -216,8 +234,13 @@ function getUsageTotal(): Omit<WorkerUsage, 'last_updated'> {
   return total;
 }
 
-// Load persisted usage on startup
+// Load persisted usage on startup and hydrate lastInputTokens
 loadUsage();
+for (const [folder, usage] of Object.entries(workerUsage)) {
+  if (usage.last_input_tokens) {
+    lastInputTokens.set(folder, usage.last_input_tokens);
+  }
+}
 
 let modelsCache: string[] | null = null;
 let modelsCacheTime = 0;
@@ -250,7 +273,7 @@ function loadConfig(): Record<string, WorkerBackendConfig> {
     cachedConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
     configMtime = stat.mtimeMs;
   } catch (err) {
-    console.error(`[proxy] Failed to read config: ${err}`);
+    logError(`[proxy] Failed to read config: ${err}`);
   }
   return cachedConfig;
 }
@@ -281,7 +304,7 @@ async function fetchModelLimits(): Promise<void> {
       headers: { Authorization: `Bearer ${NEURALWATT_API_KEY}` },
     });
     if (!resp.ok) {
-      console.error(`[proxy] Failed to fetch model limits: ${resp.status}`);
+      logError(`[proxy] Failed to fetch model limits: ${resp.status}`);
       return;
     }
     const data = await resp.json();
@@ -291,11 +314,11 @@ async function fetchModelLimits(): Promise<void> {
         modelContextLimits[m.id] = m.max_model_len;
       }
     }
-    console.log(
+    log(
       `[proxy] Cached context limits for ${Object.keys(modelContextLimits).length} models`,
     );
   } catch (err: any) {
-    console.error(`[proxy] Error fetching model limits: ${err.message}`);
+    logError(`[proxy] Error fetching model limits: ${err.message}`);
   }
 }
 
@@ -502,7 +525,7 @@ const server = Bun.serve({
   port: PORT,
   // Catch unhandled errors — never return Bun's default HTML error page.
   error(err) {
-    console.error(`[proxy] Unhandled error: ${err.message}`);
+    logError(`[proxy] Unhandled error: ${err.message}`);
     return Response.json(
       { type: 'error', error: { type: 'server_error', message: err.message } },
       { status: 500 },
@@ -512,7 +535,7 @@ const server = Bun.serve({
     const url = new URL(request.url);
 
     // Log ALL requests for debugging
-    console.log(`[proxy:req] ${request.method} ${url.pathname}`);
+    log(`[proxy:req] ${request.method} ${url.pathname}`);
 
     // Claude Code SDK v2.1+ checks model access before starting a session.
     // Return has_access: true so NW workers don't get rejected.
@@ -717,31 +740,31 @@ const server = Bun.serve({
           const available =
             contextLimit - estimatedInput - MODEL_CONTEXT_HEADROOM;
           if (available < openaiReq.max_tokens && available > 0) {
-            console.log(
+            log(
               `[proxy] Capping max_tokens: ${openaiReq.max_tokens} → ${available} (input≈${estimatedInput}, limit=${contextLimit})`,
             );
             openaiReq.max_tokens = available;
           } else if (available <= 0) {
-            console.error(
+            logError(
               `[proxy] Context exhausted: input≈${estimatedInput} >= limit=${contextLimit}. Request will likely fail.`,
             );
           }
         }
-        console.log(
+        log(
           `[proxy] ${workerFolder}: ${anthropicBody.model} → ${nwModel} (${openaiReq.messages.length} msgs${openaiReq.tools ? `, ${openaiReq.tools.length} tools` : ''}, ${(reqBodySize / 1024).toFixed(1)}KB request)`,
         );
         // Dump request for analysis when SHIM_DUMP is set
         if (process.env.SHIM_DUMP === '1') {
           const dumpPath = `/tmp/shim-dump-${workerFolder}-${Date.now()}.json`;
           fs.writeFileSync(dumpPath, JSON.stringify(openaiReq, null, 2));
-          console.log(`[proxy:dump] Request saved to ${dumpPath}`);
+          log(`[proxy:dump] Request saved to ${dumpPath}`);
         }
         if (DEBUG) {
-          console.log(`[proxy:debug] Request body size: ${reqBodySize} bytes`);
-          console.log(
+          log(`[proxy:debug] Request body size: ${reqBodySize} bytes`);
+          log(
             `[proxy:debug] Messages: ${openaiReq.messages.map((m: any) => `${m.role}:${(m.content || '').length}chars`).join(', ')}`,
           );
-          console.log(
+          log(
             `[proxy:debug] Anthropic max_tokens: ${anthropicBody.max_tokens}`,
           );
         }
@@ -761,7 +784,7 @@ const server = Bun.serve({
 
           if (!resp.ok) {
             const err = await resp.text();
-            console.error(`[proxy] Neuralwatt stream error: ${resp.status}`);
+            logError(`[proxy] Neuralwatt stream error: ${resp.status}`);
             return Response.json(
               {
                 type: 'error',
@@ -856,9 +879,11 @@ const server = Bun.serve({
                     // can react (e.g. trigger compaction or report to user).
                     if (chunk.error) {
                       const errMsg =
-                        chunk.error.message || JSON.stringify(chunk.error);
-                      console.error(
-                        `[proxy] Upstream SSE error: ${errMsg}`,
+                        chunk.error.message ||
+                        chunk.error.detail ||
+                        JSON.stringify(chunk.error);
+                      logError(
+                        `[proxy] Upstream SSE error (${workerFolder}): ${errMsg}`,
                       );
                       // Emit an error text block so the SDK sees it as a real
                       // (non-empty) response rather than error_during_execution.
@@ -1047,11 +1072,11 @@ const server = Bun.serve({
                   stream: true,
                 });
                 const cached = usage.prompt_tokens_details?.cached_tokens;
-                console.log(
+                log(
                   `[proxy] → stream ${stopReason} (${usage.completion_tokens || '?'} out, ${usage.prompt_tokens || '?'} in${cached ? `, ${cached} cached` : ''})`,
                 );
               } catch (err: any) {
-                console.error(`[proxy] Stream error: ${err.message}`);
+                logError(`[proxy] Stream error: ${err.message}`);
               } finally {
                 if (!streamClosed) {
                   try {
@@ -1084,7 +1109,7 @@ const server = Bun.serve({
 
         if (!resp.ok) {
           const err = await resp.text();
-          console.error(`[proxy] Neuralwatt error: ${resp.status} ${err}`);
+          logError(`[proxy] Neuralwatt error: ${resp.status} ${err}`);
           return Response.json(
             {
               type: 'error',
@@ -1110,14 +1135,14 @@ const server = Bun.serve({
         });
 
         const cached = openaiResp.usage?.prompt_tokens_details?.cached_tokens;
-        console.log(
+        log(
           `[proxy] → ${anthropicResp.stop_reason} (${anthropicResp.usage.output_tokens} out, ${openaiResp.usage?.prompt_tokens || '?'} in${cached ? `, ${cached} cached` : ''})`,
         );
         if (DEBUG) {
-          console.log(
+          log(
             `[proxy:debug] Raw usage: ${JSON.stringify(openaiResp.usage)}`,
           );
-          console.log(
+          log(
             `[proxy:debug] Raw energy: ${JSON.stringify(openaiResp.energy)}`,
           );
         }
@@ -1125,7 +1150,7 @@ const server = Bun.serve({
         return Response.json(anthropicResp);
       }
     } catch (err: any) {
-      console.error(`[proxy] Error: ${err.message}`);
+      logError(`[proxy] Error: ${err.message}`);
       return Response.json(
         {
           type: 'error',
@@ -1137,7 +1162,7 @@ const server = Bun.serve({
   },
 });
 
-console.log(`[proxy] Universal inference proxy on port ${PORT}`);
-console.log(`[proxy] Anthropic → ${CREDENTIAL_PROXY_URL}`);
-console.log(`[proxy] Neuralwatt → ${NEURALWATT_URL}`);
-console.log(`[proxy] Config: ${CONFIG_PATH}`);
+log(`[proxy] Universal inference proxy on port ${PORT} (instance ${INSTANCE_ID})`);
+log(`[proxy] Anthropic → ${CREDENTIAL_PROXY_URL}`);
+log(`[proxy] Neuralwatt → ${NEURALWATT_URL}`);
+log(`[proxy] Config: ${CONFIG_PATH}`);
