@@ -331,6 +331,40 @@ export class DiscordChannel implements Channel {
     }
   }
 
+  async react(
+    jid: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<void> {
+    try {
+      const textChannel = await this.fetchTextChannel(jid);
+      const message = await textChannel.messages.fetch(messageId);
+      await message.react(emoji);
+    } catch {
+      // Message may have been deleted or emoji invalid
+    }
+  }
+
+  async unreact(
+    jid: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<void> {
+    try {
+      if (!this.client?.user) return;
+      const textChannel = await this.fetchTextChannel(jid);
+      const message = await textChannel.messages.fetch(messageId);
+      const reaction = message.reactions.cache.find(
+        (r) => r.emoji.name === emoji,
+      );
+      if (reaction?.me) {
+        await reaction.users.remove(this.client.user.id);
+      }
+    } catch {
+      // Reaction may not exist or message deleted
+    }
+  }
+
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.client || !isTyping) return;
     try {

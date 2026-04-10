@@ -512,6 +512,7 @@ export async function runContainerAgent(
   input: ContainerInput,
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onHeartbeat?: () => void,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
@@ -644,6 +645,11 @@ export async function runContainerAgent(
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
         if (line) logger.debug({ container: group.folder }, line);
+        // Fire heartbeat on SDK message events — used for Discord reaction
+        // throbber so users can see the agent is alive and processing.
+        if (onHeartbeat && line.includes('[msg #')) {
+          onHeartbeat();
+        }
       }
       // Don't reset timeout on stderr — SDK writes debug logs continuously.
       // Timeout only resets on actual output (OUTPUT_MARKER in stdout).

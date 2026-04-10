@@ -371,35 +371,91 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      // Suppress SDK output if the agent already sent messages via send_message
-      // (prevents duplicate Discord messages)
-      if (text && !didGroupSendMessage(group.folder)) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  // Reaction throbber — cycles emojis on the user's last message to show
+  // the agent is alive and processing. Each SDK message event (model call,
+  // tool use, tool result) advances the throbber. Debounced to stay within
+  // Discord's reaction rate limits (4 req/s shared bucket for add+remove).
+  const THROBBER_EMOJIS = ['🔵', '🟣', '🟠'];
+  const THROBBER_DEBOUNCE_MS = 2000;
+  const lastMessageId = missedMessages[missedMessages.length - 1]?.id;
+  let throbberIdx = 0;
+  let throbberLastCycle = 0;
+  let throbberActive = false;
+
+  // Channel-agnostic react/unreact — only fires if the channel supports it
+  const channelReact = 'react' in channel
+    ? (channel as unknown as { react: (jid: string, msgId: string, emoji: string) => Promise<void> }).react.bind(channel)
+    : null;
+  const channelUnreact = 'unreact' in channel
+    ? (channel as unknown as { unreact: (jid: string, msgId: string, emoji: string) => Promise<void> }).unreact.bind(channel)
+    : null;
+
+  const cycleThrobber = () => {
+    if (!lastMessageId || !channelReact) return;
+    const now = Date.now();
+    if (now - throbberLastCycle < THROBBER_DEBOUNCE_MS) return;
+    throbberLastCycle = now;
+
+    const prevEmoji = THROBBER_EMOJIS[(throbberIdx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length];
+    const nextEmoji = THROBBER_EMOJIS[throbberIdx % THROBBER_EMOJIS.length];
+
+    if (throbberActive && channelUnreact) {
+      channelUnreact(chatJid, lastMessageId, prevEmoji).catch(() => {});
+    }
+    channelReact(chatJid, lastMessageId, nextEmoji).catch(() => {});
+    throbberActive = true;
+    throbberIdx++;
+  };
+
+  const clearThrobber = () => {
+    if (!throbberActive || !lastMessageId || !channelUnreact) return;
+    const currentEmoji = THROBBER_EMOJIS[(throbberIdx - 1) % THROBBER_EMOJIS.length];
+    channelUnreact(chatJid, lastMessageId, currentEmoji).catch(() => {});
+    throbberActive = false;
+  };
+
+  // Start the throbber immediately
+  cycleThrobber();
+
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        // Suppress SDK output if the agent already sent messages via send_message
+        // (prevents duplicate Discord messages)
+        if (text && !didGroupSendMessage(group.folder)) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+    cycleThrobber,
+  );
 
+  clearThrobber();
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
   clearGroupSentMessage(group.folder);
@@ -432,6 +488,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onHeartbeat?: () => void,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -522,6 +579,7 @@ async function runAgent(
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
+      onHeartbeat,
     );
 
     applySessionResult(output);
