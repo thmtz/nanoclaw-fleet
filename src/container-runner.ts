@@ -596,7 +596,7 @@ export async function runContainerAgent(
           stdout += chunk.slice(0, remaining);
           stdoutTruncated = true;
           logger.warn(
-            { group: group.name, size: stdout.length },
+            { ...traceCtx, size: stdout.length },
             'Container stdout truncated due to size limit',
           );
         } else {
@@ -638,7 +638,7 @@ export async function runContainerAgent(
             outputChain = outputChain.then(() => onOutput(parsed));
           } catch (err) {
             logger.warn(
-              { group: group.name, error: err },
+              { ...traceCtx, error: err },
               'Failed to parse streamed output chunk',
             );
           }
@@ -650,7 +650,7 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (line) logger.debug({ ...traceCtx, container: group.folder }, line);
         // Fire heartbeat on SDK message events — used for Discord reaction
         // throbber so users can see the agent is alive and processing.
         if (onHeartbeat && line.includes('[msg #')) {
@@ -665,7 +665,7 @@ export async function runContainerAgent(
         stderr += chunk.slice(0, remaining);
         stderrTruncated = true;
         logger.warn(
-          { group: group.name, size: stderr.length },
+          { ...traceCtx, size: stderr.length },
           'Container stderr truncated due to size limit',
         );
       } else {
@@ -687,13 +687,13 @@ export async function runContainerAgent(
     const killOnTimeout = () => {
       timedOut = true;
       logger.error(
-        { group: group.name, containerName },
+        { ...traceCtx, containerName },
         'Container timeout, stopping gracefully',
       );
       exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
         if (err) {
           logger.warn(
-            { group: group.name, containerName, err },
+            { ...traceCtx, containerName, err },
             'Graceful stop failed, force killing',
           );
           container.kill('SIGKILL');
@@ -723,7 +723,7 @@ export async function runContainerAgent(
         );
       } catch (err) {
         logger.debug(
-          { group: group.name, error: err },
+          { ...traceCtx, error: err },
           'Audit extraction failed (non-fatal)',
         );
       }
@@ -939,7 +939,7 @@ export async function runContainerAgent(
       } catch (err) {
         logger.error(
           {
-            group: group.name,
+            ...traceCtx,
             stdout,
             stderr,
             error: err,
@@ -958,7 +958,7 @@ export async function runContainerAgent(
     container.on('error', (err) => {
       clearTimeout(timeout);
       logger.error(
-        { group: group.name, containerName, error: err },
+        { ...traceCtx, containerName, error: err },
         'Container spawn error',
       );
       resolve({
