@@ -123,6 +123,14 @@ function resolveWorker(
   return { jid, folder, name };
 }
 
+function formatTokens(tokens: number): string {
+  if (tokens < 1) return `${tokens}`;
+  if (tokens < 1000) return `${Math.round(tokens)}`;
+  if (tokens < 1000000) return `${(tokens / 1000).toFixed(1)}k`;
+  if (tokens < 1000000000) return `${(tokens / 1000000).toFixed(1)}M`;
+  return `${(tokens / 1000000000).toFixed(1)}B`;
+}
+
 function getContainerName(folder: string): string | null {
   const pattern = `nanoclaw-${folder.replace(/_/g, '-')}`;
   const containers = sh(
@@ -144,6 +152,8 @@ function cmdStatus(json: boolean, noColor: boolean) {
   const STATUS_UP = noColor ? '🟢' : `${GREEN}●${NC}`;
   const STATUS_DOWN = noColor ? '🔴' : `${RED}○${NC}`;
   const STATUS_STOPPED = noColor ? '🟡' : `${YELLOW}○${NC}`;
+  const MASTER_EMOJI = noColor ? '⬛ ' : '';
+  const WORKERS_EMOJI = noColor ? '🤖 ' : '';
   const backends = jsonRead(path.join(DATA_DIR, 'worker-backends.json')) || {};
   const usage = jsonRead(path.join(DATA_DIR, 'worker-usage.json')) || {};
   const groups =
@@ -201,17 +211,17 @@ function cmdStatus(json: boolean, noColor: boolean) {
   if (master) {
     const status = master.container ? STATUS_UP : STATUS_DOWN;
     console.log(
-      `\n${BOLD}Master${NC}  ${status} ${CYAN}${master.model}${NC} ${master.container ? 'up' : 'down'}`,
+      `\n${MASTER_EMOJI}${BOLD}Master${NC}  ${status} ${CYAN}${master.model}${NC} ${master.container ? 'up' : 'down'}`,
     );
   }
 
   if (workers.length > 0) {
-    console.log(`\n${BOLD}Workers${NC}`);
+    console.log(`\n${WORKERS_EMOJI}${BOLD}Workers${NC}`);
     for (const w of workers) {
       const status = w.container ? STATUS_UP : STATUS_STOPPED;
       const usage =
         w.requests > 0
-          ? `  ${w.requests} reqs, ${(w.tokens / 1000).toFixed(1)}k tok`
+          ? `  ${w.requests} reqs, ${formatTokens(w.tokens)} tok`
           : '';
       const displayName = w.name.replace(/^devbox server /, '');
       console.log(

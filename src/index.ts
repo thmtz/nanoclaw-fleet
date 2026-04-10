@@ -5,6 +5,7 @@ import path from 'path';
 import { syncMasterProfile, syncWorkerProfiles } from './profile-sync.js';
 import { startResourceMonitor } from './resource-monitor.js';
 import { startStatusPin, markStatusOffline } from './status-pin.js';
+import { startWorkerStatusPins } from './worker-status-pin.js';
 import type { DiscordChannel } from './channels/discord.js';
 
 import {
@@ -83,6 +84,7 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 let stopStatusPin: (() => void) | undefined;
+let stopWorkerPins: (() => void) | undefined;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -671,6 +673,7 @@ async function main(): Promise<void> {
       }
       // Stop status pin loop before marking offline
       stopStatusPin?.();
+      stopWorkerPins?.();
 
       // Mark pinned status as offline (best-effort, 3s timeout)
       const dcShutdown = channels.find((c) => c.name === 'discord') as
@@ -851,6 +854,14 @@ async function main(): Promise<void> {
       sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
       editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),
       pinMessage: (jid, msgId) => dc.pinMessage(jid, msgId),
+    });
+
+    // Start worker status pins in each worker channel
+    stopWorkerPins = startWorkerStatusPins(STATUS_PIN_INTERVAL, {
+      sendMessage: (jid, text) => dc.sendMessageWithId(jid, text),
+      editMessage: (jid, msgId, text) => dc.editMessage(jid, msgId, text),
+      pinMessage: (jid, msgId) => dc.pinMessage(jid, msgId),
+      unpinMessage: (jid, msgId) => dc.unpinMessage?.(jid, msgId),
     });
   }
 
