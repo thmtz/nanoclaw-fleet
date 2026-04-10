@@ -294,6 +294,64 @@ function cmdLogs(
   }
 }
 
+function cmdHostLogs(n: number, json: boolean, grepPattern: string | null) {
+  const logFile = path.join(LOGS_DIR, '..', 'nanoclaw.log');
+  if (!existsSync(logFile)) {
+    console.error(`${RED}No nanoclaw.log found${NC}`);
+    process.exit(1);
+  }
+
+  const content = readFileSync(logFile, 'utf-8');
+  let lines = content
+    .split('\n')
+    .filter(Boolean)
+    .slice(-n * 2);
+
+  if (grepPattern) {
+    let re: RegExp;
+    try {
+      re = new RegExp(grepPattern, 'i');
+    } catch {
+      console.error(`${RED}Invalid regex: ${grepPattern}${NC}`);
+      process.exit(1);
+    }
+    lines = lines.filter((l) => re.test(l));
+  }
+
+  lines = lines.slice(-n);
+
+  if (json) {
+    const entries = lines.map((line) => {
+      const match = line.match(
+        /\[(\d{2}:\d{2}:\d{2}\.\d{3})\]\s+(\w+)\s+\((\d+)\):\s+(?:\x1b\[\d+m)?(.+?)(?:\x1b\[0m)?$/,
+      );
+      if (match) {
+        return {
+          time: match[1],
+          level: match[2],
+          pid: parseInt(match[3]),
+          message: match[4].replace(/\x1b\[\d+m/g, ''),
+        };
+      }
+      return { raw: line };
+    });
+    console.log(JSON.stringify(entries, null, 2));
+  } else {
+    for (const line of lines) {
+      console.log(line);
+    }
+  }
+}
+
+function cmdFollowHostLogs() {
+  const logFile = path.join(LOGS_DIR, '..', 'nanoclaw.log');
+  if (!existsSync(logFile)) {
+    console.error(`${RED}No nanoclaw.log found${NC}`);
+    process.exit(1);
+  }
+  execSync(`tail -f "${logFile}"`, { stdio: 'inherit' });
+}
+
 async function cmdInject(channel: string, message: string, wait: boolean) {
   const resolved = resolveWorker(channel);
   if (!resolved) {
@@ -796,22 +854,33 @@ const cmd = args[0];
         const worker = args[1];
         if (!worker) {
           console.error(
-            `${RED}Usage: ncf logs <worker> [n] [--cache|--slow|--follow|--json]${NC}`,
+            `${RED}Usage: ncf logs <worker|--host> [n] [--cache|--slow|--follow|--json|--grep PATTERN]${NC}`,
           );
           process.exit(1);
         }
         if (args.includes('--follow')) {
-          cmdFollowLogs(worker);
+          if (worker === '--host') {
+            cmdFollowHostLogs();
+          } else {
+            cmdFollowLogs(worker);
+          }
           break;
         }
         const json = args.includes('--json');
         const n = parseInt(args.find((a) => /^\d+$/.test(a)) || '20');
+        const grepIdx = args.indexOf('--grep');
+        const grepPattern =
+          grepIdx !== -1 && args[grepIdx + 1] ? args[grepIdx + 1] : null;
         const filter = args.includes('--cache')
           ? 'cache'
           : args.includes('--slow')
             ? 'slow'
             : null;
-        cmdLogs(worker, n, filter, json);
+        if (worker === '--host') {
+          cmdHostLogs(n, json, grepPattern);
+        } else {
+          cmdLogs(worker, n, filter, json);
+        }
         break;
       }
 

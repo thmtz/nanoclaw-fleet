@@ -608,9 +608,16 @@ function ensureContainerSystemRunning(): void {
 
 async function main(): Promise<void> {
   const t0 = Date.now();
+  let lastStep = t0;
   const step = (label: string) => {
-    const elapsed = Date.now() - t0;
-    logger.info({ elapsed, step: label }, `Startup: ${label} (+${elapsed}ms)`);
+    const now = Date.now();
+    const elapsed = now - t0;
+    const delta = now - lastStep;
+    lastStep = now;
+    logger.info(
+      { elapsed, delta, step: label },
+      `Startup: ${label} (+${elapsed}ms, Δ${delta}ms)`,
+    );
   };
 
   ensureContainerSystemRunning();
@@ -632,11 +639,15 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     const s0 = Date.now();
+    let lastShutdownStep = s0;
     const sstep = (label: string) => {
-      const elapsed = Date.now() - s0;
+      const now = Date.now();
+      const elapsed = now - s0;
+      const delta = now - lastShutdownStep;
+      lastShutdownStep = now;
       logger.info(
-        { elapsed, step: label },
-        `Shutdown: ${label} (+${elapsed}ms)`,
+        { elapsed, delta, step: label },
+        `Shutdown: ${label} (+${elapsed}ms, Δ${delta}ms)`,
       );
     };
 
@@ -718,10 +729,12 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   };
 
-  // Create and connect all registered channels.
+  // Create and connect all registered channels in parallel.
   // Each channel self-registers via the barrel import above.
   // Factories return null when credentials are missing, so unconfigured channels are skipped.
-  for (const channelName of getRegisteredChannelNames()) {
+  const channelNames = getRegisteredChannelNames();
+  const connectionPromises = channelNames.map(async (channelName) => {
+    const t1 = Date.now();
     const factory = getChannelFactory(channelName)!;
     const channel = factory(channelOpts);
     if (!channel) {
@@ -729,16 +742,25 @@ async function main(): Promise<void> {
         { channel: channelName },
         'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
       );
-      continue;
+      return null;
     }
-    channels.push(channel);
     await channel.connect();
-  }
+    const elapsed = Date.now() - t1;
+    logger.info(
+      { channel: channelName, elapsed },
+      `Channel connected (${elapsed}ms)`,
+    );
+    return channel;
+  });
+  const connectedChannels = (await Promise.all(connectionPromises)).filter(
+    Boolean,
+  ) as Channel[];
+  channels.push(...connectedChannels);
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
   }
-  step('channels connected');
+  step(`channels connected (${channels.length})`);
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
