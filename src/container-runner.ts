@@ -38,6 +38,7 @@ import { RegisteredGroup } from './types.js';
 import {
   extractTurnsFromTranscript,
   getTranscriptOffset,
+  WORKER_LOGS_DIR,
 } from './audit-log.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -530,9 +531,12 @@ export async function runContainerAgent(
     group.containerConfig?.ports,
   );
 
+  // Shared log context — avoids repeating traceId on every logger call
+  const traceCtx = { group: group.name, traceId: input.traceId };
+
   logger.debug(
     {
-      group: group.name,
+      ...traceCtx,
       containerName,
       mounts: mounts.map(
         (m) =>
@@ -545,11 +549,10 @@ export async function runContainerAgent(
 
   logger.info(
     {
-      group: group.name,
+      ...traceCtx,
       containerName,
       mountCount: mounts.length,
       isMain: input.isMain,
-      traceId: input.traceId,
     },
     'Spawning container agent',
   );
@@ -623,7 +626,7 @@ export async function runContainerAgent(
               firstOutputLogged = true;
               const startupMs = Date.now() - containerSpawnTime;
               logger.info(
-                { group: group.name, containerName, startupMs, traceId: input.traceId },
+                { ...traceCtx, containerName, startupMs },
                 'Container first output',
               );
             }
@@ -725,16 +728,28 @@ export async function runContainerAgent(
       }
 
       // Archive container stderr so [msg #N] entries and SDK debug output
-      // survive container removal. Always written (not just on error).
-      if (stderr.trim()) {
-        const stderrDir = path.join(process.cwd(), 'logs', 'workers', group.folder);
+      // survive container removal.
+      if (stderr.length > 0) {
+        const stderrDir = path.join(WORKER_LOGS_DIR, group.folder);
         fs.mkdirSync(stderrDir, { recursive: true });
         const stderrTs = new Date().toISOString().replace(/[:.]/g, '-');
         const stderrFile = path.join(stderrDir, `stderr-${stderrTs}.log`);
         try {
           fs.writeFileSync(stderrFile, stderr);
+          // Retain only the last 20 stderr files per worker
+          const stderrFiles = fs
+            .readdirSync(stderrDir)
+            .filter((f) => f.startsWith('stderr-') && f.endsWith('.log'))
+            .sort();
+          const excess = stderrFiles.slice(0, -20);
+          for (const f of excess) {
+            fs.unlinkSync(path.join(stderrDir, f));
+          }
         } catch (err) {
-          logger.warn({ group: group.name, err }, 'Failed to archive container stderr');
+          logger.warn(
+            { ...traceCtx, err },
+            'Failed to archive container stderr',
+          );
         }
       }
 
@@ -759,7 +774,7 @@ export async function runContainerAgent(
         // container being reaped after the idle period expired.
         if (hadStreamingOutput) {
           logger.info(
-            { group: group.name, containerName, duration, code, traceId: input.traceId },
+            { ...traceCtx, containerName, duration, code },
             'Container timed out after output (idle cleanup)',
           );
           outputChain.then(() => {
@@ -773,7 +788,7 @@ export async function runContainerAgent(
         }
 
         logger.error(
-          { group: group.name, containerName, duration, code, traceId: input.traceId },
+          { ...traceCtx, containerName, duration, code },
           'Container timed out with no output',
         );
 
@@ -856,13 +871,12 @@ export async function runContainerAgent(
       if (code !== 0) {
         logger.error(
           {
-            group: group.name,
+            ...traceCtx,
             code,
             duration,
             stderr,
             stdout,
             logFile,
-            traceId: input.traceId,
           },
           'Container exited with error',
         );
@@ -879,7 +893,7 @@ export async function runContainerAgent(
       if (onOutput) {
         outputChain.then(() => {
           logger.info(
-            { group: group.name, duration, newSessionId, traceId: input.traceId },
+            { ...traceCtx, duration, newSessionId },
             'Container completed (streaming mode)',
           );
           resolve({
@@ -912,11 +926,10 @@ export async function runContainerAgent(
 
         logger.info(
           {
-            group: group.name,
+            ...traceCtx,
             duration,
             status: output.status,
             hasResult: !!output.result,
-            traceId: input.traceId,
           },
           'Container completed',
         );

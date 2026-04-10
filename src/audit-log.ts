@@ -13,7 +13,7 @@ import path from 'path';
 import { logger } from './logger.js';
 import { DATA_DIR } from './config.js';
 
-const LOGS_DIR = path.join(process.cwd(), 'logs', 'workers');
+export const WORKER_LOGS_DIR = path.join(process.cwd(), 'logs', 'workers');
 
 interface TurnEntry {
   ts: string;
@@ -126,7 +126,7 @@ export function extractTurnsFromTranscript(
   }
 
   // Write to audit log
-  const dir = path.join(LOGS_DIR, groupFolder);
+  const dir = path.join(WORKER_LOGS_DIR, groupFolder);
   fs.mkdirSync(dir, { recursive: true });
   const auditFile = path.join(dir, 'turns.jsonl');
   const entries = turns.map((t) => JSON.stringify(t)).join('\n') + '\n';
