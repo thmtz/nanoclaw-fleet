@@ -11,7 +11,7 @@ import path from 'path';
 import { getAllRegisteredGroups, setRegisteredGroup } from './db.js';
 import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { RegisteredGroup, PersonalConfig } from './types.js';
 
 export interface WorkerProfile {
   repos?: { url: string; postClone?: string }[];
@@ -21,9 +21,22 @@ export interface WorkerProfile {
     containerPath: string;
     readonly: boolean;
   }[];
-  ports?: string[]; // Docker port mappings (e.g., ["8080:8080", "8090:8090/tcp"])
+  ports?: string[];
   claude_md?: string;
   skills_repo?: string;
+}
+
+export function loadPersonalConfig(): PersonalConfig {
+  const configPath = path.join(
+    process.env.HOME || '/root',
+    '.config',
+    'nanoclaw',
+    'config.json',
+  );
+  if (!fs.existsSync(configPath)) {
+    return {};
+  }
+  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 }
 
 export function loadWorkerProfile(profileName = 'default'): {

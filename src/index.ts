@@ -2,7 +2,11 @@ import { EventEmitter, once } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { syncMasterProfile, syncWorkerProfiles } from './profile-sync.js';
+import {
+  syncMasterProfile,
+  syncWorkerProfiles,
+  loadPersonalConfig,
+} from './profile-sync.js';
 import { startResourceMonitor } from './resource-monitor.js';
 import { startStatusPin, markStatusOffline } from './status-pin.js';
 import { startWorkerStatusPins } from './worker-status-pin.js';
@@ -398,6 +402,30 @@ async function runAgent(
       }
     : undefined;
 
+  // Read include_files content for systemPrompt.append (compaction-safe)
+  let includeContent: string | undefined;
+  const personalConfig = loadPersonalConfig();
+  if (personalConfig.include_files?.length) {
+    const parts: string[] = [];
+    for (const filePath of personalConfig.include_files) {
+      const expandedPath = filePath.replace(/^~/, process.env.HOME || '/root');
+      try {
+        if (fs.existsSync(expandedPath)) {
+          parts.push(fs.readFileSync(expandedPath, 'utf-8').trimEnd());
+        }
+      } catch (err) {
+        logger.warn({ path: filePath, err }, 'Failed to read include file');
+      }
+    }
+    if (parts.length > 0) {
+      includeContent = parts.join('\n\n---\n\n');
+      logger.debug(
+        { files: personalConfig.include_files },
+        'Loaded include_files for systemPrompt',
+      );
+    }
+  }
+
   try {
     const output = await runContainerAgent(
       group,
@@ -408,6 +436,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        includeContent,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),

@@ -12,6 +12,7 @@ The repo ships with generic agent instructions, example profiles, and a base con
 
 ```
 ~/.config/nanoclaw/
+├── config.json                   # Personal config (include_files, etc.)
 ├── Dockerfile                    # Personal container image layer (optional)
 ├── instructions/
 │   ├── global.md                 # Instructions for ALL agents (master + workers)
@@ -36,6 +37,18 @@ Each agent's `CLAUDE.md` is assembled from four fragments at startup:
 
 Repo instructions set baseline behavior (communication style, first-boot, workspace layout). Personal instructions add your conventions (code design, PR workflow, repo list, mount map). You never edit repo instructions for personal preferences; add a personal fragment instead.
 
+### Including External Files
+
+If you have a global `~/.claude/CLAUDE.md` with coding conventions you want all agents to follow, include it via `config.json`:
+
+```json
+{
+  "include_files": ["~/.claude/CLAUDE.md"]
+}
+```
+
+Included files are passed to the SDK via `systemPrompt.append`, which guarantees they survive conversation compaction. This is safer than writing to CLAUDE.md directly, which gets loaded via `settingSources` and could potentially be trimmed during long sessions.
+
 ## Worker Profile
 
 The worker profile (`default.json`) controls what each worker container gets:
@@ -44,24 +57,27 @@ The worker profile (`default.json`) controls what each worker container gets:
 {
   "name": "default",
   "repos": [
-    {"url": "git@github.com:your-org/your-repo.git", "postClone": "git config core.hooksPath .githooks"}
+    {
+      "url": "git@github.com:your-org/your-repo.git",
+      "postClone": "git config core.hooksPath .githooks"
+    }
   ],
   "tools": ["uv tool install /workspace/group/your-tool --force"],
   "mounts": [
-    {"hostPath": "~/.ssh", "containerPath": "host-ssh", "readonly": true}
+    { "hostPath": "~/.ssh", "containerPath": "host-ssh", "readonly": true }
   ],
   "ports": ["8080:8080"],
   "skills_repo": "your-skills-repo-name"
 }
 ```
 
-| Field | Purpose |
-|-|-|
-| `name` | Profile name (used to select non-default profiles). |
-| `repos` | Git repos cloned on first boot. `postClone` runs after each clone. |
-| `tools` | Shell commands run during init (package installs, CLI setup). |
-| `mounts` | Host directories mounted into the container. Must be on the allowlist. |
-| `ports` | Docker port mappings (`host:container`). |
+| Field         | Purpose                                                                             |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `name`        | Profile name (used to select non-default profiles).                                 |
+| `repos`       | Git repos cloned on first boot. `postClone` runs after each clone.                  |
+| `tools`       | Shell commands run during init (package installs, CLI setup).                       |
+| `mounts`      | Host directories mounted into the container. Must be on the allowlist.              |
+| `ports`       | Docker port mappings (`host:container`).                                            |
 | `skills_repo` | Name of a cloned repo containing Claude skills. Symlinked into `~/.claude/skills/`. |
 
 ## Personal Dockerfile
