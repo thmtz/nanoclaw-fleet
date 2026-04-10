@@ -81,4 +81,6 @@ The NanoClaw repo is at `/workspace/project/`. When modifying it:
 - Read `CLAUDE.md` in the repo root for workflow conventions
 - Read `docs/architecture/overview.md` for goals and design principles
 - Read `docs/guides/testing.md` for E2E verification procedures
-- Exercise your changes before declaring done. Use `tools/nc-inject.sh` and `tools/nc-ipc.sh` to send real messages and confirm behavior. Check `logs/nanoclaw.log` for errors after every test.
+- Exercise your changes before declaring done. Use `ncf inject` to send real messages and confirm behavior. Check `logs/nanoclaw.log` for errors after every test.
+
+**Note:** The `ncf` CLI is a host-side tool. Inside the container, use MCP tools instead (create_worker, destroy_worker, switch_backend, etc.).

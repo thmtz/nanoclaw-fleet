@@ -128,6 +128,8 @@ function getCurrentBackend(folder: string): string {
   }
 }
 
+const DEFAULT_NEURALWATT_MODEL = 'moonshotai/Kimi-K2.5';
+
 /** Read-modify-write worker-backends.json. Atomic via temp file. */
 function updateWorkerBackends(
   folder: string,
@@ -145,7 +147,7 @@ function updateWorkerBackends(
   if (backend === BACKEND_NEURALWATT) {
     backends[folder] = {
       backend: BACKEND_NEURALWATT,
-      ...(model ? { model } : {}),
+      model: model || DEFAULT_NEURALWATT_MODEL,
     };
   } else {
     delete backends[folder];
@@ -157,10 +159,11 @@ function updateWorkerBackends(
   fs.renameSync(tmpPath, backendsPath);
 }
 
-/** Update NANOCLAW_BACKEND in worker.env so container-runner routes correctly on next spawn. */
+/** Update NANOCLAW_BACKEND and NANOCLAW_MODEL in worker.env so container-runner routes correctly on next spawn. */
 export function updateWorkerEnvBackend(
   folder: string,
   backend: InferenceBackend | string,
+  model?: string,
 ): void {
   const envPath = path.join(DATA_DIR, 'sessions', folder, 'worker.env');
   if (!fs.existsSync(envPath)) {
@@ -170,9 +173,15 @@ export function updateWorkerEnvBackend(
   const content = fs.readFileSync(envPath, 'utf-8');
   const lines = content
     .split('\n')
-    .filter((l) => !l.startsWith('NANOCLAW_BACKEND='));
+    .filter(
+      (l) =>
+        !l.startsWith('NANOCLAW_BACKEND=') && !l.startsWith('NANOCLAW_MODEL='),
+    );
   if (backend === BACKEND_NEURALWATT) {
     lines.push(`NANOCLAW_BACKEND=${BACKEND_NEURALWATT}`);
+    if (model) {
+      lines.push(`NANOCLAW_MODEL=${model}`);
+    }
   }
   // Preserve trailing newline if the original file had one
   const result = lines.join('\n');
@@ -905,8 +914,10 @@ export async function processTaskIpc(
           }
           // Backend selection: 'anthropic' (default) or 'neuralwatt'
           if (data.backend === BACKEND_NEURALWATT) {
+            const model = data.model || DEFAULT_NEURALWATT_MODEL;
             workerEnv.NANOCLAW_BACKEND = BACKEND_NEURALWATT;
-            updateWorkerBackends(data.folder, BACKEND_NEURALWATT, data.model);
+            workerEnv.NANOCLAW_MODEL = model;
+            updateWorkerBackends(data.folder, BACKEND_NEURALWATT, model);
           }
           const envDir = path.join(DATA_DIR, 'sessions', data.folder);
           fs.mkdirSync(envDir, { recursive: true });
@@ -1296,7 +1307,11 @@ export async function processTaskIpc(
       // Also update worker.env so the next container spawn routes correctly.
       // Without this, container-runner reads the stale worker.env and routes
       // to the wrong proxy (e.g. still Anthropic after switching to NW).
-      updateWorkerEnvBackend(workerGroup.folder, data.backend as string);
+      updateWorkerEnvBackend(
+        workerGroup.folder,
+        data.backend as string,
+        data.model as string | undefined,
+      );
 
       // When switching from NW to Claude, sanitize thinking blocks in the
       // session transcript BEFORE stopping the container. NW models produce

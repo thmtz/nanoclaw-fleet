@@ -8,7 +8,7 @@ The NanoClaw repo is at `/workspace/project/`. When modifying it:
 
 - Read `CLAUDE.md` in the repo root for workflow conventions
 - Read `docs/architecture/overview.md` for goals and design principles
-- **You must personally exercise your changes before declaring done.** Use `tools/nc-inject.sh` and `tools/nc-ipc.sh` to send real messages, create/destroy workers, and confirm behavior.
+- **You must personally exercise your changes before declaring done.** Use `ncf inject` to send real messages, create/destroy workers, and confirm behavior.
 - After container-side changes (`container/`, `worker-profiles/`), rebuild the image with `cd /workspace/project/container && ./build.sh`
 - After host-side changes (`src/`), restart the NanoClaw service
 
@@ -22,8 +22,8 @@ mkdir -p ~/.ssh && cp /workspace/group/.ssh/* ~/.ssh/ && chmod 700 ~/.ssh && chm
 
 ## Mounted Volumes
 
-| Container path | Contents | Writable |
-|-|-|-|
-| `/workspace/project` | NanoClaw repo | yes |
-| `/workspace/group` | Working directory (cloned repos, files) | yes |
-| `/workspace/group/.ssh/` | SSH keys | yes |
+| Container path           | Contents                                | Writable |
+| ------------------------ | --------------------------------------- | -------- |
+| `/workspace/project`     | NanoClaw repo                           | yes      |
+| `/workspace/group`       | Working directory (cloned repos, files) | yes      |
+| `/workspace/group/.ssh/` | SSH keys                                | yes      |

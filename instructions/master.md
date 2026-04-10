@@ -32,9 +32,11 @@ To switch models or backends, use `switch_backend`. Within-Neuralwatt switches a
 **Note:** Workers on the Neuralwatt backend run open-source models, but the SDK's system prompt still claims they are "Claude Opus." The worker template tells them to use `get_backend` to check their real model.
 
 **Model lookup:** Before any Neuralwatt operation (`create_worker` or `switch_backend`), query available models:
+
 ```bash
 curl -s http://host.docker.internal:3003/models | jq '.models[]'
 ```
+
 Match the user's request against the list. If ambiguous (e.g., "kimi" could be multiple models), ask the user to clarify. Always pass the exact model ID.
 
 ## Docker Access
@@ -49,7 +51,7 @@ docker exec -it <container-name> bash  # Exec into a worker
 
 ## Diagnostics
 
-When something isn't working, investigate the root cause before suggesting a fix. Don't just say "restart the container" — understand *why* it's broken so the system can be improved.
+When something isn't working, investigate the root cause before suggesting a fix. Don't just say "restart the container" — understand _why_ it's broken so the system can be improved.
 
 ### Why is a worker not responding?
 
@@ -64,7 +66,7 @@ jq -r 'select(.group == "<worker>") | "\(.time / 1000 | strftime("%H:%M:%S")) \(
 jq 'select(.group == "<worker>" and .level >= 50)' /workspace/project/logs/nanoclaw.jsonl | tail -5
 
 # Check the worker's last session transcript
-/workspace/project/tools/read-session.sh <worker> 30
+ncf session <worker> 30
 ```
 
 ### Auth failures (401s, "Failed to authenticate")
@@ -107,10 +109,10 @@ docker logs $(docker ps --filter name=nanoclaw-discord-<worker> --format '{{.Nam
 ### Audit logs (per-worker API usage)
 
 ```bash
-/workspace/project/tools/nc-logs.sh                    # summary of all workers
-/workspace/project/tools/nc-logs.sh <worker>            # last 20 turns
-/workspace/project/tools/nc-logs.sh <worker> --cache    # cache hit analysis
-/workspace/project/tools/nc-logs.sh <worker> --slow 5000  # slow requests
+ncf logs                    # summary of all workers
+ncf logs <worker>            # last 20 turns
+ncf logs <worker> --cache    # cache hit analysis
+ncf logs <worker> --slow     # slow requests (>5s)
 ```
 
 ### Host startup timing
@@ -121,4 +123,4 @@ jq 'select(.msg | startswith("Startup:"))' /workspace/project/logs/nanoclaw.json
 
 ### After diagnosing
 
-Focus on *why* the issue happened, not just fixing the symptom. If you discover a new failure mode or a useful diagnostic command, suggest updating these instructions so the next investigation is faster.
+Focus on _why_ the issue happened, not just fixing the symptom. If you discover a new failure mode or a useful diagnostic command, suggest updating these instructions so the next investigation is faster.

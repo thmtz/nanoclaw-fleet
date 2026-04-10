@@ -117,12 +117,32 @@ Master · claude · up 2h 15m
 **On worker destruction**: lifetime usage is reported automatically for Neuralwatt workers.
 
 **Direct query**:
+
 ```bash
 curl http://host.docker.internal:3003/usage           # all workers
 curl http://host.docker.internal:3003/usage/discord_my-task  # single worker
 ```
 
 <img src="assets/screenshot-worker.png" alt="Worker investigating CI regression runs" width="700">
+
+## CLI Reference
+
+The `ncf` CLI provides admin operations from the host machine:
+
+```bash
+./ncf status                    # Show all workers and containers
+./ncf status --json             # JSON output for scripts
+./ncf logs <worker>             # Audit logs (--cache, --slow, --follow)
+./ncf inject <channel> <msg>    # Inject message (--wait for response)
+./ncf switch <w> <backend> [m]  # Switch backend (anthropic/neuralwatt)
+./ncf restart <worker>          # Restart container (--fresh to clear history)
+./ncf create <name>             # Create worker
+./ncf destroy <worker>          # Destroy worker (keeps workspace)
+./ncf session <worker>          # Show session transcript
+./ncf history [worker]          # Worker lifecycle events
+./ncf debug                     # System state dump
+./ncf rebuild                   # Rebuild container image
+```
 
 ## Architecture
 
@@ -139,11 +159,11 @@ One Discord bot. The host process routes messages by channel ID. Workers are iso
 
 Configuration splits along two axes: **shared** (in the repo, for all users) vs **personal** (`~/.config/nanoclaw/`, your setup), and **global** (all agents) vs **role-specific** (master-only or worker-only).
 
-| What | Repo (shared) | Personal (`~/.config/nanoclaw/`) |
-|-|-|-|
-| **Instructions** | `instructions/{global,master,worker}.md` | `instructions/{global,master,worker}.md` |
-| **Container image** | `container/Dockerfile` | `Dockerfile` (layered on top) |
-| **Worker config** | `worker-profiles/example.json` | `worker-profiles/default.json` + `init.sh` |
+| What                | Repo (shared)                            | Personal (`~/.config/nanoclaw/`)           |
+| ------------------- | ---------------------------------------- | ------------------------------------------ |
+| **Instructions**    | `instructions/{global,master,worker}.md` | `instructions/{global,master,worker}.md`   |
+| **Container image** | `container/Dockerfile`                   | `Dockerfile` (layered on top)              |
+| **Worker config**   | `worker-profiles/example.json`           | `worker-profiles/default.json` + `init.sh` |
 
 At startup, NanoClaw assembles each agent's CLAUDE.md from four fragments: repo global, repo role, personal global, personal role. The container image works the same way. The repo provides generic behavior; your personal config adds your workflow, repos, tools, and conventions.
 
@@ -163,12 +183,12 @@ See [docs/architecture/container-lifecycle.md](docs/architecture/container-lifec
 
 ## Documentation
 
-| Section | What's in it |
-|-|-|
+| Section                                  | What's in it                                                   |
+| ---------------------------------------- | -------------------------------------------------------------- |
 | [docs/architecture/](docs/architecture/) | How the system works (overview, routing, lifecycle, streaming) |
-| [docs/guides/](docs/guides/) | Setup, personal config, testing, troubleshooting |
-| [docs/reference/](docs/reference/) | SDK internals |
-| [design/](design/) | Design history and archived proposals |
+| [docs/guides/](docs/guides/)             | Setup, personal config, testing, troubleshooting               |
+| [docs/reference/](docs/reference/)       | SDK internals                                                  |
+| [design/](design/)                       | Design history and archived proposals                          |
 
 Full index: [docs/README.md](docs/README.md)
 
