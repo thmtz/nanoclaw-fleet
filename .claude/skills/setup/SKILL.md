@@ -94,7 +94,15 @@ This fork uses Discord exclusively. Invoke `/add-discord` to handle:
 2. Collecting the bot token and writing it to `.env`
 3. Registering the main `#master` channel
 
-**After `/add-discord` completes**, also collect the Discord Guild (Server) ID:
+**After `/add-discord` completes**, also configure these recommended `.env` vars:
+
+```
+ASSISTANT_NAME=Andy          # Bot trigger name (default: Andy, used as @Andy in workers)
+NANOCLAW_MODEL=sonnet        # Default model for new workers (opus/sonnet/haiku)
+TZ=America/Denver            # Timezone for log timestamps and status messages
+```
+
+Then collect the Discord Guild (Server) ID:
 
 Tell the user:
 > Right-click your Discord server name and click "Copy Server ID" (Developer Mode must be enabled in Discord settings).
@@ -137,7 +145,13 @@ cp worker-profiles/init.sh ~/.config/nanoclaw/worker-profiles/init.sh
 chmod +x ~/.config/nanoclaw/worker-profiles/init.sh
 ```
 
-Walk the user through editing `default.json`:
+Walk the user through editing `default.json`. Key fields:
+
+- **`repos`**: list of git URLs to clone on worker startup
+- **`tools`**: shell commands to run after cloning (e.g. `uv tool install ./mypackage`)
+- **`init_script`**: path to init.sh (relative to worker-profiles dir), runs on every container boot
+- **`claude_md`**: path to a worker-specific CLAUDE.md (e.g. `CLAUDE.worker.md`)
+- **`skills_repo`**: name of a cloned repo containing `.claude/skills/` to mount into the container
 
 AskUserQuestion: "Which repos should workers clone on startup? (comma-separated, e.g. org/repo1, org/repo2)"
 
@@ -211,7 +225,9 @@ Then re-run the service step.
 
 Run `npx tsx setup/index.ts --step verify` and parse the status block.
 
-Fix any failures (SERVICE=stopped, CREDENTIALS=missing, REGISTERED_GROUPS=0, etc.) by re-running the relevant step.
+Fields to check: `SERVICE`, `CREDENTIALS`, `REGISTERED_GROUPS`, `CONTAINER_RUNTIME`, `CONFIGURED_CHANNELS`, `CHANNEL_AUTH`, `MOUNT_ALLOWLIST`.
+
+Fix any failures by re-running the relevant step. `MOUNT_ALLOWLIST=missing` is non-fatal but means no extra mounts will be allowed in containers (create `~/.config/nanoclaw/mount-allowlist.json` if needed).
 
 Then tell the user:
 
