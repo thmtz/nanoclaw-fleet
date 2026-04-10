@@ -36,8 +36,10 @@ interface WorkerStatus {
 
 function getContainerName(folder: string): string | null {
   try {
+    // Docker container names use hyphens, not underscores
+    const pattern = `nanoclaw-${folder.replace(/_/g, '-')}-`;
     const result = execSync(
-      `docker ps --filter "name=nanoclaw-${folder}-" --format "{{.Names}}"`,
+      `docker ps --filter "name=${pattern}" --format "{{.Names}}"`,
       { encoding: 'utf-8', timeout: 5000 },
     ).trim();
     return result || null;
