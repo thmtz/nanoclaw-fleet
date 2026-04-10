@@ -104,6 +104,59 @@ let messageLoopRunning = false;
 let stopStatusPin: (() => void) | undefined;
 let stopWorkerPins: (() => void) | undefined;
 
+// Per-group throbber state — shared between cold boot (processGroupMessages)
+// and warm pipe (startMessageLoop) paths so the reaction throbber works
+// regardless of whether the container was already running.
+const THROBBER_EMOJIS = ['🔵', '🟦', '🔷'];
+const THROBBER_DEBOUNCE_MS = 2000;
+
+interface ThrobberState {
+  chatJid: string;
+  messageId: string;
+  idx: number;
+  lastCycle: number;
+  active: boolean;
+}
+
+const throbberState = new Map<string, ThrobberState>();
+
+function cycleThrobber(groupFolder: string, channel: Channel): void {
+  const state = throbberState.get(groupFolder);
+  if (!state || !('react' in channel)) return;
+
+  const now = Date.now();
+  if (now - state.lastCycle < THROBBER_DEBOUNCE_MS) return;
+  state.lastCycle = now;
+
+  const react = (channel as unknown as { react: (jid: string, msgId: string, emoji: string) => Promise<void> }).react.bind(channel);
+  const unreact = (channel as unknown as { unreact: (jid: string, msgId: string, emoji: string) => Promise<void> }).unreact.bind(channel);
+
+  const prevEmoji = THROBBER_EMOJIS[(state.idx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length];
+  const nextEmoji = THROBBER_EMOJIS[state.idx % THROBBER_EMOJIS.length];
+
+  // Remove previous emoji before adding next to avoid double-emoji
+  const doReact = async () => {
+    if (state.active) {
+      await unreact(state.chatJid, state.messageId, prevEmoji).catch(() => {});
+    }
+    await react(state.chatJid, state.messageId, nextEmoji).catch(() => {});
+  };
+  doReact().catch(() => {});
+  state.active = true;
+  state.idx++;
+}
+
+function clearThrobber(groupFolder: string, channel: Channel): void {
+  const state = throbberState.get(groupFolder);
+  if (!state?.active || !('unreact' in channel)) return;
+
+  const unreact = (channel as unknown as { unreact: (jid: string, msgId: string, emoji: string) => Promise<void> }).unreact.bind(channel);
+  for (const emoji of THROBBER_EMOJIS) {
+    unreact(state.chatJid, state.messageId, emoji).catch(() => {});
+  }
+  throbberState.delete(groupFolder);
+}
+
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -371,90 +424,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  // Reaction throbber — cycles emojis on the user's last message to show
-  // the agent is alive and processing. Each SDK message event (model call,
-  // tool use, tool result) advances the throbber. Debounced to stay within
-  // Discord's reaction rate limits (4 req/s shared bucket for add+remove).
-  const THROBBER_EMOJIS = ['🔵', '🟣', '🟠'];
-  const THROBBER_DEBOUNCE_MS = 2000;
+  // Initialize throbber for this group — tracks which message to react on.
+  // State is shared with the warm-container pipe path in startMessageLoop
+  // so the throbber works regardless of cold vs warm boot.
   const lastMessageId = missedMessages[missedMessages.length - 1]?.id;
-  let throbberIdx = 0;
-  let throbberLastCycle = 0;
-  let throbberActive = false;
-
-  // Channel-agnostic react/unreact — only fires if the channel supports it
-  const channelReact =
-    'react' in channel
-      ? (
-          channel as unknown as {
-            react: (jid: string, msgId: string, emoji: string) => Promise<void>;
-          }
-        ).react.bind(channel)
-      : null;
-  const channelUnreact =
-    'unreact' in channel
-      ? (
-          channel as unknown as {
-            unreact: (
-              jid: string,
-              msgId: string,
-              emoji: string,
-            ) => Promise<void>;
-          }
-        ).unreact.bind(channel)
-      : null;
-
-  const cycleThrobber = () => {
-    if (!lastMessageId || !channelReact) {
-      logger.debug(
-        {
-          group: group.name,
-          hasMessageId: !!lastMessageId,
-          hasReact: !!channelReact,
-        },
-        'Throbber: skipped (missing messageId or react)',
-      );
-      return;
-    }
-    const now = Date.now();
-    if (now - throbberLastCycle < THROBBER_DEBOUNCE_MS) return;
-    throbberLastCycle = now;
-
-    const prevEmoji =
-      THROBBER_EMOJIS[
-        (throbberIdx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length
-      ];
-    const nextEmoji = THROBBER_EMOJIS[throbberIdx % THROBBER_EMOJIS.length];
-
-    logger.debug(
-      { group: group.name, messageId: lastMessageId, emoji: nextEmoji },
-      'Throbber: cycling',
-    );
-
-    // Remove previous emoji before adding next — sequential to avoid
-    // momentary double-emoji (Discord rate limit: 4 req/s shared bucket)
-    const doReact = async () => {
-      if (throbberActive && channelUnreact) {
-        await channelUnreact(chatJid, lastMessageId, prevEmoji).catch(() => {});
-      }
-      await channelReact(chatJid, lastMessageId, nextEmoji).catch(() => {});
-    };
-    doReact().catch(() => {});
-    throbberActive = true;
-    throbberIdx++;
-  };
-
-  const clearThrobber = () => {
-    if (!throbberActive || !lastMessageId || !channelUnreact) return;
-    // Remove all throbber emojis to handle any race conditions
-    for (const emoji of THROBBER_EMOJIS) {
-      channelUnreact(chatJid, lastMessageId, emoji).catch(() => {});
-    }
-    throbberActive = false;
-  };
+  if (lastMessageId) {
+    throbberState.set(group.folder, {
+      chatJid,
+      messageId: lastMessageId,
+      idx: 0,
+      lastCycle: 0,
+      active: false,
+    });
+  }
 
   // Start the throbber immediately
-  cycleThrobber();
+  cycleThrobber(group.folder, channel);
 
   const output = await runAgent(
     group,
@@ -473,6 +458,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           { group: group.name },
           `Agent output: ${raw.slice(0, 200)}`,
         );
+        // Clear throbber when agent produces output (works for both
+        // cold boot and warm piped messages)
+        clearThrobber(group.folder, channel);
         // Suppress SDK output if the agent already sent messages via send_message
         // (prevents duplicate Discord messages)
         if (text && !didGroupSendMessage(group.folder)) {
@@ -491,10 +479,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         hadError = true;
       }
     },
-    cycleThrobber,
+    () => cycleThrobber(group.folder, channel),
   );
 
-  clearThrobber();
+  clearThrobber(group.folder, channel);
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
   clearGroupSentMessage(group.folder);
@@ -789,6 +777,24 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
+
+            // Update throbber target to the latest user message so
+            // the reaction appears on the right message in warm containers
+            const latestMsgId =
+              messagesToSend[messagesToSend.length - 1]?.id;
+            if (latestMsgId) {
+              // Clear any existing throbber from the previous message
+              clearThrobber(group.folder, channel);
+              throbberState.set(group.folder, {
+                chatJid,
+                messageId: latestMsgId,
+                idx: 0,
+                lastCycle: 0,
+                active: false,
+              });
+              cycleThrobber(group.folder, channel);
+            }
+
             // Show typing indicator while the container processes the piped message
             channel
               .setTyping?.(chatJid, true)
@@ -1109,6 +1115,10 @@ async function main(): Promise<void> {
       active: queue.getActiveCount(),
       max: MAX_CONCURRENT_CONTAINERS,
     }),
+    onAgentMessageSent: (sourceGroup: string) => {
+      const channel = channels.find((ch) => ch.name === 'discord');
+      if (channel) clearThrobber(sourceGroup, channel);
+    },
     onTasksChanged: () => {
       const tasks = getAllTasks();
       const taskRows = tasks.map((t) => ({
