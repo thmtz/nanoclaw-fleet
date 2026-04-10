@@ -227,7 +227,10 @@ async function fetchWorkerUsage(
     if ((data as any).error) return null;
     return data as Record<string, number>;
   } catch (err) {
-    logger.debug({ err, folder }, 'Shim usage fetch error (shim may not be running)');
+    logger.debug(
+      { err, folder },
+      'Shim usage fetch error (shim may not be running)',
+    );
     return null;
   }
 }
