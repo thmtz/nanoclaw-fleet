@@ -721,7 +721,63 @@ async function testDestroy(workerName: string) {
   // (cleanup will still wipe files)
 }
 
-// ── Scenario 7: Port mapping ─────────────────────────────────
+// ── Scenario 7: Recreate after destroy ───────────────────────
+// Regression: leftover workspace from a destroyed worker caused NAME COLLISION,
+// silently blocking creation. The handler should default to fresh when there's
+// no session to preserve.
+
+async function testRecreateAfterDestroy(
+  guildId: string,
+  workerName: string,
+) {
+  const folder = `discord_${workerName}`;
+
+  info(`Recreating destroyed worker: ${workerName}`);
+
+  // Workspace should still exist from the destroy test
+  if (!existsSync(path.join(PROJECT_DIR, 'groups', folder))) {
+    fail('Workspace was deleted — cannot test recreate');
+    return;
+  }
+  pass('Leftover workspace exists (expected)');
+
+  ipc({
+    type: 'create_worker',
+    guild_id: guildId,
+    channel_name: workerName,
+    folder,
+    trigger: '@Andy',
+  });
+
+  // Poll for registration
+  let registered = false;
+  for (let elapsed = 0; elapsed < 15_000; elapsed += 1000) {
+    await sleep(1000);
+    const reg = sqlite(
+      `SELECT folder FROM registered_groups WHERE folder='${folder}';`,
+    );
+    if (reg.includes(folder)) {
+      registered = true;
+      break;
+    }
+  }
+  if (registered) {
+    pass('Worker recreated after destroy (no NAME COLLISION)');
+  } else {
+    fail('Worker not recreated — NAME COLLISION likely blocked it');
+  }
+
+  // Clean up: destroy again
+  const jid = sqlite(
+    `SELECT jid FROM registered_groups WHERE folder='${folder}';`,
+  );
+  if (jid) {
+    ipc({ type: 'destroy_worker', jid });
+    await sleep(3000);
+  }
+}
+
+// ── Scenario 8: Port mapping ─────────────────────────────────
 
 async function testPortMapping(guildId: string) {
   const name = `e2e-port-${pid}`;
@@ -803,6 +859,7 @@ async function main() {
   await testNeuralwatt(guildId);
   await testCredentialProxy();
   await testDestroy(workerName);
+  await testRecreateAfterDestroy(guildId, workerName);
   await testPortMapping(guildId);
 
   // Summary
