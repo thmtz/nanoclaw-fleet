@@ -13,6 +13,8 @@ import {
   TIMEZONE,
   WORKER_BACKENDS_FILENAME,
 } from './config.js';
+
+const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-6';
 import { AvailableGroup } from './container-runner.js';
 import { sanitizeFolderName } from './container-runtime.js';
 import { readEnvFile } from './env.js';
@@ -152,7 +154,12 @@ function updateWorkerBackends(
       backend: BACKEND_NEURALWATT,
       model: model || DEFAULT_NEURALWATT_MODEL,
     };
-  } else {
+  } else if (backend === BACKEND_ANTHROPIC) {
+    backends[folder] = {
+      backend: BACKEND_ANTHROPIC,
+      model: model || DEFAULT_ANTHROPIC_MODEL,
+    };
+  } else if (backend === null) {
     delete backends[folder];
   }
 
@@ -916,6 +923,12 @@ export async function processTaskIpc(
             workerEnv.NANOCLAW_BACKEND = BACKEND_NEURALWATT;
             workerEnv.NANOCLAW_MODEL = model;
             updateWorkerBackends(data.folder, BACKEND_NEURALWATT, model);
+          } else {
+            // Anthropic backend - also track in worker-backends.json for status pins
+            const model = data.model || DEFAULT_ANTHROPIC_MODEL;
+            workerEnv.NANOCLAW_BACKEND = BACKEND_ANTHROPIC;
+            workerEnv.NANOCLAW_MODEL = model;
+            updateWorkerBackends(data.folder, BACKEND_ANTHROPIC, model);
           }
           const envDir = path.join(DATA_DIR, 'sessions', data.folder);
           fs.mkdirSync(envDir, { recursive: true });
@@ -1298,7 +1311,7 @@ export async function processTaskIpc(
 
       updateWorkerBackends(
         workerGroup.folder,
-        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : null,
+        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : BACKEND_ANTHROPIC,
         data.model as string | undefined,
       );
 

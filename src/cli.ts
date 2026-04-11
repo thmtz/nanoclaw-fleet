@@ -1041,9 +1041,15 @@ const cmd = args[0];
           process.exit(1);
         }
         const opts = {
-          backend: args[args.indexOf('--backend') + 1],
-          model: args[args.indexOf('--model') + 1],
-          trigger: args[args.indexOf('--trigger') + 1],
+          backend: args.includes('--backend')
+            ? args[args.indexOf('--backend') + 1]
+            : undefined,
+          model: args.includes('--model')
+            ? args[args.indexOf('--model') + 1]
+            : undefined,
+          trigger: args.includes('--trigger')
+            ? args[args.indexOf('--trigger') + 1]
+            : undefined,
         };
         cmdCreate(name, opts);
         break;
