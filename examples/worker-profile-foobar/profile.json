@@ -1,0 +1,44 @@
+{
+  "name": "acme-corp-default",
+  "description": "Example worker profile for Acme Corp — a logistics software company",
+
+  "_comment": "This is an illustrative example showing a complete worker profile.",
+
+  "repos": [
+    {
+      "url": "git@github.com:acme-corp/route-service.git",
+      "postClone": "pip install -e . && pip install -r requirements-dev.txt"
+    },
+    {
+      "url": "git@github.com:acme-corp/fleet-ui.git",
+      "postClone": "npm install"
+    },
+    {
+      "url": "git@github.com:acme-corp/shared-libs.git",
+      "postClone": "pip install -e ./packages/acme-auth && pip install -e ./packages/acme-logging"
+    }
+  ],
+
+  "tools": [
+    "uv tool install acme-cli --python 3.11",
+    "npm install -g @acme-corp/devtools"
+  ],
+
+  "mounts": [
+    {
+      "hostPath": "~/.config/acme-cli",
+      "containerPath": "acme-cli",
+      "readonly": true
+    },
+    {
+      "hostPath": "~/.aws",
+      "containerPath": "aws-credentials",
+      "readonly": true
+    }
+  ],
+
+  "skills_repo": "shared-libs",
+
+  "init_script": "init.sh",
+  "claude_md": "CLAUDE.worker.md"
+}
