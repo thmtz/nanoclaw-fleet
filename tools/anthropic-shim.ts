@@ -79,6 +79,7 @@ interface WorkerUsage {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cached_input_tokens: number;
   last_input_tokens?: number;
   total_tokens: number;
   energy_joules: number;
@@ -157,6 +158,7 @@ function recordUsage(
     requests: 0,
     input_tokens: 0,
     output_tokens: 0,
+    cached_input_tokens: 0,
     total_tokens: 0,
     energy_joules: 0,
     energy_kwh: 0,
@@ -164,8 +166,10 @@ function recordUsage(
   };
   w.requests++;
   const promptTokens = usage?.prompt_tokens || 0;
+  const cachedTokens = usage?.prompt_tokens_details?.cached_tokens || 0;
   w.input_tokens += promptTokens;
   w.output_tokens += usage?.completion_tokens || 0;
+  w.cached_input_tokens = (w.cached_input_tokens || 0) + cachedTokens;
   // Track last input for max_tokens capping — persisted in workerUsage
   // so it survives shim restarts.
   if (promptTokens > 0) {

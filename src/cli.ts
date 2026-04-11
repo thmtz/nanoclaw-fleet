@@ -190,7 +190,7 @@ function cmdStatus(json: boolean, noColor: boolean) {
       model: b.model || 'unknown',
       container,
       requests: u.requests || 0,
-      tokens: u.total_tokens || 0,
+      tokens: (u.input_tokens || 0) + (u.output_tokens || 0) - (u.cached_input_tokens || 0),
       energyWh: (u.energy_kwh || 0) * 1000,
     };
 
