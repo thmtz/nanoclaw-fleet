@@ -322,9 +322,10 @@ async function testFirstBoot(workerName: string) {
   }
   if (!containerUp) fail('Container did not spawn within 60s');
 
-  // Wait for agent response
+  // Wait for agent response — cold boot includes tsc compile, repo clone,
+  // and first API call (which may have high TTFT for large contexts).
   let responded = false;
-  for (let elapsed = 0; elapsed < 60_000; elapsed += 2000) {
+  for (let elapsed = 0; elapsed < 120_000; elapsed += 2000) {
     const entries = scanJsonl(
       (e) => e.group === workerName && e.msg === 'Container first output',
       { afterMs: t0 },
@@ -337,7 +338,12 @@ async function testFirstBoot(workerName: string) {
     }
     await sleep(2000);
   }
-  if (!responded) fail('Agent did not respond within 60s');
+  if (!responded) {
+    // Diagnose: is the container still running or did it crash?
+    const ps = sh(`docker ps --format '{{.Names}}'`, { ignoreError: true });
+    const running = ps.includes(`nanoclaw-${safeName}`);
+    fail(`Agent did not respond within 120s (container ${running ? 'still running' : 'not running'})`);
+  }
 
   // Check for errors
   const errors = scanJsonl((e) => e.group === workerName && e.level >= 50, {
@@ -423,9 +429,9 @@ async function testSessionResume(workerName: string) {
   const t2 = Date.now();
   inject(workerName, 'What was the secret code I told you?');
 
-  // Wait for respawn
+  // Wait for respawn (session resume still needs tsc + first API call)
   let respawned = false;
-  for (let elapsed = 0; elapsed < 60_000; elapsed += 2000) {
+  for (let elapsed = 0; elapsed < 120_000; elapsed += 2000) {
     const entries = scanJsonl(
       (e) => e.group === workerName && e.msg === 'Container first output',
       { afterMs: t2 },
@@ -437,7 +443,7 @@ async function testSessionResume(workerName: string) {
     }
     await sleep(2000);
   }
-  if (!respawned) fail('Container did not respawn within 60s');
+  if (!respawned) fail('Container did not respawn within 120s');
 
   // Check secret code recall (best-effort)
   await sleep(5000);

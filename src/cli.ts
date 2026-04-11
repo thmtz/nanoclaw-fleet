@@ -817,11 +817,14 @@ function cmdDebug() {
     { ignoreError: true },
   );
 
+  // Any HTTP response means the server is running (404, 401, etc. are fine).
+  // Only 000 (connection refused) or empty means down.
+  const isUp = (code: string) => code && code !== '000' && code !== '';
   console.log(
-    `  Credential proxy :${proxyPort}: ${proxyUp === '200' ? GREEN + 'up' : YELLOW + proxyUp}${NC}`,
+    `  Credential proxy :${proxyPort}: ${isUp(proxyUp) ? GREEN + 'up' : RED + (proxyUp || 'down')}${NC}`,
   );
   console.log(
-    `  Neuralwatt proxy :${nwPort}: ${nwUp === '200' ? GREEN + 'up' : YELLOW + nwUp}${NC}`,
+    `  Neuralwatt proxy :${nwPort}: ${isUp(nwUp) ? GREEN + 'up' : RED + (nwUp || 'down')}${NC}`,
   );
 
   console.log();
