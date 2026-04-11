@@ -2,19 +2,27 @@
   "name": "example",
   "description": "Example worker profile — copy to ~/.config/nanoclaw/worker-profiles/default.json and customize",
 
+  "_comment_repos": "Repos to clone when a worker starts. HTTPS URLs are rewritten to use GITHUB_TOKEN automatically.",
   "repos": [
-    {"url": "git@github.com:your-org/your-repo.git", "postClone": "git config core.hooksPath .githooks"}
+    {"url": "git@github.com:foobar-corp/api-service.git", "postClone": "npm install"},
+    {"url": "git@github.com:foobar-corp/web-dashboard.git", "postClone": "git config core.hooksPath .githooks"},
+    {"url": "git@github.com:foobar-corp/shared-libs.git"}
   ],
 
+  "_comment_tools": "Commands to install tools inside the worker container (runs after repos are cloned).",
   "tools": [
-    "uv tool install /workspace/group/your-repo --force"
+    "uv tool install /workspace/group/api-service/cli --force",
+    "npm install -g @foobar-corp/devtools"
   ],
 
+  "_comment_mounts": "Mount host directories into worker containers. Use readonly:true for credentials.",
   "mounts": [
-    {"hostPath": "~/.config/your-tool", "containerPath": "your-tool", "readonly": true}
+    {"hostPath": "~/.config/foobar-cli", "containerPath": "foobar-cli", "readonly": true},
+    {"hostPath": "~/.aws", "containerPath": "aws-credentials", "readonly": true}
   ],
 
-  "skills_repo": null,
+  "_comment_skills_repo": "Name of a cloned repo (from repos above) that contains .claude/skills/ to mount.",
+  "skills_repo": "shared-libs",
 
   "init_script": "init.sh",
   "claude_md": "CLAUDE.worker.md"
