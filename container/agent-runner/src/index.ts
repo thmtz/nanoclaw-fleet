@@ -66,6 +66,26 @@ const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
+// SDK model alias map — the SDK uses these to determine context window,
+// max output tokens, and other model-specific behavior. Short aliases like
+// "opus" don't carry enough info (e.g., the [1m] suffix for 1M context).
+const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  opus: 'claude-opus-4-6[1m]',
+  sonnet: 'claude-sonnet-4-6',
+  haiku: 'claude-haiku-4-5-20251001',
+};
+
+/** Resolve the model string for the SDK query.
+ * - NW workers: pass the NW model name (e.g., "kimi-k2.5-fast") for shim routing.
+ * - Anthropic workers: resolve short aliases to full model IDs so the SDK
+ *   correctly identifies context window and capabilities. */
+function resolveModelForSdk(): string | undefined {
+  const raw = process.env.NANOCLAW_MODEL;
+  if (!raw) return undefined;
+  if (process.env.NANOCLAW_BACKEND === 'neuralwatt') return raw;
+  return ANTHROPIC_MODEL_ALIASES[raw.toLowerCase()] || raw;
+}
+
 /**
  * Push-based async iterable for streaming user messages to the SDK.
  * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
@@ -518,9 +538,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
-      model:
-        (process.env.NANOCLAW_MODEL as 'sonnet' | 'opus' | 'haiku') ||
-        undefined,
+      model: resolveModelForSdk(),
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
