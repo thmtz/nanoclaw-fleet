@@ -467,9 +467,12 @@ function cmdRestart(worker: string, fresh: boolean) {
   const container = getContainerName(resolved.folder);
 
   if (fresh) {
+    // Clear SDK session state (.claude/) but preserve worker config
+    // (worker.env, agent-runner-src, etc.)
     const sessionDir = path.join(DATA_DIR, 'sessions', resolved.folder);
-    if (existsSync(sessionDir)) {
-      rmSync(sessionDir, { recursive: true, force: true });
+    const claudeDir = path.join(sessionDir, '.claude');
+    if (existsSync(claudeDir)) {
+      rmSync(claudeDir, { recursive: true, force: true });
       console.log(`${YELLOW}✓${NC} Cleared session history`);
     }
     const safeFolder = escapeSql(resolved.folder);
