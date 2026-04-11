@@ -797,7 +797,9 @@ export async function processTaskIpc(
           break;
         }
 
-        // Check for leftover workspace from a previously destroyed worker
+        // Check for leftover workspace from a previously destroyed worker.
+        // If the worker has no session (fully destroyed), default to fresh.
+        // Only prompt resume/fresh when there's a session worth preserving.
         const leftoverGroupDir = path.join(
           process.cwd(),
           'groups',
@@ -805,21 +807,13 @@ export async function processTaskIpc(
         );
         const hasLeftover = fs.existsSync(leftoverGroupDir);
         if (hasLeftover && data.reuse !== 'resume' && data.reuse !== 'fresh') {
-          const hasSession = !!getSession(data.folder);
-          writeResponse(
-            false,
-            `NAME COLLISION: Workspace for "${data.channel_name}" already exists from a previous session${hasSession ? ' (with conversation history)' : ''}. ` +
-              `You MUST ask the user whether to resume or start fresh. ` +
-              `Then call create_worker again with reuse: "resume" (keep old workspace + session) or reuse: "fresh" (wipe and start clean). ` +
-              `Do NOT pick one without asking.`,
+          // Leftover workspace from a previously destroyed worker.
+          // Default to fresh — the worker is gone, the workspace is stale.
+          logger.info(
+            { folder: data.folder },
+            'create_worker: leftover workspace found, defaulting to fresh',
           );
-          if (data.reply_jid) {
-            await deps.sendMessage(
-              data.reply_jid,
-              `Previous workspace found for **${data.channel_name}**${hasSession ? ' (with conversation history)' : ''}. Resume the old session, or start fresh?`,
-            );
-          }
-          break;
+          data.reuse = 'fresh';
         }
 
         // Handle reuse=fresh: wipe old workspace and session
