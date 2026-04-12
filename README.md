@@ -1,5 +1,9 @@
 # NanoClaw Fleet
 
+[![GitHub Release](https://img.shields.io/github/v/release/thmtz/nanoclaw-fleet)](https://github.com/thmtz/nanoclaw-fleet/releases)
+[![CI](https://github.com/thmtz/nanoclaw-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/thmtz/nanoclaw-fleet/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/thmtz/nanoclaw-fleet)](LICENSE)
+
 A fleet manager for isolated coding agents, built on [NanoClaw](https://github.com/qwibitai/nanoclaw). Each agent gets its own Discord channel and Docker container with pre-cloned repos and tools. You manage everything from a master channel: create workers, give them tasks, switch between contexts, tear them down when done.
 
 I built this because I wanted to run multiple coding agents in parallel without juggling shell sessions and worktrees, and I wanted seamless handoff between desktop and mobile. Discord gives you both: each worker is just a channel you can check in on from anywhere.
