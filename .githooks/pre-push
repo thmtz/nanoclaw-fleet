@@ -45,4 +45,11 @@ else
   echo "[pre-push] ⚠ Skipping agent-runner check (run: cd container/agent-runner && npm install)"
 fi
 
+echo "[pre-push] Running tests..."
+npx vitest run 2>&1
+if [ $? -ne 0 ]; then
+  echo "[pre-push] ❌ Tests failed."
+  exit 1
+fi
+
 echo "[pre-push] ✅ All checks passed."
