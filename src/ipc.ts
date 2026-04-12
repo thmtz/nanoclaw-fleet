@@ -1311,7 +1311,9 @@ export async function processTaskIpc(
 
       updateWorkerBackends(
         workerGroup.folder,
-        data.backend === BACKEND_NEURALWATT ? BACKEND_NEURALWATT : BACKEND_ANTHROPIC,
+        data.backend === BACKEND_NEURALWATT
+          ? BACKEND_NEURALWATT
+          : BACKEND_ANTHROPIC,
         data.model as string | undefined,
       );
 
