@@ -22,6 +22,7 @@ If you prefer to set things up by hand, follow the steps below.
 - Node.js 22+
 - Docker installed and accessible to your user
 - A Discord bot application (https://discord.com/developers/applications)
+- [Bun](https://bun.sh) _(optional)_ — required only if you want to route workers through an OpenAI-compatible inference backend (e.g., Neuralwatt). See section 9.
 
 ### What Setup Covers
 
@@ -188,7 +189,66 @@ npm run build
 systemctl --user restart nanoclaw
 ```
 
-## 9. Test
+## 9. Inference Shim (Optional — OpenAI-compatible backend)
+
+NanoClaw can route a worker's API traffic through an OpenAI-compatible inference provider (e.g., [Neuralwatt](https://portal.neuralwatt.com), or any other provider that speaks the OpenAI chat-completions API) instead of Anthropic. This is handled by a local HTTP proxy (`tools/anthropic-shim.ts`) that translates between the Anthropic and OpenAI-compatible APIs and listens on port `3003`.
+
+**Skip this section** if you only plan to run workers against Anthropic. Workers default to Anthropic without the shim running.
+
+### Prerequisites
+
+The shim is written for [Bun](https://bun.sh) (it uses `Bun.serve`). Install it once per host:
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+### API key + base URL
+
+Get an API key from your provider (e.g., https://portal.neuralwatt.com) and add it to your `.env`. The env vars are named `NEURALWATT_*` for historical reasons, but any OpenAI-compatible `v1/chat/completions` endpoint works — just point `NEURALWATT_BASE_URL` at your provider.
+
+```env
+NEURALWATT_API_KEY=sk-...
+# Defaults to https://api.neuralwatt.com/v1 — override for other providers:
+# NEURALWATT_BASE_URL=https://api.example.com/v1
+```
+
+### Systemd unit (Linux)
+
+Create `~/.config/systemd/user/nanoclaw-shim.service`:
+
+```ini
+[Unit]
+Description=NanoClaw Inference Shim (Anthropic <-> Neuralwatt proxy)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/nanoclaw-fleet
+ExecStart=/home/YOU/.bun/bin/bun run tools/anthropic-shim.ts
+Restart=always
+RestartSec=5
+EnvironmentFile=/path/to/nanoclaw-fleet/.env
+StandardOutput=append:/path/to/nanoclaw-fleet/logs/shim.log
+StandardError=append:/path/to/nanoclaw-fleet/logs/shim.error.log
+
+[Install]
+WantedBy=default.target
+```
+
+Enable, start, and verify:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now nanoclaw-shim
+curl -s http://localhost:3003/models | head
+```
+
+You should see a JSON list of available models. If the shim isn't running, master will report the inference proxy on port 3003 is down when asked to create a worker with an OpenAI-compatible model — that's your signal to check `logs/shim.error.log` and `systemctl --user status nanoclaw-shim`.
+
+Once the shim is up, you can create a shim-backed worker with `ncf create <name> --backend neuralwatt --model <model-id>` or by asking master in `#master`. (The `--backend neuralwatt` flag name is historical — it routes any worker through the shim, regardless of which OpenAI-compatible provider you've configured.)
+
+## 10. Test
 
 In `#master`, send:
 

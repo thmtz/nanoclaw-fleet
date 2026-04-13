@@ -20,7 +20,7 @@ Tell the user what setup will walk them through. If they already have some of th
 3. **Discord Guild (Server) ID**: right-click server name in Discord
 4. **Discord Channel ID** for `#master`: right-click the channel in Discord
 5. **GitHub PAT** *(optional)*: only needed if workers clone private repos
-6. **OpenAI-compatible API key** *(optional)*: only if using open-weight models
+6. **OpenAI-compatible API key** *(optional)*: to route workers through an alternative inference provider (e.g. Neuralwatt at https://portal.neuralwatt.com, or any other OpenAI-compatible endpoint) for open-weight models like Kimi / Qwen / GLM as an alternative to Claude
 
 ## 0. Git Remote Setup
 
@@ -185,19 +185,77 @@ EOF
 
 `container/build.sh` will automatically detect and apply this layer. Heavy packages that are the same every boot (databases, compilers, test frameworks) go in the Dockerfile. Setup that needs host context (repo cloning, credential symlinks) stays in init.sh. Per-profile tools that depend on workspace content stay in profile tools.
 
-## 9. Optional: Open-Weight Model Support
+## 9. Optional: Alternative Inference Provider (Translation Shim)
 
-AskUserQuestion: "Do you want to use open-weight models (e.g. Kimi K2.5, Qwen) in addition to Claude?"
+Workers can route through an OpenAI-compatible endpoint instead of Claude — useful for open-weight models (Kimi, Qwen, GLM, etc.). This requires a small translation shim service (`tools/anthropic-shim.ts`) that converts Anthropic Messages format → OpenAI Chat Completions format. The shim runs as a separate background service on `localhost:3003`. Worker containers created with `backend: neuralwatt` point `ANTHROPIC_BASE_URL` at the shim; Claude-backed workers bypass it entirely.
 
-**Yes:** Collect the OpenAI-compatible endpoint URL and API key. Add to `.env`:
-```
-NEURALWATT_API_URL=<endpoint-url>
-NEURALWATT_API_KEY=<api-key>
-```
+AskUserQuestion: "Do you want to set up the translation shim to use an OpenAI-compatible inference provider (e.g. Neuralwatt at https://portal.neuralwatt.com, or any other OpenAI-compatible endpoint)? You can skip this and all workers will use Claude."
 
-The translation shim converts between Anthropic and OpenAI API formats automatically. Workers can be created with `backend: neuralwatt` to use these models.
+**No:** Skip to step 10.
 
-**No:** Skip. All workers will use Claude.
+**Yes:**
+
+Full human-facing write-up is at `docs/guides/setup.md` § 9 — follow that as the source of truth. The skill-level steps below are the agent-driven version.
+
+1. **Ensure `bun` is installed.** The shim uses `Bun.serve()` and cannot run under plain Node or `tsx`. Check with `command -v bun`. If missing:
+   ```bash
+   curl -fsSL https://bun.sh/install | bash
+   ```
+   Record the absolute path (`command -v bun`, typically `~/.bun/bin/bun`) — systemd won't resolve it from PATH.
+
+2. **Collect credentials and write them to `.env`.** Tell the user:
+   > For Neuralwatt, sign in at https://portal.neuralwatt.com to create an API key. For another provider, use whatever endpoint they give you — the base URL should be the root that exposes `/v1/chat/completions`.
+
+   Append to `.env` (quote values that contain special chars):
+   ```
+   NEURALWATT_API_KEY=<their-api-key>
+   # Only if not using Neuralwatt's default:
+   # NEURALWATT_BASE_URL=https://api.example.com/v1
+   ```
+
+3. **Install the shim as a background service.** Before writing the unit, resolve `BUN_BIN=$(command -v bun)` and `REPO=$(pwd)` into shell vars — the heredoc below is unquoted so they expand at write-time.
+
+   **Linux (systemd user service):**
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cat > ~/.config/systemd/user/nanoclaw-shim.service << EOF
+   [Unit]
+   Description=NanoClaw Inference Shim (Anthropic↔OpenAI-compatible proxy)
+   After=network.target nanoclaw.service
+
+   [Service]
+   Type=simple
+   WorkingDirectory=${REPO}
+   ExecStart=${BUN_BIN} run ${REPO}/tools/anthropic-shim.ts
+   Restart=always
+   RestartSec=3
+   Environment=SHIM_PORT=3003
+   Environment=CREDENTIAL_PROXY_URL=http://172.17.0.1:3001
+   EnvironmentFile=${REPO}/.env
+   StandardOutput=append:${REPO}/logs/shim.log
+   StandardError=append:${REPO}/logs/shim.error.log
+
+   [Install]
+   WantedBy=default.target
+   EOF
+
+   systemctl --user daemon-reload
+   systemctl --user enable --now nanoclaw-shim.service
+   systemctl --user status nanoclaw-shim --no-pager
+   ```
+
+   **macOS (launchd agent):** Create `~/Library/LaunchAgents/com.nanoclaw.shim.plist` with `ProgramArguments = [<bun-path>, "run", "<repo>/tools/anthropic-shim.ts"]` and `EnvironmentVariables` containing `SHIM_PORT=3003`, `CREDENTIAL_PROXY_URL=http://host.docker.internal:3001`, `NEURALWATT_API_KEY`, and optionally `NEURALWATT_BASE_URL`. launchd has no `EnvironmentFile` equivalent, so inline the values. Load with `launchctl load ~/Library/LaunchAgents/com.nanoclaw.shim.plist`.
+
+4. **Verify the shim is responding:**
+   ```bash
+   curl -s http://localhost:3003/models | head
+   ```
+   You should see a JSON list of provider models. If nothing is listening, check `logs/shim.error.log` for bun path, missing env vars, or port conflicts.
+
+5. **Tell the user how to use it:**
+   > The shim is running. Create a shim-backed worker with `ncf create <name> --backend neuralwatt --model <model-id>`, or ask master in `#master`: "create a worker called kimi-test using neuralwatt with model moonshotai/Kimi-K2.5". Claude-backed workers are unaffected — they bypass the shim and go direct to Anthropic.
+
+See `docs/architecture/inference-routing.md` for how the routing works end-to-end.
 
 ## 10. Start Service
 
