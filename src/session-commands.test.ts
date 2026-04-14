@@ -14,12 +14,24 @@ describe('extractSessionCommand', () => {
     expect(extractSessionCommand('/compact', trigger)).toBe('/compact');
   });
 
+  it('detects bare /clear', () => {
+    expect(extractSessionCommand('/clear', trigger)).toBe('/clear');
+  });
+
   it('detects /compact with trigger prefix', () => {
     expect(extractSessionCommand('@Andy /compact', trigger)).toBe('/compact');
   });
 
+  it('detects /clear with trigger prefix', () => {
+    expect(extractSessionCommand('@Andy /clear', trigger)).toBe('/clear');
+  });
+
   it('rejects /compact with extra text', () => {
     expect(extractSessionCommand('/compact now please', trigger)).toBeNull();
+  });
+
+  it('rejects /clear with extra text', () => {
+    expect(extractSessionCommand('/clear all messages', trigger)).toBeNull();
   });
 
   it('rejects partial matches', () => {
@@ -34,10 +46,12 @@ describe('extractSessionCommand', () => {
 
   it('handles whitespace', () => {
     expect(extractSessionCommand('  /compact  ', trigger)).toBe('/compact');
+    expect(extractSessionCommand('  /clear  ', trigger)).toBe('/clear');
   });
 
   it('is case-sensitive for the command', () => {
     expect(extractSessionCommand('/Compact', trigger)).toBeNull();
+    expect(extractSessionCommand('/Clear', trigger)).toBeNull();
   });
 });
 

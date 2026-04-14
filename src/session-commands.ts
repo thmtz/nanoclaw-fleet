@@ -5,13 +5,21 @@ import { logger } from './logger.js';
  * Extract a session slash command from a message, stripping the trigger prefix if present.
  * Returns the slash command (e.g., '/compact') or null if not a session command.
  */
+const KNOWN_SESSION_COMMANDS = new Set(['/compact', '/clear']);
+
 export function extractSessionCommand(
   content: string,
   triggerPattern: RegExp,
 ): string | null {
   let text = content.trim();
+
+  // Allow bare session commands (no trigger prefix required)
+  if (KNOWN_SESSION_COMMANDS.has(text)) return text;
+
+  // Also allow with trigger prefix (original behavior)
   text = text.replace(triggerPattern, '').trim();
-  if (text === '/compact') return '/compact';
+  if (KNOWN_SESSION_COMMANDS.has(text)) return text;
+
   return null;
 }
 
