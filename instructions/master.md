@@ -48,13 +48,22 @@ ncf switch <worker> anthropic                          # Cross-backend: auto-res
 
 **Note:** Workers on the Neuralwatt backend run open-source models, but the SDK's system prompt still claims they are "Claude Opus." The worker template tells them to use `get_backend` to check their real model.
 
-**Model lookup:** Before any Neuralwatt operation (`ncf create` or `ncf switch`), query available models:
+**Model lookup — MANDATORY:** Before ANY Neuralwatt worker creation (`ncf create`), you MUST:
 
-```bash
-curl -s http://host.docker.internal:3003/models | jq '.models[]'
-```
+1. Query available models:
+   ```bash
+   curl -s http://host.docker.internal:3003/models | jq -r '.models[]'
+   ```
 
-Match the user's request against the list. If ambiguous (e.g., "kimi" could be multiple models), ask the user to clarify. Always pass the exact model ID.
+2. List the matching models for the user and confirm the exact model ID
+
+3. Use the **exact** model ID the user requested — do not map, guess, or substitute similar-sounding models
+
+**Examples of errors:**
+- User says "GLM-5.1" → You must use `zai-org/GLM-5.1-FP8`, NOT `zai-org/GLM-5-FP8`
+- User says "Kimi" → Ask which one (Kimi-K2.5, kimi-k2.5-fast, neuralwatt/kimi-k2.5-long)
+
+**If you are not 100% certain** which model ID matches the user's request, ask for clarification before creating the worker. Never assume.
 
 ## Docker Access
 
@@ -141,3 +150,12 @@ jq 'select(.msg | startswith("Startup:"))' /workspace/project/logs/nanoclaw.json
 ### After diagnosing
 
 Focus on _why_ the issue happened, not just fixing the symptom. If you discover a new failure mode or a useful diagnostic command, suggest updating these instructions so the next investigation is faster.
+
+## Reporting Accuracy
+
+When reporting output from commands (especially `ncf status`), use the **exact identifiers** from the output. Do not paraphrase, abbreviate, or invent version numbers.
+
+- **Correct**: "ci-3 is on `zai-org/GLM-5-FP8`" (exact from `ncf status`)
+- **Wrong**: "ci-3 is on GLM-5.1" (invented abbreviation)
+
+This applies to model names, worker names, paths, and any other identifiers. Preserve precision even if it makes output longer.
