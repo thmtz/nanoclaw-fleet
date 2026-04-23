@@ -43,7 +43,10 @@ export async function handleDestroyWorker(content: Record<string, unknown>, sess
     return;
   }
   if (target.fleet_role !== 'worker') {
-    notifyAgent(session, `destroy_worker: "${localName}" is not a fleet worker (fleet_role=${target.fleet_role ?? 'null'}).`);
+    notifyAgent(
+      session,
+      `destroy_worker: "${localName}" is not a fleet worker (fleet_role=${target.fleet_role ?? 'null'}).`,
+    );
     return;
   }
   if (target.status === 'archived') {

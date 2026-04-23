@@ -26,7 +26,14 @@ function formatWorkerSummary(workers: WorkerSummary[]): string {
   if (workers.length === 0) return 'No fleet workers. Use create_worker to make one.';
   const lines = ['Fleet workers:', ''];
   for (const w of workers) {
-    const marker = w.status === 'archived' ? '[archived]' : w.container_status === 'running' ? '[running]' : w.container_status === 'idle' ? '[idle]' : '[stopped]';
+    const marker =
+      w.status === 'archived'
+        ? '[archived]'
+        : w.container_status === 'running'
+          ? '[running]'
+          : w.container_status === 'idle'
+            ? '[idle]'
+            : '[stopped]';
     const backendStr = w.backend ? `${w.backend}${w.model ? ` (${w.model})` : ''}` : '—';
     const channelStr = w.channels.length > 0 ? w.channels.join(', ') : 'no channel';
     lines.push(`- ${marker} ${w.name} · ${backendStr} · ${channelStr}`);

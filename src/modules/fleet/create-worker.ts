@@ -14,12 +14,7 @@
 import path from 'path';
 
 import { GROUPS_DIR } from '../../config.js';
-import {
-  createAgentGroup,
-  getAgentGroup,
-  getAgentGroupByFolder,
-  updateAgentGroup,
-} from '../../db/agent-groups.js';
+import { createAgentGroup, getAgentGroup, getAgentGroupByFolder, updateAgentGroup } from '../../db/agent-groups.js';
 import {
   createMessagingGroup,
   createMessagingGroupAgent,
@@ -34,10 +29,7 @@ import {
   normalizeName as normalizeDestName,
 } from '../agent-to-agent/db/agent-destinations.js';
 import { writeDestinations } from '../agent-to-agent/write-destinations.js';
-import {
-  createDiscordChannel,
-  loadDiscordFleetConfig,
-} from './discord-channel.js';
+import { createDiscordChannel, loadDiscordFleetConfig } from './discord-channel.js';
 import { generateId, normalizeName, notifyAgent, setFleetBackend } from './lib.js';
 
 const DEFAULT_BACKEND = 'claude';
@@ -163,7 +155,10 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
       };
       createMessagingGroupAgent(mga);
     } catch (err) {
-      notifyAgent(session, `Worker "${localName}" created (agent group ${agentGroupId}) but Discord channel provisioning failed: ${String(err)}`);
+      notifyAgent(
+        session,
+        `Worker "${localName}" created (agent group ${agentGroupId}) but Discord channel provisioning failed: ${String(err)}`,
+      );
       log.error('create_worker: Discord provisioning failed', { err });
     }
   } else {
@@ -232,7 +227,11 @@ async function resumeWorker(
     const discordCfg = loadDiscordFleetConfig();
     if (discordCfg) {
       try {
-        const channel = await createDiscordChannel(discordCfg, `worker-${existing.folder}`, `Fleet worker: ${existing.name}`);
+        const channel = await createDiscordChannel(
+          discordCfg,
+          `worker-${existing.folder}`,
+          `Fleet worker: ${existing.name}`,
+        );
         const mg: MessagingGroup = {
           id: generateId('mg'),
           channel_type: 'discord',

@@ -9,7 +9,14 @@
 import fs from 'fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { initTestDb, closeDb, runMigrations, createAgentGroup, getAgentGroup, getAgentGroupByFolder } from '../../db/index.js';
+import {
+  initTestDb,
+  closeDb,
+  runMigrations,
+  createAgentGroup,
+  getAgentGroup,
+  getAgentGroupByFolder,
+} from '../../db/index.js';
 import { updateAgentGroup } from '../../db/agent-groups.js';
 import { getMessagingGroupsByAgentGroup } from '../../db/messaging-groups.js';
 import type { Session } from '../../types.js';
