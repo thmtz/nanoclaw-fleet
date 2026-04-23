@@ -28,6 +28,19 @@ import path from 'path';
 import Database from 'better-sqlite3';
 
 import { DATA_DIR } from '../src/config.js';
+import { readEnvFile } from '../src/env.js';
+
+// Hydrate process.env with values from .env so the Discord check can detect a
+// configured guild without the caller having to re-export them. The host
+// already reads from .env via readEnvFile internally; replicating that here
+// keeps the harness useful whether it's run via systemd (env-loaded) or
+// directly via tsx (not).
+for (const key of ['DISCORD_GUILD_ID', 'DISCORD_FLEET_CATEGORY_ID', 'DISCORD_BOT_TOKEN']) {
+  if (!process.env[key]) {
+    const val = readEnvFile([key])[key];
+    if (val) process.env[key] = val;
+  }
+}
 
 const WORKER_NAME = 'fleet-e2e-smoke';
 const OVERALL_TIMEOUT_MS = 300_000;
