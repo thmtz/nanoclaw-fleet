@@ -20,6 +20,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
+import { readEnvFile } from './env.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -424,18 +425,37 @@ async function buildContainerArgs(
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection.
+  let onecliApplied = false;
   try {
     if (agentIdentifier) {
       await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
     }
-    const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
+    onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
     if (onecliApplied) {
       log.info('OneCLI gateway applied', { containerName });
     } else {
-      log.warn('OneCLI gateway not applied — container will have no credentials', { containerName });
+      log.warn('OneCLI gateway not applied — will try env credential fallback', { containerName });
     }
   } catch (err) {
-    log.warn('OneCLI gateway error — container will have no credentials', { containerName, err });
+    log.warn('OneCLI gateway error — will try env credential fallback', { containerName, err });
+  }
+
+  // Fallback: when OneCLI is unavailable, pass Anthropic creds straight through
+  // from .env. Intended for prototype / local use. Production installs should
+  // rely on OneCLI (key rotation, per-agent policy). Reads on every spawn so
+  // token changes in .env take effect without a service restart.
+  if (!onecliApplied) {
+    const fallbackEnv = readEnvFile([
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_BASE_URL',
+    ]);
+    for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'] as const) {
+      const val = fallbackEnv[key] ?? process.env[key];
+      if (val) args.push('-e', `${key}=${val}`);
+    }
+    log.info('Env credential fallback applied', { containerName });
   }
 
   // Host gateway
