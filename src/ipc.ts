@@ -13,8 +13,11 @@ import {
   TIMEZONE,
   WORKER_BACKENDS_FILENAME,
 } from './config.js';
-
-const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-6';
+import {
+  FALLBACK_ANTHROPIC_MODEL,
+  FALLBACK_NEURALWATT_MODEL,
+  resolveEffectiveBackendConfig,
+} from './backend-defaults.js';
 import { AvailableGroup } from './container-runner.js';
 import { sanitizeFolderName } from './container-runtime.js';
 import { readEnvFile } from './env.js';
@@ -133,8 +136,6 @@ function getCurrentBackend(folder: string): string {
   }
 }
 
-const DEFAULT_NEURALWATT_MODEL = 'moonshotai/Kimi-K2.5';
-
 /** Read-modify-write worker-backends.json. Atomic via temp file. */
 function updateWorkerBackends(
   folder: string,
@@ -152,12 +153,12 @@ function updateWorkerBackends(
   if (backend === BACKEND_NEURALWATT) {
     backends[folder] = {
       backend: BACKEND_NEURALWATT,
-      model: model || DEFAULT_NEURALWATT_MODEL,
+      model: model || FALLBACK_NEURALWATT_MODEL,
     };
   } else if (backend === BACKEND_ANTHROPIC) {
     backends[folder] = {
       backend: BACKEND_ANTHROPIC,
-      model: model || DEFAULT_ANTHROPIC_MODEL,
+      model: model || FALLBACK_ANTHROPIC_MODEL,
     };
   } else if (backend === null) {
     delete backends[folder];
@@ -917,19 +918,16 @@ export async function processTaskIpc(
           if (profile.skills_repo) {
             workerEnv.WORKER_SKILLS_REPO = profile.skills_repo;
           }
-          // Backend selection: 'anthropic' (default) or 'neuralwatt'
-          if (data.backend === BACKEND_NEURALWATT) {
-            const model = data.model || DEFAULT_NEURALWATT_MODEL;
-            workerEnv.NANOCLAW_BACKEND = BACKEND_NEURALWATT;
-            workerEnv.NANOCLAW_MODEL = model;
-            updateWorkerBackends(data.folder, BACKEND_NEURALWATT, model);
-          } else {
-            // Anthropic backend - also track in worker-backends.json for status pins
-            const model = data.model || DEFAULT_ANTHROPIC_MODEL;
-            workerEnv.NANOCLAW_BACKEND = BACKEND_ANTHROPIC;
-            workerEnv.NANOCLAW_MODEL = model;
-            updateWorkerBackends(data.folder, BACKEND_ANTHROPIC, model);
-          }
+          // Backend selection: explicit data.backend/model win; otherwise fall
+          // back to env defaults resolved at call time (re-reads .env so edits
+          // apply to the next create without a service restart).
+          const { backend, model } = resolveEffectiveBackendConfig(
+            data.folder,
+            { backend: data.backend, model: data.model },
+          );
+          workerEnv.NANOCLAW_BACKEND = backend;
+          workerEnv.NANOCLAW_MODEL = model;
+          updateWorkerBackends(data.folder, backend, model);
           const envDir = path.join(DATA_DIR, 'sessions', data.folder);
           fs.mkdirSync(envDir, { recursive: true });
           fs.writeFileSync(

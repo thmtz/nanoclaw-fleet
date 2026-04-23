@@ -97,6 +97,29 @@ NANOCLAW_BACKEND=neuralwatt   # or absent for anthropic
 
 The shim re-reads this file on each request (cached with mtime check). Model changes take effect immediately.
 
+### Default Backend/Model from `.env`
+
+Four env vars seed `worker-backends.json` on first spawn when no entry exists:
+
+```
+NANOCLAW_DEFAULT_WORKER_BACKEND=neuralwatt
+NANOCLAW_DEFAULT_WORKER_MODEL=zai-org/GLM-5.1-FP8
+NANOCLAW_DEFAULT_MASTER_BACKEND=neuralwatt
+NANOCLAW_DEFAULT_MASTER_MODEL=zai-org/GLM-5.1-FP8
+```
+
+Resolved by `src/backend-defaults.ts::resolveDefaultBackendConfig`, which re-reads `.env` on each call so edits take effect without restarting nanoclaw.
+
+**Shim routing footgun (fixed):** the shim defaults to `{ backend: 'anthropic' }` when a folder has no entry in `worker-backends.json`. If container-runner started a container with env-derived `NANOCLAW_BACKEND=neuralwatt` but never wrote the entry, the shim would route that worker's traffic to the real Anthropic API with a placeholder API key → 401 "invalid x-api-key".
+
+Fix: `container-runner.ts` calls `seedBackendEntry(folder, defaults)` on spawn when no entry exists, persisting the env-derived config so the shim (separate process) routes consistently. Shim and container always agree.
+
+### Changing an existing worker's model
+
+- `ncf switch <worker> <backend> [model]` — explicit, persists to state file.
+- Or edit `data/worker-backends.json` directly (mtime-cached, takes effect next request).
+- To revert a worker/master back to env defaults: delete the folder's entry from `worker-backends.json`; next container spawn re-seeds from `.env`.
+
 ## Key Files
 
 | File | Role |

@@ -191,11 +191,33 @@ curl -s -X POST -H "Authorization: Bot $DEBUG_TOKEN" \
 
 See `docs/guides/testing.md` for full setup instructions.
 
+## Default Model Configuration
+
+Defaults for new workers and the master group are read from `.env` on each spawn — no service restart needed.
+
+```
+NANOCLAW_DEFAULT_WORKER_BACKEND=neuralwatt   # or 'anthropic'
+NANOCLAW_DEFAULT_WORKER_MODEL=zai-org/GLM-5.1-FP8
+NANOCLAW_DEFAULT_MASTER_BACKEND=neuralwatt
+NANOCLAW_DEFAULT_MASTER_MODEL=zai-org/GLM-5.1-FP8
+```
+
+Precedence: explicit `ncf create --backend/--model` or `ncf switch` > entry in `data/worker-backends.json` > `.env` defaults > built-in fallbacks.
+
+**Semantics:** env seeds `worker-backends.json` the first time a spawn happens with no entry. After that, the state file wins. To re-default an existing worker or master, either:
+- `ncf switch <worker> <backend> [model]`, or
+- delete its entry from `data/worker-backends.json` and respawn (next spawn re-seeds from env).
+
+**Why seeding matters:** the shim (`tools/anthropic-shim.ts`, separate process) reads `worker-backends.json` to route per-request. If the master has no entry, shim defaults to `anthropic` and forwards to the real Anthropic API with the container's placeholder key → 401 "invalid x-api-key". The host seeds on spawn (`seedBackendEntry` in `src/backend-defaults.ts`) so shim and container agree. See [docs/architecture/inference-routing.md](docs/architecture/inference-routing.md).
+
 ## Gotchas
 
 - **Agent-runner source auto-syncs by mtime.** Changes to MCP tools or agent-runner code take effect on next container spawn. No manual cache clearing needed. However, if the image is stale, the entrypoint recompiles TypeScript on every spawn (~2-3s). Rebuild the image (`container/build.sh`) after agent-runner changes to avoid this.
 - **Docker build cache is aggressive.** `--no-cache` alone doesn't invalidate COPY steps. Prune the builder for a truly clean rebuild.
 - **WhatsApp is a separate channel fork.** Run `/add-whatsapp` to install it after upgrading.
+- **`ncf create --help` creates a worker named `--help`.** There's no flag parser — the first positional wins. Run `ncf` (no args) or `ncf create` (no args) for usage.
+- **Env vars exported from `src/config.ts` cache at module load.** They won't reflect `.env` edits until service restart. For runtime reload, call `readEnvFile([...])` inline. Pattern: see `src/backend-defaults.ts::resolveDefaultBackendConfig` — host, shim, and CLI all call this fresh.
+- **Discord gateway can zombie silently.** The socket goes into `CLOSE-WAIT` to `162.159.*:443` and the bot stops receiving messages — no log trail, systemd still green. Detect with `ss -tnp | grep CLOSE-WAIT` on the nanoclaw PID; fix with `systemctl --user restart nanoclaw`. If this recurs, add a reconnect watchdog.
 
 ## After Making Changes
 

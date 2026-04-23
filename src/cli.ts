@@ -29,6 +29,8 @@ import {
 import { renameSync } from 'fs';
 import path from 'path';
 
+import { resolveEffectiveBackendConfig } from './backend-defaults.js';
+
 const PROJECT_DIR = path.resolve(import.meta.dirname!, '..');
 const DB_PATH = path.join(PROJECT_DIR, 'store/messages.db');
 const DATA_DIR = path.join(PROJECT_DIR, 'data');
@@ -178,16 +180,17 @@ function cmdStatus(json: boolean, noColor: boolean) {
   for (const g of groups) {
     if (!g.isRegistered || !g.folder) continue;
 
-    const b = backends[g.folder] || {};
+    const b = backends[g.folder];
     const u = usage[g.folder] || {};
     const container = getContainerName(g.folder);
+    const effective = resolveEffectiveBackendConfig(g.folder, b);
 
     const info: WorkerInfo = {
       folder: g.folder,
       name: g.name,
       jid: g.jid,
-      backend: b.backend || 'anthropic',
-      model: b.model || 'unknown',
+      backend: effective.backend,
+      model: effective.model || 'unknown',
       container,
       requests: u.requests || 0,
       tokens:

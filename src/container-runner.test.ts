@@ -8,6 +8,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  BACKEND_ANTHROPIC: 'anthropic',
   BACKEND_NEURALWATT: 'neuralwatt',
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
@@ -21,6 +22,17 @@ vi.mock('./config.js', () => ({
   TIMEZONE: 'America/Los_Angeles',
   WORKER_API_KEY_PREFIX: 'sk-ant-worker-',
   WORKER_BACKENDS_FILENAME: 'worker-backends.json',
+}));
+
+vi.mock('./backend-defaults.js', () => ({
+  resolveEffectiveBackendConfig: vi.fn(() => ({
+    backend: 'anthropic',
+    model: 'claude-opus-4-6',
+  })),
+  seedBackendEntry: vi.fn(() => false),
+  MAIN_FOLDER: 'discord_main',
+  FALLBACK_ANTHROPIC_MODEL: 'claude-opus-4-6',
+  FALLBACK_NEURALWATT_MODEL: 'moonshotai/Kimi-K2.5',
 }));
 
 // Mock logger
@@ -92,6 +104,12 @@ vi.mock('child_process', async () => {
 });
 
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  resolveEffectiveBackendConfig,
+  seedBackendEntry,
+} from './backend-defaults.js';
+import fs from 'fs';
+import { spawn } from 'child_process';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -211,5 +229,82 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('container-runner backend seeding', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(seedBackendEntry).mockClear();
+    vi.mocked(spawn).mockClear();
+    vi.mocked(fs.readFileSync).mockReset();
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function runAndFinish() {
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      vi.fn(async () => {}),
+    );
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'ok',
+      newSessionId: 's',
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+  }
+
+  // Regression: shim defaulted to anthropic for workers with no entry in
+  // worker-backends.json, routing NW traffic to the real Anthropic API with
+  // a placeholder key → 401. container-runner must seed the entry so the
+  // shim (separate process) agrees with the container's backend.
+  it('seeds worker-backends.json when no entry exists', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    vi.mocked(resolveEffectiveBackendConfig).mockReturnValueOnce({
+      backend: 'neuralwatt',
+      model: 'moonshotai/Kimi-K2.5',
+    });
+
+    await runAndFinish();
+
+    expect(seedBackendEntry).toHaveBeenCalledWith('test-group', {
+      backend: 'neuralwatt',
+      model: 'moonshotai/Kimi-K2.5',
+    });
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args).toContain('NANOCLAW_BACKEND=neuralwatt');
+    expect(args).toContain('NANOCLAW_MODEL=moonshotai/Kimi-K2.5');
+  });
+
+  it('does not seed when entry already exists', async () => {
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).endsWith('worker-backends.json')) {
+        return JSON.stringify({
+          'test-group': { backend: 'anthropic', model: 'claude-opus-4-6' },
+        });
+      }
+      return '';
+    });
+    vi.mocked(resolveEffectiveBackendConfig).mockReturnValueOnce({
+      backend: 'anthropic',
+      model: 'claude-opus-4-6',
+    });
+
+    await runAndFinish();
+
+    expect(seedBackendEntry).not.toHaveBeenCalled();
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args).toContain('NANOCLAW_BACKEND=anthropic');
+    expect(args).toContain('NANOCLAW_MODEL=claude-opus-4-6');
   });
 });

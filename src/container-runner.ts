@@ -10,6 +10,7 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  BACKEND_ANTHROPIC,
   BACKEND_NEURALWATT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
@@ -21,6 +22,10 @@ import {
   WORKER_API_KEY_PREFIX,
   WORKER_BACKENDS_FILENAME,
 } from './config.js';
+import {
+  resolveEffectiveBackendConfig,
+  seedBackendEntry,
+} from './backend-defaults.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -370,22 +375,33 @@ function buildContainerArgs(
     args.push('-e', `DISCORD_GUILD_ID=${DISCORD_GUILD_ID}`);
   }
 
-  // Determine backend from worker-backends.json (single source of truth).
+  // Determine backend for this folder. worker-backends.json entry wins;
+  // otherwise env defaults (master vs worker aware, .env re-read per spawn).
+  // If no entry existed, seed one so the shim (separate process) routes
+  // consistently — without seeding, shim defaults to 'anthropic' and sends
+  // NW traffic to the real Anthropic API with a placeholder key.
   let useNeuralwatt = false;
-  let neuralwattModel: string | null = null;
+  let resolvedModel: string | null = null;
   if (groupFolder) {
     const backendsPath = path.join(DATA_DIR, WORKER_BACKENDS_FILENAME);
+    let entry: { backend?: string; model?: string } | undefined;
     try {
       const backends = JSON.parse(fs.readFileSync(backendsPath, 'utf-8'));
-      const config = backends[groupFolder];
-      if (config?.backend === BACKEND_NEURALWATT) {
-        useNeuralwatt = true;
-        neuralwattModel = config.model || null;
-      }
+      entry = backends[groupFolder];
     } catch (err) {
       logger.warn(
         { err, groupFolder },
-        'Failed to read worker-backends.json — defaulting to Anthropic',
+        'Failed to read worker-backends.json — falling back to env defaults',
+      );
+    }
+
+    const effective = resolveEffectiveBackendConfig(groupFolder, entry);
+    useNeuralwatt = effective.backend === BACKEND_NEURALWATT;
+    resolvedModel = effective.model;
+    if (!entry?.backend && seedBackendEntry(groupFolder, effective)) {
+      logger.info(
+        { groupFolder, backend: effective.backend, model: effective.model },
+        'Seeded backend entry from env defaults',
       );
     }
 
@@ -408,15 +424,15 @@ function buildContainerArgs(
     // Always inject NANOCLAW_BACKEND so the container knows its backend.
     args.push(
       '-e',
-      `NANOCLAW_BACKEND=${useNeuralwatt ? BACKEND_NEURALWATT : 'anthropic'}`,
+      `NANOCLAW_BACKEND=${useNeuralwatt ? BACKEND_NEURALWATT : BACKEND_ANTHROPIC}`,
     );
   }
 
-  // Pass model to container agent.
-  // For Neuralwatt: use model from worker-backends.json.
-  // For Anthropic: use model from global .env (opus, sonnet, etc.).
-  if (neuralwattModel) {
-    args.push('-e', `NANOCLAW_MODEL=${neuralwattModel}`);
+  // Pass model to container. When groupFolder is set, resolvedModel is always
+  // populated by resolveEffectiveBackendConfig. Fallback path (no groupFolder)
+  // reads legacy NANOCLAW_MODEL from env for anthropic only.
+  if (resolvedModel) {
+    args.push('-e', `NANOCLAW_MODEL=${resolvedModel}`);
   } else if (!useNeuralwatt) {
     const { NANOCLAW_MODEL } = readEnvFile(['NANOCLAW_MODEL']);
     if (NANOCLAW_MODEL) {

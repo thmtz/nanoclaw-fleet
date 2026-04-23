@@ -85,6 +85,11 @@ export const BACKEND_NEURALWATT = 'neuralwatt' as const;
 export type InferenceBackend =
   | typeof BACKEND_ANTHROPIC
   | typeof BACKEND_NEURALWATT;
+
+// Defaults for new workers + master are resolved at call time via
+// src/backend-defaults.ts so .env edits take effect without a service restart.
+// Vars: NANOCLAW_DEFAULT_{MASTER,WORKER}_{BACKEND,MODEL}
+
 export const WORKER_BACKENDS_FILENAME = 'worker-backends.json';
 export const WORKER_API_KEY_PREFIX = 'sk-ant-worker-';
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
