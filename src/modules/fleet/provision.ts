@@ -6,10 +6,7 @@
  * status string suitable for user-facing notification text, plus the new
  * messaging_group_id (or null when no channel was provisioned).
  */
-import {
-  createMessagingGroup,
-  createMessagingGroupAgent,
-} from '../../db/messaging-groups.js';
+import { createMessagingGroup, createMessagingGroupAgent } from '../../db/messaging-groups.js';
 import { log } from '../../log.js';
 import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { createDiscordChannel, loadDiscordFleetConfig } from './discord-channel.js';

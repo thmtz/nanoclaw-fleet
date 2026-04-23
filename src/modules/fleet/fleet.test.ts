@@ -124,7 +124,7 @@ describe('create_worker', () => {
   it('seeds container.json with providers block', async () => {
     await handleCreateWorker({ name: 'alpha', backend: 'claude', model: 'opus-4.7' }, makeMasterSession());
     const cfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/alpha/container.json', 'utf-8'));
-    expect(cfg.active_provider).toBe('claude');
+    expect(cfg.provider).toBe('claude');
     expect(cfg.providers.claude.model).toBe('opus-4.7');
   });
 });
@@ -174,7 +174,7 @@ describe('switch_backend', () => {
     expect(w?.fleet_backend).toBe('neuralwatt');
     expect(w?.fleet_model).toBe('kimi-k2.5');
     const cfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/epsilon/container.json', 'utf-8'));
-    expect(cfg.active_provider).toBe('neuralwatt');
+    expect(cfg.provider).toBe('neuralwatt');
   });
 });
 

@@ -196,7 +196,7 @@ async function main(): Promise<void> {
   const cfgPath = path.join(TMP_ROOT, 'groups', 'alpha', 'container.json');
   assert(fs.existsSync(cfgPath), 'alpha container.json exists');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-  assert(cfg.active_provider === 'claude', 'container.json active_provider=claude');
+  assert(cfg.provider === 'claude', 'container.json provider=claude');
   assert(cfg.providers?.claude?.model === 'opus-4.7', 'container.json providers.claude.model set');
 
   const parentDest = getDestinationByTarget(master.id, 'agent', alpha!.id);
@@ -273,7 +273,7 @@ async function main(): Promise<void> {
   assert(switched?.fleet_backend === 'neuralwatt', 'fleet_backend=neuralwatt');
   assert(switched?.fleet_model === 'kimi-k2.5', 'fleet_model=kimi-k2.5');
   const cfg2 = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-  assert(cfg2.active_provider === 'neuralwatt', 'container.json active_provider=neuralwatt');
+  assert(cfg2.provider === 'neuralwatt', 'container.json provider=neuralwatt');
   assert(cfg2.providers?.neuralwatt?.model === 'kimi-k2.5', 'container.json neuralwatt model set');
 
   console.log('\n[7] Emulate list_workers_request');

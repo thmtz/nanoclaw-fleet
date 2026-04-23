@@ -68,9 +68,13 @@ export function writeContainerConfig(folder: string, config: Record<string, unkn
 }
 
 /**
- * Set the active backend + model on an agent group's container.json. The
- * `providers` block is keyed by provider name; `active_provider` points at
- * which block is live. Fleet MCP tools read and rewrite this on switch.
+ * Set the active backend + model on an agent group's container.json.
+ *
+ * v2's container-runner reads the top-level `provider` field to pick the
+ * provider module. Fleet also keeps a `providers` map keyed by provider
+ * name so per-backend settings (model, base_url, etc.) survive across
+ * switches — `switch_backend` just flips `provider` and the previous
+ * provider's settings stay cached in the map for a later switch back.
  */
 export function setFleetBackend(folder: string, backend: string, model?: string): void {
   const cfg = readContainerConfig(folder);
@@ -78,6 +82,6 @@ export function setFleetBackend(folder: string, backend: string, model?: string)
   providers[backend] = providers[backend] ?? {};
   if (model) providers[backend].model = model;
   cfg.providers = providers;
-  cfg.active_provider = backend;
+  cfg.provider = backend;
   writeContainerConfig(folder, cfg);
 }
