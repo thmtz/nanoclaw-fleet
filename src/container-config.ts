@@ -47,6 +47,13 @@ export interface ContainerConfig {
   agentGroupId?: string;
   /** Max messages per prompt. Falls back to code default if unset. */
   maxMessagesPerPrompt?: number;
+  /**
+   * Per-backend settings map — survives provider switches so flipping
+   * `provider` between "claude" and "neuralwatt" doesn't lose each backend's
+   * model / base_url. Fleet's setFleetBackend helper maintains this block.
+   * Shape is open-ended (each provider owns its keys), so we type it loosely.
+   */
+  providers?: Record<string, Record<string, unknown>>;
 }
 
 function emptyConfig(): ContainerConfig {
@@ -87,6 +94,7 @@ export function readContainerConfig(folder: string): ContainerConfig {
       assistantName: raw.assistantName,
       agentGroupId: raw.agentGroupId,
       maxMessagesPerPrompt: raw.maxMessagesPerPrompt,
+      providers: raw.providers,
     };
   } catch (err) {
     console.error(`[container-config] failed to parse ${p}: ${String(err)}`);

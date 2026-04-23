@@ -78,9 +78,10 @@ export function writeContainerConfig(folder: string, config: Record<string, unkn
  */
 export function setFleetBackend(folder: string, backend: string, model?: string): void {
   const cfg = readContainerConfig(folder);
-  const providers = (cfg.providers as Record<string, Record<string, unknown>> | undefined) ?? {};
-  providers[backend] = providers[backend] ?? {};
-  if (model) providers[backend].model = model;
+  const providers = (cfg.providers ?? {}) as Record<string, Record<string, unknown>>;
+  const slot = providers[backend] ?? {};
+  if (model) slot.model = model;
+  providers[backend] = slot;
   cfg.providers = providers;
   cfg.provider = backend;
   writeContainerConfig(folder, cfg);
