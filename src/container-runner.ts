@@ -451,7 +451,12 @@ async function buildContainerArgs(
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
     ]);
-    for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'] as const) {
+    for (const key of [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_BASE_URL',
+    ] as const) {
       const val = fallbackEnv[key] ?? process.env[key];
       if (val) args.push('-e', `${key}=${val}`);
     }
