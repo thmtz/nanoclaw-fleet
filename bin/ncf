@@ -1,0 +1,4 @@
+#!/bin/sh
+# ncf — NanoClaw Fleet CLI wrapper. Invokes scripts/ncf.ts via tsx.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$SCRIPT_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/scripts/ncf.ts" "$@"
