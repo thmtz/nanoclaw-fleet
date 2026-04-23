@@ -408,6 +408,13 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Fleet module: when the agent group is flagged as master, expose the
+  // fleet MCP tools (create_worker, destroy_worker, etc.) inside the
+  // container. Worker / plain-v2 groups don't load those tools.
+  if (agentGroup.fleet_role) {
+    args.push('-e', `NANOCLAW_FLEET_ROLE=${agentGroup.fleet_role}`);
+  }
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {

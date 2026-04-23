@@ -1,11 +1,21 @@
 // ── Central DB entities ──
 
+export type AgentGroupStatus = 'active' | 'archived';
+export type FleetRole = 'master' | 'worker';
+
 export interface AgentGroup {
   id: string;
   name: string;
   folder: string;
   agent_provider: string | null;
   created_at: string;
+  // Fleet module additions (module-fleet migration). Optional on the TS
+  // type so pre-migration callers building fixtures don't need updates;
+  // SQLite defaults to 'active' / NULL.
+  status?: AgentGroupStatus;
+  fleet_backend?: string | null;
+  fleet_model?: string | null;
+  fleet_role?: FleetRole | null;
 }
 
 export type UnknownSenderPolicy = 'strict' | 'request_approval' | 'public';

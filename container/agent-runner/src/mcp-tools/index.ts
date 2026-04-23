@@ -10,6 +10,12 @@ import './scheduling.js';
 import './interactive.js';
 import './agents.js';
 import './self-mod.js';
+// Fleet tools are only exposed to master-role containers. Keeping the import
+// here + env-gated registration inside fleet.ts is simpler than a conditional
+// import (which Bun's bundler handles poorly for side-effect-only modules).
+if (process.env.NANOCLAW_FLEET_ROLE === 'master') {
+  await import('./fleet.js');
+}
 import { startMcpServer } from './server.js';
 
 function log(msg: string): void {
