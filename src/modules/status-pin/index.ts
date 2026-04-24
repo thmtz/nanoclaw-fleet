@@ -194,10 +194,7 @@ async function updateOne(
       await adapter.editMessage?.(channelType, platformId, threadId, existingId, text);
       return;
     } catch (err: unknown) {
-      const code =
-        err && typeof err === 'object' && 'code' in err
-          ? (err as { code: number }).code
-          : undefined;
+      const code = err && typeof err === 'object' && 'code' in err ? (err as { code: number }).code : undefined;
       if (code === DISCORD_UNKNOWN_MESSAGE) {
         log.info('Pinned status message missing, creating new', { key });
         clearPin(key);
@@ -208,15 +205,14 @@ async function updateOne(
     }
   }
 
+  // About to post a new pin. First unpin any stale bot-authored pin that
+  // matches this key's content pattern — prevents accumulation across
+  // host restarts where the old message got deleted (10008 path).
+  await unpinStalePins(adapter, channelType, platformId, threadId, key);
+
   // Post a fresh message + pin it.
   try {
-    const newId = await adapter.deliver(
-      channelType,
-      platformId,
-      threadId,
-      'chat',
-      JSON.stringify({ text }),
-    );
+    const newId = await adapter.deliver(channelType, platformId, threadId, 'chat', JSON.stringify({ text }));
     if (!newId) {
       log.warn('Pinned status deliver returned no id', { key, channelType, platformId });
       return;
@@ -232,6 +228,76 @@ async function updateOne(
   }
 }
 
+/**
+ * Unpin any pinned messages in the channel whose content looks like a
+ * previous fleet status pin. Discord's pin list is bot-agnostic (we see
+ * everyone's pins), so we content-match to our own markers rather than
+ * indiscriminately unpinning. Best-effort — failures are logged and
+ * swallowed so a pin attempt never blocks a turn.
+ */
+async function unpinStalePins(
+  adapter: ChannelDeliveryAdapter,
+  channelType: string,
+  platformId: string,
+  threadId: string | null,
+  key: string,
+): Promise<void> {
+  if (channelType !== 'discord') return;
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) return;
+  // platform_id for Discord is "discord:<guild>:<channel>" — extract channel.
+  const channelId = platformId.split(':').pop();
+  if (!channelId) return;
+  const isMasterKey = key === MASTER_KEY;
+  try {
+    const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages/pins`, {
+      headers: { Authorization: `Bot ${token}` },
+    });
+    if (!resp.ok) return;
+    const data = (await resp.json()) as { items?: Array<{ message: { id: string; content: string; author?: { id?: string } } }> };
+    const items = data.items ?? [];
+    const myId = await currentBotId(token);
+    const currentPin = getPin(key);
+    for (const item of items) {
+      const msg = item.message;
+      if (msg.id === currentPin) continue;
+      if (myId && msg.author?.id !== myId) continue;
+      // Match our own status-pin format: either a master summary or a
+      // single-worker line. The "_Updated <t:...:R>_" footer is the
+      // cheapest reliable signature.
+      if (!/_Updated <t:\d+:R>_/.test(msg.content)) continue;
+      // Extra safety: master pins contain "Workers:" line; worker pins
+      // don't. Don't cross-delete.
+      const looksLikeMaster = /\*\*Workers\*\*:/m.test(msg.content);
+      if (isMasterKey !== looksLikeMaster) continue;
+      try {
+        await adapter.unpinMessage?.(channelType, platformId, threadId, msg.id);
+        log.info('Pinned status: unpinned stale pin', { channelId, staleId: msg.id });
+      } catch (err) {
+        log.debug('Pinned status: unpin stale failed', { staleId: msg.id, err });
+      }
+    }
+  } catch (err) {
+    log.debug('Pinned status: stale-pin scan failed', { err });
+  }
+}
+
+let cachedBotId: string | null = null;
+async function currentBotId(token: string): Promise<string | null> {
+  if (cachedBotId) return cachedBotId;
+  try {
+    const resp = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: `Bot ${token}` },
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { id?: string };
+    cachedBotId = data.id ?? null;
+    return cachedBotId;
+  } catch {
+    return null;
+  }
+}
+
 let intervalHandle: NodeJS.Timeout | null = null;
 
 async function tick(): Promise<void> {
@@ -243,14 +309,7 @@ async function tick(): Promise<void> {
 
   if (master?.channel_type && master.platform_id && PINNABLE_CHANNELS.has(master.channel_type)) {
     const text = buildMasterText(master, workers);
-    await updateOne(
-      adapter,
-      MASTER_KEY,
-      master.channel_type,
-      master.platform_id,
-      master.platform_id,
-      text,
-    );
+    await updateOne(adapter, MASTER_KEY, master.channel_type, master.platform_id, master.platform_id, text);
   }
 
   for (const w of workers) {
