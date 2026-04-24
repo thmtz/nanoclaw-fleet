@@ -27,6 +27,9 @@ export interface ProviderContainerContext {
   sessionDir: string;
   /** Agent group ID, for any per-group logic. */
   agentGroupId: string;
+  /** Agent group folder name (`groups/<folder>/`). Lets provider configs
+   *  read the group's container.json without a central-DB lookup. */
+  agentGroupFolder: string;
   /** `process.env` at spawn time — pull passthrough values from here. */
   hostEnv: NodeJS.ProcessEnv;
 }

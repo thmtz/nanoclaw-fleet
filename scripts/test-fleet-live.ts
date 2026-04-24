@@ -179,23 +179,16 @@ async function main(): Promise<void> {
   const originalId = afterCreate!.id;
 
   console.log('\n[3] Agent-to-agent: master → worker → master');
+  // Stay connected long enough for the worker container to spawn, reply, and
+  // the master to relay back. The CLI socket only allows one client at a
+  // time — reopening mid-flight shows "superseded" in master's response.
   const pingReplies = await chatRequest(
-    `ask ${WORKER_NAME} to reply with exactly the single word "pong" and nothing else`,
-    3000,
-    REPLY_TIMEOUT_MS,
+    `ask ${WORKER_NAME} to reply with exactly the single word "pong" and nothing else, then tell me what they said`,
+    30_000,
+    REPLY_TIMEOUT_MS * 2,
   );
-  // Wait for worker to spawn and reply back through master.
-  const end = Date.now() + REPLY_TIMEOUT_MS;
-  let sawPong = false;
-  while (Date.now() < end) {
-    const more = await chatRequest('any word from the worker yet?', 3000, 30_000);
-    if (more.some((t) => /pong/i.test(t))) {
-      sawPong = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  step('master reports worker reply containing "pong"', sawPong, pingReplies[0]?.slice(0, 80));
+  const sawPong = pingReplies.some((t) => /pong/i.test(t));
+  step('master reports worker reply containing "pong"', sawPong, pingReplies.slice(-1)[0]?.slice(0, 100));
 
   console.log('\n[4] list_workers');
   const listReplies = await chatRequest('list workers', 5000);
