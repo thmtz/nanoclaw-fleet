@@ -41,37 +41,68 @@ const getUsage: McpToolDefinition = {
   tool: {
     name: 'get_usage',
     description:
-      'Report this worker\'s cumulative token usage + turn latency, read from the local turns.jsonl audit log. ' +
-      'Fields: turns, input_tokens, output_tokens, cached_tokens, total_ms, max_ms.',
+      "Report this worker's cumulative token usage + turn latency (from the local turns.jsonl audit log) " +
+      'and energy consumption (from the Neuralwatt shim when available). Fields: turns, input_tokens, ' +
+      'output_tokens, cached_tokens, total_ms, max_ms, avg_ms, plus optional energy_joules/energy_kwh ' +
+      'when the worker is on neuralwatt.',
     inputSchema: { type: 'object', properties: {} },
   },
   handler: async () => {
-    if (!fs.existsSync(TURNS_FILE)) return ok(JSON.stringify({ turns: 0, note: 'no turns yet' }));
     let turns = 0;
     let inputTokens = 0;
     let outputTokens = 0;
     let cachedTokens = 0;
     let totalMs = 0;
     let maxMs = 0;
+    if (fs.existsSync(TURNS_FILE)) {
+      try {
+        const lines = fs.readFileSync(TURNS_FILE, 'utf-8').trim().split('\n').filter(Boolean);
+        for (const ln of lines) {
+          try {
+            const e = JSON.parse(ln);
+            turns++;
+            inputTokens += e.input_tokens ?? 0;
+            outputTokens += e.output_tokens ?? 0;
+            cachedTokens += e.cached_tokens ?? 0;
+            const ms = e.total_ms ?? 0;
+            totalMs += ms;
+            if (ms > maxMs) maxMs = ms;
+          } catch {
+            // Skip malformed lines — one corrupt row shouldn't break the totals.
+          }
+        }
+      } catch (e) {
+        return err(`read turns.jsonl failed: ${String(e)}`);
+      }
+    }
+
+    // Energy — read from the Neuralwatt shim's accumulator when available.
+    // Shim records requests, tokens, joules, kWh per worker folder, keyed
+    // by the same folder that appears in the ANTHROPIC_BASE_URL /w/<folder>
+    // prefix. Tolerant of a missing file: pre-NW installs just omit these
+    // fields from the response.
+    let energy: Record<string, unknown> | null = null;
     try {
-      const lines = fs.readFileSync(TURNS_FILE, 'utf-8').trim().split('\n').filter(Boolean);
-      for (const ln of lines) {
-        try {
-          const e = JSON.parse(ln);
-          turns++;
-          inputTokens += e.input_tokens ?? 0;
-          outputTokens += e.output_tokens ?? 0;
-          cachedTokens += e.cached_tokens ?? 0;
-          const ms = e.total_ms ?? 0;
-          totalMs += ms;
-          if (ms > maxMs) maxMs = ms;
-        } catch {
-          // Skip malformed lines — one corrupt row shouldn't break the totals.
+      const shimUrl = (process.env.ANTHROPIC_BASE_URL ?? '').replace(/\/w\/[^/]+$/, '');
+      const folderMatch = (process.env.ANTHROPIC_BASE_URL ?? '').match(/\/w\/([^/]+)$/);
+      const folder = folderMatch?.[1];
+      if (shimUrl && folder) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const f = (globalThis as any).fetch;
+        if (typeof f === 'function') {
+          const resp = await f(`${shimUrl}/usage/${folder}`);
+          if (resp.ok) {
+            const body = await resp.json().catch(() => null);
+            if (body && typeof body === 'object' && !('error' in body)) {
+              energy = body as Record<string, unknown>;
+            }
+          }
         }
       }
-    } catch (e) {
-      return err(`read turns.jsonl failed: ${String(e)}`);
+    } catch {
+      // Best effort — shim may be down, or this worker isn't on NW.
     }
+
     return ok(
       JSON.stringify({
         turns,
@@ -81,6 +112,7 @@ const getUsage: McpToolDefinition = {
         total_ms: totalMs,
         max_ms: maxMs,
         avg_ms: turns > 0 ? Math.round(totalMs / turns) : 0,
+        ...(energy ? { energy } : {}),
       }),
     );
   },

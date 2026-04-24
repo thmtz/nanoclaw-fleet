@@ -16,9 +16,12 @@
  *   fleet:status-pin:worker:<folder>
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 import { getDb } from '../../db/connection.js';
 import { getDeliveryAdapter, onDeliveryAdapterReady, type ChannelDeliveryAdapter } from '../../delivery.js';
+import { readEnvFile } from '../../env.js';
 import { log } from '../../log.js';
 
 const MASTER_KEY = 'fleet:status-pin:master';
@@ -150,14 +153,31 @@ function buildMasterText(master: MasterRow, workers: WorkerRow[]): string {
 
   const active = workers.filter((w) => w.status === 'active');
   const archived = workers.filter((w) => w.status !== 'active');
+  const usage = loadShimUsage();
 
   const lines: string[] = [masterLine, '', `**Workers**: ${active.length} active, ${archived.length} archived`];
   for (const w of active) {
     const wc = findContainer(w.folder);
     const marker = wc ? '🟢' : '⚫';
     const state = wc ? `${formatUptime(Date.now() - wc.startedMs)} uptime` : 'stopped';
-    lines.push(`${marker} \`${w.folder}\` · ${backend(w)} · ${state}`);
+    lines.push(`${marker} \`${w.folder}\` · ${backend(w)} · ${state}${usageSuffix(w.folder, usage)}`);
   }
+
+  // Fleet total energy if any worker has shim usage data.
+  let fleetReqs = 0;
+  let fleetTokens = 0;
+  let fleetKwh = 0;
+  for (const w of workers) {
+    const e = usage[w.folder];
+    if (!e) continue;
+    fleetReqs += e.requests ?? 0;
+    fleetTokens += e.total_tokens ?? 0;
+    fleetKwh += e.energy_kwh ?? 0;
+  }
+  if (fleetReqs > 0) {
+    lines.push('', `**Fleet total**: ${fleetReqs} req · ${formatTokens(fleetTokens)} tok · ${formatEnergy(fleetKwh)}`);
+  }
+
   lines.push('', `_Updated <t:${Math.floor(Date.now() / 1000)}:R>_`);
   return lines.join('\n');
 }
@@ -166,8 +186,9 @@ function buildWorkerText(worker: WorkerRow): string {
   const c = findContainer(worker.folder);
   const marker = c ? '🟢' : '⚫';
   const state = c ? `running · ${formatUptime(Date.now() - c.startedMs)} uptime` : 'stopped';
+  const usage = loadShimUsage();
   const lines: string[] = [
-    `${marker} **${worker.name}** · ${backend(worker)} · ${state}`,
+    `${marker} **${worker.name}** · ${backend(worker)} · ${state}${usageSuffix(worker.folder, usage)}`,
     '',
     worker.status === 'archived' ? '_archived — not accepting messages_' : '',
     `_Updated <t:${Math.floor(Date.now() / 1000)}:R>_`,
@@ -178,6 +199,59 @@ function buildWorkerText(worker: WorkerRow): string {
 function backend(row: MasterRow): string {
   if (!row.fleet_backend) return '—';
   return row.fleet_model ? `${row.fleet_backend} (${row.fleet_model})` : row.fleet_backend;
+}
+
+interface ShimUsageEntry {
+  requests?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  energy_joules?: number;
+  energy_kwh?: number;
+  last_updated?: string;
+}
+
+/**
+ * Read the Neuralwatt shim's per-folder usage accumulator. Env var
+ * `NW_SHIM_USAGE_PATH` (or `.env`) points at the v1 shim's
+ * `data/worker-usage.json`. Absent / unreadable → empty map so the
+ * pin renders without energy data rather than breaking.
+ */
+function loadShimUsage(): Record<string, ShimUsageEntry> {
+  const envFile = readEnvFile(['NW_SHIM_USAGE_PATH']);
+  const usagePath = process.env.NW_SHIM_USAGE_PATH ?? envFile.NW_SHIM_USAGE_PATH;
+  if (!usagePath) return {};
+  const resolved = usagePath.startsWith('~/') ? path.join(process.env.HOME ?? '', usagePath.slice(2)) : usagePath;
+  if (!fs.existsSync(resolved)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(resolved, 'utf-8')) as Record<string, ShimUsageEntry>;
+  } catch {
+    return {};
+  }
+}
+
+function formatTokens(n: number): string {
+  if (n < 1_000) return `${n}`;
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
+}
+
+function formatEnergy(kwh: number): string {
+  if (kwh >= 1) return `${kwh.toFixed(2)}kWh`;
+  const wh = kwh * 1000;
+  if (wh >= 1) return `${wh.toFixed(1)}Wh`;
+  return `${(wh * 1000).toFixed(0)}mWh`;
+}
+
+function usageSuffix(folder: string, usage: Record<string, ShimUsageEntry>): string {
+  const entry = usage[folder];
+  if (!entry) return '';
+  const parts: string[] = [];
+  if (entry.requests) parts.push(`${entry.requests} req`);
+  if (entry.total_tokens) parts.push(`${formatTokens(entry.total_tokens)} tok`);
+  if (entry.energy_kwh) parts.push(formatEnergy(entry.energy_kwh));
+  return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
 }
 
 async function updateOne(
@@ -254,7 +328,9 @@ async function unpinStalePins(
       headers: { Authorization: `Bot ${token}` },
     });
     if (!resp.ok) return;
-    const data = (await resp.json()) as { items?: Array<{ message: { id: string; content: string; author?: { id?: string } } }> };
+    const data = (await resp.json()) as {
+      items?: Array<{ message: { id: string; content: string; author?: { id?: string } } }>;
+    };
     const items = data.items ?? [];
     const myId = await currentBotId(token);
     const currentPin = getPin(key);
