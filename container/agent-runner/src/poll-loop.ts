@@ -4,6 +4,7 @@ import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { logTurn } from './audit-log.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
+import { getSessionRouting } from './db/session-routing.js';
 import { formatMessages, extractRouting, categorizeMessage, isClearCommand, stripInternalTags, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
@@ -397,18 +398,26 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
   const scratchpad = stripInternalTags(scratchpadParts.join(''));
 
   // Single-destination shortcut: the agent wrote plain text — send to
-  // the session's originating channel (from session_routing) if available,
-  // otherwise fall back to the single destination.
+  // the session's originating channel. Prefer session_routing (written
+  // by the host on every wake, so always current) over the batch-local
+  // `routing` captured when the query first started. Without this,
+  // follow-up messages pushed into the active query inherit the very
+  // first batch's routing — e.g. a CLI inject routed all subsequent
+  // Discord replies back to the CLI transport instead of Discord, and
+  // the real user got silence.
   if (sent === 0 && scratchpad) {
-    if (routing.channelType && routing.platformId) {
-      // Reply to the channel/thread the message came from
+    const sessionRouting = getSessionRouting();
+    const channelType = sessionRouting.channel_type ?? routing.channelType;
+    const platformId = sessionRouting.platform_id ?? routing.platformId;
+    const threadId = sessionRouting.thread_id ?? routing.threadId;
+    if (channelType && platformId) {
       writeMessageOut({
         id: generateId(),
         in_reply_to: routing.inReplyTo,
         kind: 'chat',
-        platform_id: routing.platformId,
-        channel_type: routing.channelType,
-        thread_id: routing.threadId,
+        platform_id: platformId,
+        channel_type: channelType,
+        thread_id: threadId,
         content: JSON.stringify({ text: scratchpad }),
       });
       return;
