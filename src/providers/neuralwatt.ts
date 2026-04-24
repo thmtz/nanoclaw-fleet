@@ -35,7 +35,16 @@ function readNeuralwattBlock(folder: string): { model?: string; base_url?: strin
 
 registerProviderContainerConfig('neuralwatt', (ctx) => {
   const block = readNeuralwattBlock(ctx.agentGroupFolder);
-  const baseUrl = block.base_url ?? ctx.hostEnv.NW_SHIM_URL ?? ctx.hostEnv.ANTHROPIC_BASE_URL ?? DEFAULT_BASE_URL;
+  // Precedence:
+  //   1. container.json providers.neuralwatt.base_url  — explicit override
+  //   2. host env NW_SHIM_URL or ANTHROPIC_BASE_URL     — global override
+  //   3. DEFAULT_BASE_URL + /w/<folder>                 — lets the v1 shim
+  //      apply the right per-folder backend/model from its
+  //      worker-backends.json. Without the /w/<folder> prefix the shim
+  //      falls back to "anthropic" and routes through the credential
+  //      proxy instead of the NW upstream.
+  const explicitBase = block.base_url ?? ctx.hostEnv.NW_SHIM_URL ?? ctx.hostEnv.ANTHROPIC_BASE_URL;
+  const baseUrl = explicitBase ?? `${DEFAULT_BASE_URL}/w/${ctx.agentGroupFolder}`;
 
   const env: Record<string, string> = { ANTHROPIC_BASE_URL: baseUrl };
   if (block.model) env.ANTHROPIC_MODEL = block.model;

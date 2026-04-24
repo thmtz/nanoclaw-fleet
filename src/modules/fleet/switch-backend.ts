@@ -29,13 +29,21 @@ export async function handleSwitchBackend(content: Record<string, unknown>, sess
   }
 
   const localName = normalizeName(name);
-  const target = getAgentGroupByFolder(localName);
+  // Accept "master", "self", and the master's folder as aliases for the
+  // master agent group. The master is allowed to switch its own backend
+  // (e.g. run itself on a cheaper/faster model), not just workers.
+  const selfAliases = new Set(['master', 'self', sourceGroup.folder]);
+  const target = selfAliases.has(localName) ? sourceGroup : getAgentGroupByFolder(localName);
   if (!target) {
-    notifyAgent(session, `switch_backend: no worker named "${localName}".`);
+    notifyAgent(session, `switch_backend: no fleet agent named "${localName}".`);
     return;
   }
-  if (target.fleet_role !== 'worker' || target.status !== 'active') {
-    notifyAgent(session, `switch_backend: "${localName}" is not an active fleet worker.`);
+  if (target.status !== 'active') {
+    notifyAgent(session, `switch_backend: "${localName}" is not active.`);
+    return;
+  }
+  if (target.fleet_role !== 'worker' && target.fleet_role !== 'master') {
+    notifyAgent(session, `switch_backend: "${localName}" has no fleet role (not a master or worker).`);
     return;
   }
 
