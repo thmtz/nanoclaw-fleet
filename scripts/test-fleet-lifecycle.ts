@@ -500,6 +500,48 @@ async function runCleanup(): Promise<void> {
     ? fs.readFileSync(DEBUG_BOT_TOKEN_PATH, 'utf-8').trim()
     : undefined;
   if (masterChannel && debugToken) await tryDestroy(masterChannel, debugToken);
+
+  // Purge any master inbound row whose content mentions this run's marker
+  // or worker name. Without this, an Anthropic rate-limit or other API
+  // error that deferred master's turn mid-test leaves the "create <name>"
+  // instruction in master's session history. The next unrelated user
+  // message reactivates the SDK turn, master re-executes the queued
+  // instruction, and the user sees a ghost worker creation hours later.
+  try {
+    const db = new Database(path.join(DATA_DIR, 'v2.db'));
+    let masterId: string | undefined;
+    try {
+      const row = db.prepare(`SELECT id FROM agent_groups WHERE fleet_role='master' LIMIT 1`).get() as
+        | { id: string }
+        | undefined;
+      masterId = row?.id;
+    } finally {
+      db.close();
+    }
+    if (masterId) {
+      const sessDir = path.join(DATA_DIR, 'v2-sessions', masterId);
+      if (fs.existsSync(sessDir)) {
+        for (const entry of fs.readdirSync(sessDir)) {
+          const inboundPath = path.join(sessDir, entry, 'inbound.db');
+          if (!fs.existsSync(inboundPath)) continue;
+          const sdb = new Database(inboundPath);
+          try {
+            // Mark anything still pending/processing that carries this test's
+            // name or marker as completed so the SDK can't revive it later.
+            sdb.prepare(
+              `UPDATE messages_in SET status='completed'
+                 WHERE status IN ('pending','processing')
+                   AND (content LIKE ? OR content LIKE ?)`,
+            ).run(`%${WORKER_NAME}%`, `%${MARKER}%`);
+          } finally {
+            sdb.close();
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`  ! backlog purge failed: ${(err as Error).message}`);
+  }
 }
 
 main().catch(async (err) => {
