@@ -17,6 +17,7 @@ import http from 'http';
 
 import { deliverSessionMessages } from './delivery.js';
 import { getSession } from './db/sessions.js';
+import { wakeContainer } from './container-runner.js';
 import { log } from './log.js';
 
 const DEFAULT_PORT = 3100;
@@ -39,14 +40,39 @@ export function startOutboundWakeServer(): number {
 
   server = http.createServer((req, res) => {
     const url = req.url || '/';
-    const match = url.match(/^\/wake\/([^/?]+)/);
-    if (!match || req.method !== 'POST') {
+    const wakeOut = url.match(/^\/wake\/([^/?]+)/);
+    const wakeIn = url.match(/^\/wake-inbound\/([^/?]+)/);
+    if ((!wakeOut && !wakeIn) || req.method !== 'POST') {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
       return;
     }
 
-    const sessionId = match[1];
+    // wake-inbound: spawn/wake container so it picks up a newly-inserted
+    // inbound row. Used by `ncf inject` since it bypasses the router.
+    if (wakeIn) {
+      const sessionId = wakeIn[1];
+      req.on('data', () => {});
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"ok":true}');
+        void (async () => {
+          const session = getSession(sessionId);
+          if (!session) {
+            log.debug('wake-inbound for unknown session', { sessionId });
+            return;
+          }
+          try {
+            await wakeContainer(session);
+          } catch (err) {
+            log.warn('wake-inbound error', { sessionId, err });
+          }
+        })();
+      });
+      return;
+    }
+
+    const sessionId = wakeOut![1];
     // Drain request body (we don't need it, but Node won't close the
     // socket cleanly until 'end' fires).
     req.on('data', () => {});
