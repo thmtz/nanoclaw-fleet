@@ -74,18 +74,8 @@ export interface ChannelDeliveryAdapter {
     messageId: string,
     emoji: string,
   ): Promise<void>;
-  pinMessage?(
-    channelType: string,
-    platformId: string,
-    threadId: string | null,
-    messageId: string,
-  ): Promise<void>;
-  unpinMessage?(
-    channelType: string,
-    platformId: string,
-    threadId: string | null,
-    messageId: string,
-  ): Promise<void>;
+  pinMessage?(channelType: string, platformId: string, threadId: string | null, messageId: string): Promise<void>;
+  unpinMessage?(channelType: string, platformId: string, threadId: string | null, messageId: string): Promise<void>;
   editMessage?(
     channelType: string,
     platformId: string,
@@ -277,6 +267,7 @@ async function deliverMessage(
     channel_type: string | null;
     thread_id: string | null;
     content: string;
+    in_reply_to: string | null;
   },
   session: Session,
   inDb: Database.Database,
@@ -399,7 +390,9 @@ async function deliverMessage(
     files,
   );
   log.info('Message delivered', {
-    id: msg.id,
+    traceId: msg.in_reply_to,
+    outId: msg.id,
+    sessionId: session.id,
     channelType: msg.channel_type,
     platformId: msg.platform_id,
     platformMsgId,

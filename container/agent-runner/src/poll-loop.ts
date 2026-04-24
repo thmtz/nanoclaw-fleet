@@ -147,7 +147,9 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // provider natively handles slash commands), others get XML.
     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
 
-    log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
+    log(
+      `Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}, traceIds: ${keep.map((m) => m.id).join(',')}`,
+    );
 
     const query = config.provider.query({
       prompt,
@@ -275,8 +277,15 @@ async function processQuery(
     }
   }, ACTIVE_POLL_INTERVAL_MS);
 
+  const traceId = initialBatchIds.join(',');
+  const tStart = Date.now();
+  let firstEventAt: number | null = null;
   try {
     for await (const event of query.events) {
+      if (firstEventAt === null) {
+        firstEventAt = Date.now();
+        log(`[traceId=${traceId}] First SDK event after ${firstEventAt - tStart}ms`);
+      }
       handleEvent(event, routing);
       touchHeartbeat();
 
@@ -297,6 +306,7 @@ async function processQuery(
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
+        log(`[traceId=${traceId}] Result event after ${Date.now() - tStart}ms`);
         if (event.text) {
           dispatchResultText(event.text, routing);
         }

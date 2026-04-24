@@ -143,6 +143,23 @@ function safeParseContent(raw: string): { text?: string; sender?: string; sender
  * Creates messaging group + session if they don't exist yet.
  */
 export async function routeInbound(event: InboundEvent): Promise<void> {
+  // Trace id for the turn — message id is already unique per-platform and
+  // carried through into messages_in, so using it as the trace id means
+  // `grep <msgId>` across host + container logs reconstructs the full
+  // timeline (inbound → wake → container pickup → SDK events → outbound
+  // insert → host delivery → Discord post).
+  const traceId = event.message.id ?? 'no-id';
+  const t0 = Date.now();
+  log.info('Inbound received', {
+    traceId,
+    channelType: event.channelType,
+    platformId: event.platformId,
+    threadId: event.threadId,
+    kind: event.message.kind,
+    isMention: event.message.isMention,
+    t0,
+  });
+
   // 0. Apply the adapter's thread policy. Non-threaded adapters (Telegram,
   //    WhatsApp, iMessage, email) collapse threads to the channel.
   const adapter = getChannelAdapter(event.channelType);
@@ -450,6 +467,7 @@ async function deliverToAgent(
   }
 
   log.info('Message routed', {
+    traceId: event.message.id,
     sessionId: session.id,
     agentGroup: agent.agent_group_id,
     engage_mode: agent.engage_mode,
@@ -461,6 +479,11 @@ async function deliverToAgent(
   });
 
   if (wake) {
+    log.info('Waking container', {
+      traceId: event.message.id,
+      sessionId: session.id,
+      agentGroup: agent.agent_group_id,
+    });
     // Typing indicator + wake are only for the engaged branch; accumulated
     // messages sit silently until a real trigger fires.
     startTypingRefresh(session.id, session.agent_group_id, event.channelType, event.platformId, event.threadId);

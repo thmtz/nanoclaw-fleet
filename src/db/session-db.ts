@@ -236,12 +236,15 @@ export interface OutboundMessage {
   channel_type: string | null;
   thread_id: string | null;
   content: string;
+  in_reply_to: string | null;
+  timestamp: string;
 }
 
 export function getDueOutboundMessages(db: Database.Database): OutboundMessage[] {
   return db
     .prepare(
-      `SELECT * FROM messages_out
+      `SELECT id, kind, platform_id, channel_type, thread_id, content, in_reply_to, timestamp
+       FROM messages_out
        WHERE (deliver_after IS NULL OR deliver_after <= datetime('now'))
        ORDER BY timestamp ASC`,
     )
