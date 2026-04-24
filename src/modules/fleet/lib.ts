@@ -9,6 +9,7 @@ import path from 'path';
 import { GROUPS_DIR } from '../../config.js';
 import { getSession } from '../../db/sessions.js';
 import { wakeContainer } from '../../container-runner.js';
+import { readEnvFile } from '../../env.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { Session } from '../../types.js';
@@ -85,4 +86,65 @@ export function setFleetBackend(folder: string, backend: string, model?: string)
   cfg.providers = providers;
   cfg.provider = backend;
   writeContainerConfig(folder, cfg);
+  // Sync to the NW shim's per-folder routing config (if configured). v2's
+  // neuralwatt provider sets ANTHROPIC_BASE_URL=.../w/<folder> so the shim
+  // looks the folder up in worker-backends.json to decide whether to route
+  // to Anthropic or Neuralwatt. Without an entry the shim defaults to
+  // "anthropic" and the worker dies in an API retry loop. Keep the two
+  // configs in sync so newly-created workers work out of the box.
+  syncShimBackendConfig(folder, backend, model);
+}
+
+/**
+ * Update (or insert) the per-folder entry in the v1 nanoclaw-fleet shim's
+ * worker-backends.json.
+ *
+ * Opt-in via `NW_SHIM_CONFIG_PATH` in `.env` or the host environment.
+ * Opt-in (not auto-detect) so (a) tests can't silently pollute a user's
+ * real shim config by existing on disk and (b) installs that don't use
+ * the v1 shim at all get a no-op. The host sets this via setup; .env
+ * carries it into host restarts.
+ *
+ * When the env is missing we log once per process at the first skipped
+ * write so the user knows workers on `neuralwatt` won't work until the
+ * path is configured.
+ */
+let shimSyncWarned = false;
+function syncShimBackendConfig(folder: string, backend: string, model?: string): void {
+  // Prefer process.env so tests + shell overrides win; fall back to .env
+  // so host restarts pick up the configured path without manual shell
+  // exports.
+  const envFile = readEnvFile(['NW_SHIM_CONFIG_PATH']);
+  const configPath = process.env.NW_SHIM_CONFIG_PATH ?? envFile.NW_SHIM_CONFIG_PATH;
+  if (!configPath) {
+    if (backend === 'neuralwatt' && !shimSyncWarned) {
+      shimSyncWarned = true;
+      log.warn(
+        'NW_SHIM_CONFIG_PATH not set — workers on neuralwatt will fall through to credential-proxy and fail. ' +
+          'Set it to your v1 shim\'s data/worker-backends.json path.',
+      );
+    }
+    return;
+  }
+  const parent = path.dirname(configPath);
+  if (!fs.existsSync(parent)) {
+    log.warn('NW_SHIM_CONFIG_PATH parent dir missing; skipping sync', { configPath });
+    return;
+  }
+  let config: Record<string, { backend: string; model?: string }> = {};
+  if (fs.existsSync(configPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch (err) {
+      log.warn('shim worker-backends.json parse failed; overwriting', { err: String(err) });
+      config = {};
+    }
+  }
+  config[folder] = model ? { backend, model } : { backend };
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    log.info('Shim backend config synced', { configPath, folder, backend, model });
+  } catch (err) {
+    log.warn('shim worker-backends.json write failed', { configPath, err: String(err) });
+  }
 }
