@@ -129,6 +129,51 @@ async function postMessage(channelId: string, token: string, content: string): P
   return ((await res.json()) as { id: string }).id;
 }
 
+async function deleteChannel(channelId: string, token: string): Promise<void> {
+  const res = await discord('DELETE', `/channels/${channelId}`, token);
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`delete channel failed ${res.status}: ${await res.text()}`);
+  }
+}
+
+/**
+ * Reap orphan Discord channels created by prior test runs that aborted
+ * before their own cleanup path. Lists the guild's fleet category and
+ * deletes any worker-* channels not referenced by a live messaging_groups
+ * row. Runs at the top of each test so stale channels don't pile up across
+ * runs, and keeps the guild UI scannable.
+ */
+async function reapOrphanWorkerChannels(guildId: string, categoryId: string, token: string): Promise<void> {
+  const res = await discord('GET', `/guilds/${guildId}/channels`, token);
+  if (!res.ok) return;
+  const channels = (await res.json()) as Array<{ id: string; name?: string; parent_id?: string }>;
+  const db = centralDb();
+  let live: Set<string>;
+  try {
+    live = new Set(
+      (
+        db
+          .prepare(`SELECT platform_id FROM messaging_groups WHERE channel_type = 'discord'`)
+          .all() as { platform_id: string }[]
+      ).map((r) => r.platform_id.split(':').pop() as string),
+    );
+  } finally {
+    db.close();
+  }
+  const stale = channels.filter(
+    (c) => c.parent_id === categoryId && (c.name?.startsWith('worker-') ?? false) && !live.has(c.id),
+  );
+  if (stale.length === 0) return;
+  console.log(`  reaping ${stale.length} orphan worker channels`);
+  for (const c of stale) {
+    try {
+      await deleteChannel(c.id, token);
+    } catch (err) {
+      console.warn(`  ! channel ${c.id} delete failed: ${(err as Error).message}`);
+    }
+  }
+}
+
 async function getMessagesAfter(
   channelId: string,
   token: string,
@@ -272,9 +317,15 @@ async function main(): Promise<void> {
   console.log(`  master:   ${masterChannel}`);
   console.log(`  backends: claude → ${SKIP_SWITCH ? 'skip switch' : 'neuralwatt kimi-k2.6'}`);
 
-  console.log('\n[0] purge master backlog (abandon any residual pending commands)');
+  console.log('\n[0] purge master backlog + reap orphan worker channels');
   purgeMasterBacklog();
-  console.log('  ✓ master backlog cleared');
+  const guildId = readEnvFile(['DISCORD_GUILD_ID']).DISCORD_GUILD_ID ?? process.env.DISCORD_GUILD_ID;
+  const categoryId =
+    readEnvFile(['DISCORD_FLEET_CATEGORY_ID']).DISCORD_FLEET_CATEGORY_ID ?? process.env.DISCORD_FLEET_CATEGORY_ID;
+  if (guildId && categoryId) {
+    await reapOrphanWorkerChannels(guildId, categoryId, botToken);
+  }
+  console.log('  ✓ clean start');
 
   // ── 1. create worker with instructions containing a marker ──
   console.log(`\n[1] master: create worker with instructions (marker=${MARKER})`);
