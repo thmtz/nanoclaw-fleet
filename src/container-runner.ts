@@ -339,6 +339,14 @@ function buildMounts(
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
   mounts.push({ hostPath: agentRunnerSrc, containerPath: '/app/src', readonly: true });
 
+  // Worker init script — clones profile repos + runs tool installs before
+  // agent-runner starts. Master has no fleetProfile so it's a no-op there,
+  // but mounting uniformly keeps the base image honest.
+  const workerInitSrc = path.join(projectRoot, 'container', 'worker-init.sh');
+  if (fs.existsSync(workerInitSrc)) {
+    mounts.push({ hostPath: workerInitSrc, containerPath: '/app/worker-init.sh', readonly: true });
+  }
+
   // Shared skills — read-only, symlinks in .claude-shared/skills/ point here.
   const skillsSrc = path.join(projectRoot, 'container', 'skills');
   if (fs.existsSync(skillsSrc)) {
@@ -582,7 +590,18 @@ async function buildContainerArgs(
   const imageTag = containerConfig.imageTag || CONTAINER_IMAGE;
   args.push(imageTag);
 
-  args.push('-c', 'exec bun run /app/src/index.ts');
+  // Worker-init runs on fleet workers only — the master container has no
+  // fleetProfile (it orchestrates, doesn't clone repos). worker-init.sh
+  // is mounted read-only into /app from container/agent-runner — see
+  // the RO mount for /app/src, which already covers the parent. Added
+  // explicitly here as a sibling RO mount so a base-image refresh
+  // doesn't require rebuild cycles.
+  const isWorker = agentGroup.fleet_role === 'worker';
+  if (isWorker) {
+    args.push('-c', 'bash /app/worker-init.sh; exec bun run /app/src/index.ts');
+  } else {
+    args.push('-c', 'exec bun run /app/src/index.ts');
+  }
 
   return args;
 }

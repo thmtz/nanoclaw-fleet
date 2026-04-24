@@ -26,9 +26,11 @@ import {
   normalizeName as normalizeDestName,
 } from '../agent-to-agent/db/agent-destinations.js';
 import { writeDestinations } from '../agent-to-agent/write-destinations.js';
+import { readContainerConfig, writeContainerConfig } from '../../container-config.js';
 import { logWorkerEvent } from './events.js';
 import { generateId, normalizeName, notifyAgent, setFleetBackend } from './lib.js';
 import { provisionDiscordChannel } from './provision.js';
+import { applyProfileToContainerConfig, loadWorkerProfile } from './worker-profile.js';
 
 const DEFAULT_BACKEND = 'claude';
 
@@ -140,6 +142,27 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
   createAgentGroup(newGroup);
   initGroupFilesystem(newGroup, { instructions: instructions ?? undefined });
   setFleetBackend(localName, backend, model);
+
+  // Apply the user's worker profile (repos / tools / mounts / skills) to
+  // the new worker's container.json so the next container boot runs
+  // worker-init.sh with the right payload. When no profile is configured
+  // this is a no-op; the worker simply boots with an empty workspace.
+  const profile = loadWorkerProfile();
+  const hasProfileContent =
+    (profile.repos && profile.repos.length > 0) ||
+    (profile.tools && profile.tools.length > 0) ||
+    (profile.mounts && profile.mounts.length > 0);
+  if (hasProfileContent) {
+    const cfg = readContainerConfig(localName);
+    const withProfile = applyProfileToContainerConfig(cfg, profile);
+    writeContainerConfig(localName, withProfile);
+    log.info('Worker profile applied', {
+      localName,
+      repos: profile.repos?.length ?? 0,
+      tools: profile.tools?.length ?? 0,
+      mounts: profile.mounts?.length ?? 0,
+    });
+  }
 
   const provision = await provisionDiscordChannel(agentGroupId, localName, name, now);
   wireBidirectionalDestinations(sourceGroup, agentGroupId, localName, now);

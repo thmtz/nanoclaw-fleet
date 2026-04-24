@@ -54,6 +54,25 @@ export interface ContainerConfig {
    * Shape is open-ended (each provider owns its keys), so we type it loosely.
    */
   providers?: Record<string, Record<string, unknown>>;
+
+  /**
+   * Fleet worker profile — repos, tools, mounts, skills_repo, init_script
+   * carried through from the host's worker-profile loader. Read by the
+   * container-side /app/worker-init.sh at boot. Only populated on workers
+   * whose creation picked up a user profile.
+   */
+  fleetProfile?: {
+    name?: string;
+    description?: string;
+    env?: Record<string, string>;
+    repos?: Array<{ url: string; postClone?: string }>;
+    tools?: string[];
+    mounts?: Array<{ hostPath: string; containerPath: string; readonly?: boolean }>;
+    ports?: string[];
+    skills_repo?: string;
+    init_script?: string;
+    claude_md?: string;
+  };
 }
 
 function emptyConfig(): ContainerConfig {
@@ -95,6 +114,7 @@ export function readContainerConfig(folder: string): ContainerConfig {
       agentGroupId: raw.agentGroupId,
       maxMessagesPerPrompt: raw.maxMessagesPerPrompt,
       providers: raw.providers,
+      fleetProfile: raw.fleetProfile,
     };
   } catch (err) {
     console.error(`[container-config] failed to parse ${p}: ${String(err)}`);

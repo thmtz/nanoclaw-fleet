@@ -260,18 +260,26 @@ export function validateMount(mount: AdditionalMount): MountValidationResult {
     };
   }
 
-  // Check against blocked patterns
-  const blockedMatch = matchesBlockedPattern(realPath, allowlist.blockedPatterns);
-  if (blockedMatch !== null) {
-    return {
-      allowed: false,
-      reason: `Path matches blocked pattern "${blockedMatch}": "${realPath}"`,
-    };
-  }
-
-  // Check if under an allowed root
+  // Check if under an allowed root. User-maintained allowedRoots is the
+  // security boundary; an explicit entry there means the user has opted
+  // in knowing what the path is. Check it FIRST so the default blocklist
+  // (which blocks .ssh by default) doesn't veto intentional mounts —
+  // v1 fleet relied on mounting ~/.ssh for git clones against private
+  // repos, and the v2 default blocklist made that impossible even when
+  // the user explicitly allowlisted the path.
   const allowedRoot = findAllowedRoot(realPath, allowlist.allowedRoots);
   if (allowedRoot === null) {
+    // Still apply the blocklist for paths not in the allowlist — it's
+    // the safety net for bugs that accidentally propose a sensitive
+    // path. With no allow, the blocklist reason is the more specific
+    // failure mode.
+    const blockedMatch = matchesBlockedPattern(realPath, allowlist.blockedPatterns);
+    if (blockedMatch !== null) {
+      return {
+        allowed: false,
+        reason: `Path matches blocked pattern "${blockedMatch}": "${realPath}"`,
+      };
+    }
     return {
       allowed: false,
       reason: `Path "${realPath}" is not under any allowed root. Allowed roots: ${allowlist.allowedRoots
