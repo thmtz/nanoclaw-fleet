@@ -46,15 +46,33 @@ ported + verified (unit test, live Discord run, or both).
 | Seq-race retry on inbound insert                | done     | UNIQUE(seq) loop retries up to 32 times (db/session-db.ts insertMessage) |
 | Chat SDK double-delivery dedupe                 | done     | UNIQUE on messages_in.id absorbed by routeInbound as no-op |
 
+| Worker profiles (repos / tools / mounts / skills_repo) | done | `src/modules/fleet/worker-profile.ts` loads `~/.config/nanoclaw/worker-profiles/default.json`; `applyProfileToContainerConfig` merges into new worker's container.json; `container/worker-init.sh` runs on every worker boot to clone repos, link skills, install tools (c5472cf). GitHub token propagation via `NANOCLAW_GITHUB_TOKEN_PATH` (.env → literal token in container env) for HTTPS clone rewrite (4902959). |
+| Base image: openssh-client + uv | done | Needed for SSH clones and `uv tool install` in profiles (8d7723c). Run `./container/build.sh` or `ncf rebuild` to pick up. |
+| Personal instructions layering (global/master/worker.md) | done | `src/claude-md-compose.ts` inlines `~/.config/nanoclaw/instructions/{global,master,worker}.md` as composed CLAUDE.md fragments at every spawn. Role-gated (master.md for masters, worker.md for workers, global.md for both). (8d7723c) |
+| Mount allowlist SSH override | done | Allowlist wins over default blocklist when user explicitly allowlists `~/.ssh` etc. (c5472cf) |
+| Worker MCP tools: get_backend, get_usage, get_models | done | `container/agent-runner/src/mcp-tools/introspect.ts` — worker can answer "what am I / how much have I used / which models exist?" questions without shelling out. (current) |
+| Shim config auto-sync | done | create_worker / switch_backend now write per-folder entries to the shim's `worker-backends.json` when `NW_SHIM_CONFIG_PATH` is configured. Previously new neuralwatt workers failed in an API retry loop because the shim defaulted to anthropic. (8740879) |
+| Outbound routing cross-channel fix | done | Replies use session_routing (host-authoritative, current per wake) instead of stale batch-local routing captured at query start. Fixed master-silent-on-Discord after prior CLI inject. (2d566c2) |
+| Test-side real Discord leak | done | fleet.test.ts hard-mocks discord-channel.js so `pnpm test` never hits real Discord REST. (d6e0750) |
+
 ## Open (not yet ported)
 
 All high-value v1 features are ported or covered by substitute v2 models.
-One narrow gap remains:
+Two narrow gaps remain:
 
 - Per-user deny within an otherwise-allowed chat. Both v1 and v2 have
   chat-wide deny and unknown-sender controls; neither previously made
   this specific case easy. See [SENDER-ACCESS.md](SENDER-ACCESS.md) for
-  the documented workaround. Filed for the day it's actually needed.
+  the documented workaround.
+- Personal `~/.config/nanoclaw/Dockerfile` overlay for the base image.
+  v2's `install_packages` MCP tool covers most practical cases (runtime
+  apt/npm additions per worker); a user-global Dockerfile layer would
+  be a nice-to-have for build-time-only customization.
+- Energy tracking (`data/worker-usage.json`, shim SSE `: energy {...}`
+  parse). The shim is v1-owned; v2 workers currently can see their own
+  turn latency + tokens via `get_usage` but not the kWh / joules
+  attribution. If/when this matters, extend the shim to write a
+  host-side usage file and have v2 read it for the status pin.
 
 ## How to verify
 
