@@ -69,9 +69,23 @@ export interface AgentQuery {
   abort(): void;
 }
 
+/**
+ * Usage metadata for a single turn. All fields are best-effort — providers
+ * populate what they can from their SDK's final message. Missing fields
+ * are simply undefined.
+ */
+export interface TurnUsage {
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
+  cache_creation_tokens?: number;
+  stop_reason?: string;
+}
+
 export type ProviderEvent =
   | { type: 'init'; continuation: string }
-  | { type: 'result'; text: string | null }
+  | { type: 'result'; text: string | null; usage?: TurnUsage }
   | { type: 'error'; message: string; retryable: boolean; classification?: string }
   | { type: 'progress'; message: string }
   /**

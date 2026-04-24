@@ -293,6 +293,10 @@ export class ClaudeProvider implements AgentProvider {
 
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
+      // Track the most recent assistant message's stop_reason + model so
+      // the result event can report them alongside aggregate usage.
+      let lastStopReason: string | undefined;
+      let lastModel: string | undefined;
       for await (const message of sdkResult) {
         if (aborted) return;
         messageCount++;
@@ -302,9 +306,41 @@ export class ClaudeProvider implements AgentProvider {
 
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', continuation: message.session_id };
+        } else if (message.type === 'assistant') {
+          // Claude Code SDK wraps the raw Anthropic API message in
+          // message.message; usage + stop_reason live there.
+          const inner = (message as { message?: { stop_reason?: string; model?: string } }).message;
+          if (inner?.stop_reason) lastStopReason = inner.stop_reason;
+          if (inner?.model) lastModel = inner.model;
         } else if (message.type === 'result') {
           const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
-          yield { type: 'result', text };
+          // Aggregate token usage from the SDK's result summary (the SDK
+          // sums per-turn usage across an entire query).
+          const rawUsage = (
+            message as {
+              usage?: {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+                cache_creation_input_tokens?: number;
+              };
+            }
+          ).usage;
+          const usage = rawUsage
+            ? {
+                model: lastModel,
+                input_tokens: (rawUsage.input_tokens ?? 0) +
+                  (rawUsage.cache_read_input_tokens ?? 0) +
+                  (rawUsage.cache_creation_input_tokens ?? 0),
+                output_tokens: rawUsage.output_tokens ?? 0,
+                cached_tokens: rawUsage.cache_read_input_tokens ?? 0,
+                cache_creation_tokens: rawUsage.cache_creation_input_tokens ?? 0,
+                stop_reason: lastStopReason,
+              }
+            : lastStopReason || lastModel
+              ? { model: lastModel, stop_reason: lastStopReason }
+              : undefined;
+          yield { type: 'result', text, usage };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'rate_limit_event') {
@@ -312,7 +348,7 @@ export class ClaudeProvider implements AgentProvider {
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
           const meta = (message as { compact_metadata?: { pre_tokens?: number } }).compact_metadata;
           const detail = meta?.pre_tokens ? ` (${meta.pre_tokens.toLocaleString()} tokens compacted)` : '';
-          yield { type: 'result', text: `Context compacted${detail}.` };
+          yield { type: 'result', text: `Context compacted${detail}.`, usage: undefined };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
           const tn = message as { summary?: string };
           yield { type: 'progress', message: tn.summary || 'Task notification' };

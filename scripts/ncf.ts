@@ -43,6 +43,7 @@ Usage:
   ncf reap-orphans [--dry-run]
   ncf history [name] [--since <iso>] [--limit N] [--event <kind>] [--json]
   ncf turns <name> [--limit N] [--slow <ms>]
+  ncf rebuild
 `;
 
 function centralDbPath(): string {
@@ -663,6 +664,18 @@ async function cmdHistory(args: string[]): Promise<void> {
   if (events.length === 0) console.log('(no events)');
 }
 
+function cmdRebuild(_args: string[]): void {
+  // Thin wrapper around container/build.sh. Agents don't need to remember
+  // the repo layout — just `ncf rebuild` from anywhere under the project.
+  const buildScript = path.resolve(process.cwd(), 'container', 'build.sh');
+  if (!fs.existsSync(buildScript)) {
+    console.error(`container/build.sh missing at ${buildScript}`);
+    process.exit(1);
+  }
+  const child = spawn('bash', [buildScript], { stdio: 'inherit' });
+  child.on('exit', (code) => process.exit(code ?? 0));
+}
+
 function cmdTurns(args: string[]): void {
   const name = args[0];
   if (!name) {
@@ -706,8 +719,16 @@ function cmdTurns(args: string[]): void {
   }
   entries = entries.slice(-limit);
   for (const e of entries) {
-    const fe = e.first_event_ms ? `first=${e.first_event_ms}ms ` : '';
-    console.log(`[${e.ts}] ${e.backend}${e.model ? `/${e.model}` : ''}  ${fe}total=${e.total_ms}ms  out=${e.result_text_length}ch  trace=${e.traceId}`);
+    const fe = e.first_event_ms != null ? `first=${e.first_event_ms}ms ` : '';
+    const toks =
+      e.input_tokens != null || e.output_tokens != null
+        ? ` in=${e.input_tokens ?? '?'} out_tok=${e.output_tokens ?? '?'}` +
+          (e.cached_tokens ? ` cached=${e.cached_tokens}` : '')
+        : '';
+    const stop = e.stop_reason ? ` stop=${e.stop_reason}` : '';
+    console.log(
+      `[${e.ts}] ${e.backend}${e.model ? `/${e.model}` : ''}  ${fe}total=${e.total_ms}ms  out=${e.result_text_length}ch${toks}${stop}  trace=${e.traceId}`,
+    );
   }
   if (entries.length === 0) console.log('(no matching turns)');
 }
@@ -750,6 +771,8 @@ function main(): void {
       return;
     case 'turns':
       return cmdTurns(rest);
+    case 'rebuild':
+      return cmdRebuild(rest);
     case '-h':
     case '--help':
     case 'help':

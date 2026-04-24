@@ -309,18 +309,19 @@ async function processQuery(
         markCompleted(initialBatchIds);
         const totalMs = Date.now() - tStart;
         log(`[traceId=${traceId}] Result event after ${totalMs}ms`);
+        const usage = event.usage;
         logTurn({
           ts: new Date().toISOString(),
           traceId,
           backend: process.env.NANOCLAW_PROVIDER ?? process.env.AGENT_PROVIDER ?? 'unknown',
-          model: process.env.ANTHROPIC_MODEL,
+          model: usage?.model ?? process.env.ANTHROPIC_MODEL,
           first_event_ms: firstEventAt !== null ? firstEventAt - tStart : null,
           total_ms: totalMs,
           result_text_length: event.text ? event.text.length : 0,
-          input_tokens: null,
-          output_tokens: null,
-          cached_tokens: null,
-          stop_reason: null,
+          input_tokens: usage?.input_tokens ?? null,
+          output_tokens: usage?.output_tokens ?? null,
+          cached_tokens: usage?.cached_tokens ?? null,
+          stop_reason: usage?.stop_reason ?? null,
         });
         if (event.text) {
           dispatchResultText(event.text, routing);
