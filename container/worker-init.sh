@@ -68,8 +68,11 @@ fi
 # URLs are rewritten to HTTPS if NANOCLAW_GITHUB_TOKEN_PATH is set.
 REPO_COUNT=$(bun -e "const p=$PROFILE_JSON; process.stdout.write(String((p.repos??[]).length));" 2>/dev/null || echo "0")
 if [ "$REPO_COUNT" -gt 0 ] 2>/dev/null; then
-  GITHUB_TOKEN=""
-  if [ -n "$NANOCLAW_GITHUB_TOKEN_PATH" ] && [ -f "$NANOCLAW_GITHUB_TOKEN_PATH" ]; then
+  # Accept both forms: NANOCLAW_GITHUB_TOKEN (literal, preferred —
+  # container-runner reads the file host-side and passes the value) or
+  # NANOCLAW_GITHUB_TOKEN_PATH (file inside the container).
+  GITHUB_TOKEN="${NANOCLAW_GITHUB_TOKEN:-}"
+  if [ -z "$GITHUB_TOKEN" ] && [ -n "$NANOCLAW_GITHUB_TOKEN_PATH" ] && [ -f "$NANOCLAW_GITHUB_TOKEN_PATH" ]; then
     GITHUB_TOKEN=$(cat "$NANOCLAW_GITHUB_TOKEN_PATH")
   fi
 

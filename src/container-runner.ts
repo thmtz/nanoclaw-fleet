@@ -493,6 +493,25 @@ async function buildContainerArgs(
   // logging attribution.
   args.push('-e', `NANOCLAW_PROVIDER=${provider}`);
 
+  // GitHub token for worker-init.sh HTTPS clone rewrite. Read the file
+  // at spawn time and pass the literal token as env — avoids mounting
+  // the host's .config/github directory and keeps the token out of any
+  // surface that gets persisted in container images or logs. Set
+  // NANOCLAW_GITHUB_TOKEN_PATH in .env to enable; absent is fine.
+  const ghEnv = readEnvFile(['NANOCLAW_GITHUB_TOKEN_PATH']);
+  const ghPath = ghEnv.NANOCLAW_GITHUB_TOKEN_PATH;
+  if (ghPath) {
+    try {
+      const resolved = ghPath.startsWith('~/') ? path.join(process.env.HOME ?? '', ghPath.slice(2)) : ghPath;
+      if (fs.existsSync(resolved)) {
+        const token = fs.readFileSync(resolved, 'utf-8').trim();
+        if (token) args.push('-e', `NANOCLAW_GITHUB_TOKEN=${token}`);
+      }
+    } catch (err) {
+      log.warn('Could not read NANOCLAW_GITHUB_TOKEN_PATH', { ghPath, err: String(err) });
+    }
+  }
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
