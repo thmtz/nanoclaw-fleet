@@ -26,7 +26,7 @@ ported + verified (unit test, live Discord run, or both).
 | ncf debug                                       | done     | Paths, agent groups, docker state, shim + wake health |
 | ncf reap-orphans                                | done     | Deletes Discord channels named worker-*/lc-* whose id isn't in messaging_groups |
 | ncf history                                     | done     | Reads `logs/worker-events.jsonl` emitted by create / resume / switch / destroy handlers |
-| ncf rebuild                                     | gap      | v1 rebuilt the container image. v2 has `scripts/` but no ncf command yet. Workaround: `./container/build.sh` |
+| (row merged below — see "ncf rebuild" near turns.jsonl) | done | |
 | Trace IDs (host → container → SDK → outbound)   | done     | inbound msg id becomes the traceId; host + container both log it on critical-path events (see e697f16) |
 | Event-driven outbound delivery                  | done     | Container POSTs `http://host.docker.internal:3100/wake/<sess>` after each writeMessageOut. Saves ~500ms–1s per turn (9a37f69). Host 1s poll stays on as fallback |
 | Reaction throbber on incoming msg               | done     | `src/modules/throbber/`. fs.watchFile on `.heartbeat` → emoji cycles per Claude SDK event; freezes when inference hangs |
@@ -35,8 +35,9 @@ ported + verified (unit test, live Discord run, or both).
 | smoke test (single command)                     | done     | `scripts/smoke.sh`: ncf health + inject --wait + pinned-status check + Discord lifecycle |
 | Discord-driven lifecycle E2E                    | done     | `scripts/test-fleet-lifecycle.ts` (465 lines) — 8 steps, codeword marker, reaps orphans at start |
 | Debug bot allowlist (DISCORD_ALLOWED_BOT_IDS)   | done     | Patch to `@chat-adapter/discord` (patches/). Debug bot posts real Discord messages during smoke |
-| Sender allowlist (user-level access control)    | gap      | v1 had `src/sender-allowlist.ts`. v2 uses unknown_sender_policy + user_roles; close but not a direct port. Not required for parity. |
-| Per-worker usage audit (latency / text length)  | done (partial) | Container writes per-turn JSON to `data/v2-sessions/<ag>/<sess>/turns.jsonl`. `ncf turns <name> [--limit N] [--slow <ms>]` reads it. Token / stop_reason fields null until ProviderEvent result type surfaces usage (see open list) |
+| Sender allowlist (user-level access control)    | done (mapping) | v2 covers every v1 allowlist case via unknown_sender_policy + sender_scope + messaging_groups.denied_at + user_roles. Exception: per-user ban within an otherwise-allowed chat — no direct equivalent; workaround documented. See [SENDER-ACCESS.md](SENDER-ACCESS.md) |
+| Per-worker usage audit (tokens / latency / stop) | done    | Container writes per-turn JSON to `data/v2-sessions/<ag>/<sess>/turns.jsonl`. `ncf turns <name> [--limit N] [--slow <ms>]` reads it. Tokens + stop_reason populate from SDK usage (7ac5ea7) |
+| `ncf rebuild`                                    | done    | Wraps `container/build.sh` (7ac5ea7) |
 | Model discovery / fuzzy match                   | done (docs) | Shim at nanoclaw-fleet/ already exposes `/models` + `/models/resolve/<q>`. Master CLAUDE.md documents the curl pattern (f4298bd) |
 | Streaming SSE (Anthropic ↔ OpenAI)              | done     | Same v1 shim handles both. Nothing for v2 to port |
 | Master auto-destroy guard                       | done     | Master CLAUDE.local.md "Discipline" section forbids unsolicited destroy (4ddfb43) |
@@ -47,9 +48,13 @@ ported + verified (unit test, live Discord run, or both).
 
 ## Open (not yet ported)
 
-- `ncf rebuild` — thin wrapper over `container/build.sh`, worth 10 lines if asked.
-- turns.jsonl token/stop_reason fields — needs `ProviderEvent.result` shape extended to carry `usage` + `stop_reason`, then both Claude and Neuralwatt provider impls populate. Without this the status pin can't show per-worker token counts.
-- Sender allowlist — v1 had a user-level deny mode. v2 relies on unknown_sender_policy + user_roles which covers most cases but isn't identical.
+All high-value v1 features are ported or covered by substitute v2 models.
+One narrow gap remains:
+
+- Per-user deny within an otherwise-allowed chat. Both v1 and v2 have
+  chat-wide deny and unknown-sender controls; neither previously made
+  this specific case easy. See [SENDER-ACCESS.md](SENDER-ACCESS.md) for
+  the documented workaround. Filed for the day it's actually needed.
 
 ## How to verify
 
