@@ -15,6 +15,7 @@ import { getSessionsByAgentGroup } from '../../db/sessions.js';
 import { killContainer } from '../../container-runner.js';
 import { log } from '../../log.js';
 import type { Session } from '../../types.js';
+import { logWorkerEvent } from './events.js';
 import { normalizeName, notifyAgent, setFleetBackend } from './lib.js';
 
 export async function handleSwitchBackend(content: Record<string, unknown>, session: Session): Promise<void> {
@@ -60,4 +61,11 @@ export async function handleSwitchBackend(content: Record<string, unknown>, sess
     `Worker "${localName}" switched to ${backend}${model ? ` (${model})` : ''}. Container will use the new provider on next message.`,
   );
   log.info('Worker backend switched', { agentGroupId: target.id, localName, backend, model });
+  logWorkerEvent({
+    timestamp: new Date().toISOString(),
+    event: 'backend_switched',
+    worker: localName,
+    folder: target.folder,
+    details: { agentGroupId: target.id, backend, model: model ?? null, fleet_role: target.fleet_role },
+  });
 }

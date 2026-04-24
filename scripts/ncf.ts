@@ -41,6 +41,7 @@ Usage:
   ncf restart <name> [--fresh]
   ncf debug
   ncf reap-orphans [--dry-run]
+  ncf history [name] [--since <iso>] [--limit N] [--event <kind>] [--json]
 `;
 
 function centralDbPath(): string {
@@ -631,6 +632,36 @@ function cmdReapOrphans(args: string[]): void {
   });
 }
 
+async function cmdHistory(args: string[]): Promise<void> {
+  const { readWorkerEvents } = await import('../src/modules/fleet/events.js');
+  const worker = args[0]?.startsWith('--') ? undefined : args[0];
+  let since: string | undefined;
+  let limit: number | undefined;
+  let event: string | undefined;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--since') since = args[++i];
+    else if (args[i] === '--limit') limit = parseInt(args[++i], 10);
+    else if (args[i] === '--event') event = args[++i];
+    else if (args[i] === '--json') json = true;
+  }
+  const events = readWorkerEvents({
+    worker,
+    since,
+    limit,
+    event: event as 'created' | 'destroyed' | 'backend_switched' | 'resumed' | undefined,
+  });
+  if (json) {
+    console.log(JSON.stringify(events, null, 2));
+    return;
+  }
+  for (const e of events) {
+    const details = e.details ? ' ' + JSON.stringify(e.details) : '';
+    console.log(`[${e.timestamp}] ${e.event}  ${e.worker}${details}`);
+  }
+  if (events.length === 0) console.log('(no events)');
+}
+
 // ── Entry ────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -664,6 +695,9 @@ function main(): void {
       return cmdDebug();
     case 'reap-orphans':
       return cmdReapOrphans(rest);
+    case 'history':
+      void cmdHistory(rest);
+      return;
     case '-h':
     case '--help':
     case 'help':

@@ -26,6 +26,7 @@ import {
   normalizeName as normalizeDestName,
 } from '../agent-to-agent/db/agent-destinations.js';
 import { writeDestinations } from '../agent-to-agent/write-destinations.js';
+import { logWorkerEvent } from './events.js';
 import { generateId, normalizeName, notifyAgent, setFleetBackend } from './lib.js';
 import { provisionDiscordChannel } from './provision.js';
 
@@ -159,6 +160,13 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
     messagingGroupId: provision.messagingGroupId,
     parent: sourceGroup.id,
   });
+  logWorkerEvent({
+    timestamp: new Date().toISOString(),
+    event: 'created',
+    worker: localName,
+    folder: localName,
+    details: { agentGroupId, backend, model: model ?? null, parent: sourceGroup.folder },
+  });
 }
 
 async function resumeWorker(
@@ -216,4 +224,11 @@ async function resumeWorker(
     `Worker "${localName}" resumed from archive on ${backend}${model ? ` (${model})` : ''}. ${channelStatus}. Prior sessions and workspace preserved.`,
   );
   log.info('Worker resumed', { agentGroupId: existing.id, localName, backend, model });
+  logWorkerEvent({
+    timestamp: new Date().toISOString(),
+    event: 'resumed',
+    worker: localName,
+    folder: existing.folder,
+    details: { agentGroupId: existing.id, backend, model: model ?? null },
+  });
 }

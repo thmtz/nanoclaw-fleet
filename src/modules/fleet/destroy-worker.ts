@@ -20,6 +20,7 @@ import { log } from '../../log.js';
 import type { Session } from '../../types.js';
 import { deleteDestination, getDestinationByTarget } from '../agent-to-agent/db/agent-destinations.js';
 import { deleteDiscordChannel, loadDiscordFleetConfig } from './discord-channel.js';
+import { logWorkerEvent } from './events.js';
 import { normalizeName, notifyAgent } from './lib.js';
 
 export async function handleDestroyWorker(content: Record<string, unknown>, session: Session): Promise<void> {
@@ -98,4 +99,11 @@ export async function handleDestroyWorker(content: Record<string, unknown>, sess
     `Worker "${localName}" destroyed. ${channelStatus}. Workspace and session history preserved; create_worker with the same name resumes.`,
   );
   log.info('Worker destroyed', { agentGroupId: target.id, localName, channelStatus });
+  logWorkerEvent({
+    timestamp: new Date().toISOString(),
+    event: 'destroyed',
+    worker: localName,
+    folder: target.folder,
+    details: { agentGroupId: target.id, channelStatus, deleteChannel },
+  });
 }
