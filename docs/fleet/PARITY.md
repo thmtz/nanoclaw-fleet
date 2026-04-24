@@ -36,7 +36,7 @@ ported + verified (unit test, live Discord run, or both).
 | Discord-driven lifecycle E2E                    | done     | `scripts/test-fleet-lifecycle.ts` (465 lines) — 8 steps, codeword marker, reaps orphans at start |
 | Debug bot allowlist (DISCORD_ALLOWED_BOT_IDS)   | done     | Patch to `@chat-adapter/discord` (patches/). Debug bot posts real Discord messages during smoke |
 | Sender allowlist (user-level access control)    | gap      | v1 had `src/sender-allowlist.ts`. v2 uses unknown_sender_policy + user_roles; close but not a direct port. Not required for parity. |
-| Per-worker usage audit (tokens / Wh / latency)  | gap      | v1 wrote `logs/workers/<f>/turns.jsonl` per API call. Container side needs emitter; host needs reader. Not blocking; status pin works without it |
+| Per-worker usage audit (latency / text length)  | done (partial) | Container writes per-turn JSON to `data/v2-sessions/<ag>/<sess>/turns.jsonl`. `ncf turns <name> [--limit N] [--slow <ms>]` reads it. Token / stop_reason fields null until ProviderEvent result type surfaces usage (see open list) |
 | Model discovery / fuzzy match                   | done (docs) | Shim at nanoclaw-fleet/ already exposes `/models` + `/models/resolve/<q>`. Master CLAUDE.md documents the curl pattern (f4298bd) |
 | Streaming SSE (Anthropic ↔ OpenAI)              | done     | Same v1 shim handles both. Nothing for v2 to port |
 | Master auto-destroy guard                       | done     | Master CLAUDE.local.md "Discipline" section forbids unsolicited destroy (4ddfb43) |
@@ -48,7 +48,8 @@ ported + verified (unit test, live Discord run, or both).
 ## Open (not yet ported)
 
 - `ncf rebuild` — thin wrapper over `container/build.sh`, worth 10 lines if asked.
-- Per-worker turns.jsonl audit — would unlock token / energy / latency on the pinned status. Container-side emitter + host-side reader.
+- turns.jsonl token/stop_reason fields — needs `ProviderEvent.result` shape extended to carry `usage` + `stop_reason`, then both Claude and Neuralwatt provider impls populate. Without this the status pin can't show per-worker token counts.
+- Sender allowlist — v1 had a user-level deny mode. v2 relies on unknown_sender_policy + user_roles which covers most cases but isn't identical.
 
 ## How to verify
 
