@@ -147,6 +147,26 @@ async function main(): Promise<void> {
       const adapter = getChannelAdapter(channelType);
       await adapter?.setTyping?.(platformId, threadId);
     },
+    async addReaction(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      messageId: string,
+      emoji: string,
+    ): Promise<void> {
+      const adapter = getChannelAdapter(channelType);
+      await adapter?.addReaction?.(platformId, threadId, messageId, emoji);
+    },
+    async removeReaction(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      messageId: string,
+      emoji: string,
+    ): Promise<void> {
+      const adapter = getChannelAdapter(channelType);
+      await adapter?.removeReaction?.(platformId, threadId, messageId, emoji);
+    },
   };
   setDeliveryAdapter(deliveryAdapter);
 

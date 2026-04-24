@@ -137,6 +137,17 @@ export interface ChannelAdapter {
   syncConversations?(): Promise<ConversationInfo[]>;
 
   /**
+   * Add a reaction emoji to a platform message. Used by the throbber module
+   * to react on the user's incoming message while the agent is working.
+   *
+   * Platforms without reactions omit this; callers treat absence as a no-op.
+   */
+  addReaction?(platformId: string, threadId: string | null, messageId: string, emoji: string): Promise<void>;
+
+  /** Remove a bot-added reaction emoji from a platform message. */
+  removeReaction?(platformId: string, threadId: string | null, messageId: string, emoji: string): Promise<void>;
+
+  /**
    * Subscribe the bot to a thread so follow-up messages route via the
    * platform's "subscribed message" path (onSubscribedMessage in Chat SDK).
    * Called by the router when a mention-sticky wiring first engages in a

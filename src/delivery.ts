@@ -24,6 +24,7 @@ import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
 import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
+import { setThrobberAdapter, stopThrobber } from './modules/throbber/index.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { Session } from './types.js';
 
@@ -59,6 +60,20 @@ export interface ChannelDeliveryAdapter {
     files?: OutboundFile[],
   ): Promise<string | undefined>;
   setTyping?(channelType: string, platformId: string, threadId: string | null): Promise<void>;
+  addReaction?(
+    channelType: string,
+    platformId: string,
+    threadId: string | null,
+    messageId: string,
+    emoji: string,
+  ): Promise<void>;
+  removeReaction?(
+    channelType: string,
+    platformId: string,
+    threadId: string | null,
+    messageId: string,
+    emoji: string,
+  ): Promise<void>;
 }
 
 let deliveryAdapter: ChannelDeliveryAdapter | null = null;
@@ -97,6 +112,8 @@ export function setDeliveryAdapter(adapter: ChannelDeliveryAdapter): void {
   // Forward to the typing module so it can fire setTyping on its own
   // interval. Direct call, not a registry — typing is a default module.
   setTypingAdapter(adapter);
+  // Same binding for the throbber module (reactions).
+  setThrobberAdapter(adapter);
   for (const cb of adapterReadyCallbacks) {
     void Promise.resolve()
       .then(() => cb(adapter))
@@ -201,6 +218,8 @@ async function drainSession(session: Session): Promise<void> {
         // shouldn't get a gap in their typing indicator for them.
         if (msg.kind !== 'system' && msg.channel_type !== 'agent') {
           pauseTypingRefreshAfterDelivery(session.id);
+          // Clear the throbber — the user can now see the agent's reply.
+          stopThrobber(session.id);
         }
       } catch (err) {
         const attempts = (deliveryAttempts.get(msg.id) ?? 0) + 1;

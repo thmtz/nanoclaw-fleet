@@ -28,6 +28,7 @@ import {
 } from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh } from './modules/typing/index.js';
+import { startThrobber } from './modules/throbber/index.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
@@ -463,6 +464,16 @@ async function deliverToAgent(
     // Typing indicator + wake are only for the engaged branch; accumulated
     // messages sit silently until a real trigger fires.
     startTypingRefresh(session.id, session.agent_group_id, event.channelType, event.platformId, event.threadId);
+    if (event.message.id) {
+      startThrobber(
+        session.id,
+        session.agent_group_id,
+        event.channelType,
+        event.platformId,
+        event.threadId,
+        event.message.id,
+      );
+    }
     const freshSession = getSession(session.id);
     if (freshSession) {
       await wakeContainer(freshSession);
