@@ -120,13 +120,26 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
   for (const name of [...desired.keys()].sort()) {
     imports.push(`@./.claude-fragments/${name}`);
   }
-  const body = [COMPOSED_HEADER, ...imports, ''].join('\n');
-  writeAtomic(path.join(groupDir, 'CLAUDE.md'), body);
 
+  // Explicitly @import CLAUDE.local.md when it has content. Claude Code
+  // auto-memory is supposed to pick up CLAUDE.local.md at cwd, but in
+  // practice the first-turn cached system prompt built from CLAUDE.md
+  // imports only — fresh sessions never see per-group local memory.
+  // Explicit @import forces it into the system prompt cache from turn 1.
   const localFile = path.join(groupDir, 'CLAUDE.local.md');
   if (!fs.existsSync(localFile)) {
     fs.writeFileSync(localFile, '');
+  } else {
+    try {
+      const content = fs.readFileSync(localFile, 'utf-8').trim();
+      if (content.length > 0) imports.push('@./CLAUDE.local.md');
+    } catch {
+      // ignore — empty is fine, no import needed
+    }
   }
+
+  const body = [COMPOSED_HEADER, ...imports, ''].join('\n');
+  writeAtomic(path.join(groupDir, 'CLAUDE.md'), body);
 }
 
 /**

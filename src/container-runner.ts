@@ -5,6 +5,7 @@
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
@@ -47,6 +48,32 @@ import {
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+
+/**
+ * Read a live OAuth access token from `~/.claude/.credentials.json`. That
+ * file is maintained by Claude Code itself — it handles the refreshToken
+ * rotation, so reading on each container spawn always gives us a valid
+ * token without a manual .env update every hour. Returns `undefined` when
+ * the file is absent or malformed so callers can fall through to .env.
+ */
+function readLiveClaudeOauthToken(): string | undefined {
+  const p = path.join(os.homedir(), '.claude', '.credentials.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(p, 'utf-8')) as {
+      claudeAiOauth?: { accessToken?: string; expiresAt?: number };
+    };
+    const t = data.claudeAiOauth?.accessToken;
+    const exp = data.claudeAiOauth?.expiresAt;
+    if (!t) return undefined;
+    // Skip if already expired — caller falls back to .env (or we log and
+    // let the SDK return a clearer auth error). 60s safety window so we
+    // don't hand out a token about to die mid-request.
+    if (exp && exp < Date.now() + 60_000) return undefined;
+    return t;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
@@ -484,7 +511,14 @@ async function buildContainerArgs(
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
     ]);
-    const preferOauth = !!fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    // Prefer a live OAuth token from ~/.claude/.credentials.json over the
+    // static one in .env. Claude Code keeps the credentials file refreshed
+    // via its refreshToken flow, so reading live on every spawn gives us
+    // always-fresh auth without a manual .env swap every hour. Falls back
+    // to .env's CLAUDE_CODE_OAUTH_TOKEN if the credentials file is absent.
+    const liveOauth = readLiveClaudeOauthToken();
+    const oauth = liveOauth ?? fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    const preferOauth = !!oauth;
     for (const key of [
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_AUTH_TOKEN',
@@ -492,10 +526,18 @@ async function buildContainerArgs(
       'ANTHROPIC_BASE_URL',
     ] as const) {
       if (preferOauth && key === 'ANTHROPIC_API_KEY') continue;
+      if (key === 'CLAUDE_CODE_OAUTH_TOKEN') {
+        if (oauth) args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauth}`);
+        continue;
+      }
       const val = fallbackEnv[key] ?? process.env[key];
       if (val) args.push('-e', `${key}=${val}`);
     }
-    log.info('Env credential fallback applied', { containerName, preferOauth });
+    log.info('Env credential fallback applied', {
+      containerName,
+      preferOauth,
+      oauthSource: liveOauth ? 'credentials.json' : fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN ? '.env' : 'none',
+    });
   }
 
   // Host gateway
