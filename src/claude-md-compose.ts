@@ -129,6 +129,43 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
     }
   }
 
+  // include_files — v1 fleet reads ~/.config/nanoclaw/config.json
+  // `include_files: [...]` and inlines each referenced file into
+  // systemPrompt.append. Inlining here gives the same
+  // compaction-safe behaviour: every spawn re-reads the files, but
+  // survives SDK context compaction because it's part of the composed
+  // CLAUDE.md. Paths support ~/ expansion.
+  const personalConfigPath = path.join(os.homedir(), '.config', 'nanoclaw', 'config.json');
+  if (fs.existsSync(personalConfigPath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(personalConfigPath, 'utf-8')) as { include_files?: string[] };
+      const files = raw.include_files ?? [];
+      for (let i = 0; i < files.length; i++) {
+        const spec = files[i];
+        if (!spec) continue;
+        const expanded = spec.startsWith('~/') ? path.join(os.homedir(), spec.slice(2)) : spec;
+        if (!fs.existsSync(expanded)) {
+          log.warn('include_files entry missing — skipping', { path: expanded });
+          continue;
+        }
+        try {
+          const content = fs.readFileSync(expanded, 'utf-8');
+          if (content.trim().length === 0) continue;
+          // Prefix with the source path so the agent knows what it's looking at.
+          const header = `# Included from ${spec}\n\n`;
+          desired.set(`include-${i}-${path.basename(expanded)}.md`, {
+            type: 'inline',
+            content: header + content,
+          });
+        } catch (err) {
+          log.warn('include_files read failed', { path: expanded, err: String(err) });
+        }
+      }
+    } catch (err) {
+      log.warn('personal config.json parse failed', { err: String(err) });
+    }
+  }
+
   // Reconcile: drop stale, write desired.
   for (const existing of fs.readdirSync(fragmentsDir)) {
     if (!desired.has(existing)) {
