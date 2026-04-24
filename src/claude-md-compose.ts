@@ -15,6 +15,7 @@
  * See `docs/claude-md-composition.md` for the full design.
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
@@ -97,6 +98,34 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
         type: 'inline',
         content: mcp.instructions,
       });
+    }
+  }
+
+  // Personal instructions — layered from ~/.config/nanoclaw/instructions/.
+  // v1 fleet assembled CLAUDE.md from four fragments:
+  //   global.md  → every agent (worker + master)
+  //   master.md  → master role only
+  //   worker.md  → worker role only
+  // Per-role files load on top of global.md. Inlined so the composed
+  // CLAUDE.md is self-contained at container spawn time (no extra mount
+  // needed — the file exists host-side only).
+  const personalDir = path.join(os.homedir(), '.config', 'nanoclaw', 'instructions');
+  if (fs.existsSync(personalDir)) {
+    const role = group.fleet_role === 'master' ? 'master' : group.fleet_role === 'worker' ? 'worker' : null;
+    for (const [name, filename] of [
+      ['personal-global', 'global.md'],
+      role ? [`personal-${role}`, `${role}.md`] : null,
+    ].filter((x): x is [string, string] => x !== null)) {
+      const p = path.join(personalDir, filename);
+      if (!fs.existsSync(p)) continue;
+      try {
+        const content = fs.readFileSync(p, 'utf-8');
+        if (content.trim().length > 0) {
+          desired.set(`${name}.md`, { type: 'inline', content });
+        }
+      } catch (err) {
+        log.warn('personal instruction read failed', { path: p, err: String(err) });
+      }
     }
   }
 

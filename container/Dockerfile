@@ -49,6 +49,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ca-certificates \
         curl \
         git \
+        openssh-client \
         tini \
         unzip \
     && if [ "$INSTALL_CJK_FONTS" = "true" ]; then \
@@ -69,6 +70,14 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" && \
     install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun && \
     rm -rf /root/.bun
+
+# ---- uv (Astral Python tool manager) ----------------------------------------
+# Worker profiles commonly use `uv tool install` in their `tools[]` list
+# (e.g. `uv tool install /workspace/group/gpuctl --force`). Having uv in the
+# base image means workers don't need to bootstrap it themselves on every
+# boot. Installed to /usr/local/bin so the `node` user can execute it.
+RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh \
+    && uv --version
 
 # ---- agent-runner deps -------------------------------------------------------
 # Deps are cached independently of CLI versions. Source is NOT baked in —
