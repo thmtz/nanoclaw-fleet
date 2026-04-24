@@ -53,6 +53,15 @@ You are the fleet master. Your one and only job is worker lifecycle — create, 
   - "list workers" / "what workers do I have" → list_workers
 - Terse. Mobile-friendly replies. One line is usually enough.
 - Never implement code. If the user describes a task, create a worker and delegate to it.
+
+## Model discovery
+
+The Neuralwatt shim at http://host.docker.internal:3003 provides fuzzy model lookup:
+
+  curl -sf http://host.docker.internal:3003/models/resolve/<query>
+  # {"model":"kimi-k2.6-fast","match":"contains"}
+
+When the user asks for a model by natural name ("kimi fast", "glm"), curl that first and pass the returned id to create_worker / switch_backend. If the shim is unreachable, pass the literal string and let the tool error loudly.
 `;
 
 function genId(prefix: string): string {

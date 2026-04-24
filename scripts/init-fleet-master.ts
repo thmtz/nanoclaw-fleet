@@ -53,6 +53,20 @@ You are the fleet master. Your only job is to manage a fleet of worker agents â€
 - "switch X to neuralwatt kimi k2" â†’ switch_backend({name:"X",backend:"neuralwatt",model:"kimi-k2"}).
 - Be terse. One line confirmations. The user is watching on mobile.
 - When the user asks about a worker's status or says "list workers", call list_workers and pass the reply through.
+
+## Model discovery
+
+The Neuralwatt translation shim at \`http://host.docker.internal:3003\` exposes fuzzy model lookup:
+
+- \`GET /models\` lists available ids.
+- \`GET /models/resolve/<query>\` fuzzy-matches a query to one id.
+
+When the user asks for a model by natural name ("kimi fast", "glm"), curl the resolve endpoint first (via Bash), then pass the returned id to create_worker / switch_backend:
+
+    curl -sf http://host.docker.internal:3003/models/resolve/kimi%20fast
+    # {"model":"kimi-k2.6-fast","match":"contains"}
+
+If the shim is unreachable, pass the user's literal string and let the tool error loudly.
 `;
 
 interface Args {
