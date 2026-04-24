@@ -85,9 +85,7 @@ export async function handleDestroyWorker(content: Record<string, unknown>, sess
       // null out messaging_group_id before dropping the mg. The session
       // still binds to its agent_group_id, and the next create_worker's
       // channel-provision step writes a fresh mg + rebinds.
-      getDb()
-        .prepare('UPDATE sessions SET messaging_group_id = NULL WHERE messaging_group_id = ?')
-        .run(mg.id);
+      getDb().prepare('UPDATE sessions SET messaging_group_id = NULL WHERE messaging_group_id = ?').run(mg.id);
       deleteMessagingGroup(mg.id);
     }
     channelStatus = mgs.length > 0 ? `${mgs.length} channel(s) deleted` : 'no channels were wired';

@@ -121,7 +121,7 @@ function syncShimBackendConfig(folder: string, backend: string, model?: string):
       shimSyncWarned = true;
       log.warn(
         'NW_SHIM_CONFIG_PATH not set — workers on neuralwatt will fall through to credential-proxy and fail. ' +
-          'Set it to your v1 shim\'s data/worker-backends.json path.',
+          "Set it to your v1 shim's data/worker-backends.json path.",
       );
     }
     return;
