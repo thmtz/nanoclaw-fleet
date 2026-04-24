@@ -2,6 +2,7 @@ import { findByName, getAllDestinations, type DestinationEntry } from './destina
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
+import { logTurn } from './audit-log.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
 import { formatMessages, extractRouting, categorizeMessage, isClearCommand, stripInternalTags, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
@@ -306,7 +307,21 @@ async function processQuery(
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
-        log(`[traceId=${traceId}] Result event after ${Date.now() - tStart}ms`);
+        const totalMs = Date.now() - tStart;
+        log(`[traceId=${traceId}] Result event after ${totalMs}ms`);
+        logTurn({
+          ts: new Date().toISOString(),
+          traceId,
+          backend: process.env.NANOCLAW_PROVIDER ?? process.env.AGENT_PROVIDER ?? 'unknown',
+          model: process.env.ANTHROPIC_MODEL,
+          first_event_ms: firstEventAt !== null ? firstEventAt - tStart : null,
+          total_ms: totalMs,
+          result_text_length: event.text ? event.text.length : 0,
+          input_tokens: null,
+          output_tokens: null,
+          cached_tokens: null,
+          stop_reason: null,
+        });
         if (event.text) {
           dispatchResultText(event.text, routing);
         }

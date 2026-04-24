@@ -479,6 +479,12 @@ async function buildContainerArgs(
   const wakePort = parseInt(process.env.OUTBOUND_WAKE_PORT || '3100', 10);
   args.push('-e', `NANOCLAW_WAKE_URL=http://host.docker.internal:${wakePort}/wake/${sessionId}`);
 
+  // Expose the resolved provider name to the container so the turn audit
+  // log can stamp each entry's `backend` field. The SDK itself uses
+  // ANTHROPIC_BASE_URL / ANTHROPIC_MODEL already; this is purely for
+  // logging attribution.
+  args.push('-e', `NANOCLAW_PROVIDER=${provider}`);
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {

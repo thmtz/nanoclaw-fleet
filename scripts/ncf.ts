@@ -42,6 +42,7 @@ Usage:
   ncf debug
   ncf reap-orphans [--dry-run]
   ncf history [name] [--since <iso>] [--limit N] [--event <kind>] [--json]
+  ncf turns <name> [--limit N] [--slow <ms>]
 `;
 
 function centralDbPath(): string {
@@ -662,6 +663,55 @@ async function cmdHistory(args: string[]): Promise<void> {
   if (events.length === 0) console.log('(no events)');
 }
 
+function cmdTurns(args: string[]): void {
+  const name = args[0];
+  if (!name) {
+    console.error('usage: ncf turns <name> [--limit N] [--slow <ms>]');
+    process.exit(1);
+  }
+  let limit = 20;
+  let slowMs: number | null = null;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--limit') limit = parseInt(args[++i], 10);
+    else if (args[i] === '--slow') slowMs = parseInt(args[++i], 10);
+  }
+
+  const worker = findAgentByName(name);
+  if (!worker) {
+    console.error(`unknown worker: ${name}`);
+    process.exit(1);
+  }
+  const sessions = listSessions(worker.id);
+  if (sessions.length === 0) {
+    console.error(`no sessions for ${worker.folder}`);
+    process.exit(1);
+  }
+  const sess = sessions[0];
+  const turnsFile = path.join(DATA_DIR, 'v2-sessions', sess.agent_group_id, sess.id, 'turns.jsonl');
+  if (!fs.existsSync(turnsFile)) {
+    console.log(`(no turns yet at ${turnsFile})`);
+    return;
+  }
+  const lines = fs.readFileSync(turnsFile, 'utf-8').trim().split('\n').filter(Boolean);
+  let entries: Array<Record<string, unknown>> = [];
+  for (const ln of lines) {
+    try {
+      entries.push(JSON.parse(ln));
+    } catch {
+      // ignore bad lines
+    }
+  }
+  if (slowMs !== null) {
+    entries = entries.filter((e) => (e.total_ms as number) >= slowMs!);
+  }
+  entries = entries.slice(-limit);
+  for (const e of entries) {
+    const fe = e.first_event_ms ? `first=${e.first_event_ms}ms ` : '';
+    console.log(`[${e.ts}] ${e.backend}${e.model ? `/${e.model}` : ''}  ${fe}total=${e.total_ms}ms  out=${e.result_text_length}ch  trace=${e.traceId}`);
+  }
+  if (entries.length === 0) console.log('(no matching turns)');
+}
+
 // ── Entry ────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -698,6 +748,8 @@ function main(): void {
     case 'history':
       void cmdHistory(rest);
       return;
+    case 'turns':
+      return cmdTurns(rest);
     case '-h':
     case '--help':
     case 'help':
