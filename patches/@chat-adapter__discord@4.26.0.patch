@@ -1,8 +1,79 @@
 diff --git a/dist/index.js b/dist/index.js
-index 8b490cf67e4d4dcec82404a27ef364f440c617b6..92b516710ac65062f89a9a55511bcf1494e96a66 100644
+index 8b490cf67e4d4dcec82404a27ef364f440c617b6..d3cb4bfdf104261f11287a6d554c6bc186349725 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1659,12 +1659,22 @@ var DiscordAdapter = class _DiscordAdapter {
+@@ -1499,6 +1499,12 @@ var DiscordAdapter = class _DiscordAdapter {
+    * Make a request to the Discord API.
+    */
+   async discordFetch(path, method, body) {
++    // PATCH (fleet): respect Discord's 429 retry_after internally so the
++    // request doesn't bubble up to the host delivery loop as a generic
++    // NetworkError. Without this, host retries the whole message delivery
++    // on the NEXT sweep tick, each retry hitting a fresh rate-limit
++    // window — observed "Hey Joey" posted 5x in one run (one per retry
++    // between 429s). Bounded to 5 waits + 20s total.
+     const url = `${DISCORD_API_BASE}${path}`;
+     const headers = {
+       Authorization: `Bot ${this.botToken}`
+@@ -1506,25 +1512,41 @@ var DiscordAdapter = class _DiscordAdapter {
+     if (body) {
+       headers["Content-Type"] = "application/json";
+     }
+-    const response = await fetch(url, {
+-      method,
+-      headers,
+-      body: body ? JSON.stringify(body) : void 0
+-    });
+-    if (!response.ok) {
+-      const errorText = await response.text();
+-      this.logger.error("Discord API error", {
+-        path,
++    let totalWait = 0;
++    for (let attempt = 0; attempt < 6; attempt++) {
++      const response = await fetch(url, {
+         method,
+-        status: response.status,
+-        error: errorText
++        headers,
++        body: body ? JSON.stringify(body) : void 0
+       });
+-      throw new NetworkError(
+-        "discord",
+-        `Discord API error: ${response.status} ${errorText}`
+-      );
++      if (response.status !== 429) {
++        if (!response.ok) {
++          const errorText = await response.text();
++          this.logger.error("Discord API error", {
++            path,
++            method,
++            status: response.status,
++            error: errorText
++          });
++          throw new NetworkError(
++            "discord",
++            `Discord API error: ${response.status} ${errorText}`
++          );
++        }
++        return response;
++      }
++      const body429 = await response.text();
++      let retryAfterSec = 1.0;
++      try { retryAfterSec = JSON.parse(body429).retry_after ?? 1.0; } catch {}
++      const waitMs = Math.max(500, Math.round(retryAfterSec * 1000) + 200);
++      totalWait += waitMs;
++      if (totalWait > 20000) {
++        throw new NetworkError("discord", `Discord rate limited past 20s: ${body429}`);
++      }
++      this.logger.warn("Discord 429 — waiting retry_after before retry", { path, waitMs, attempt });
++      await new Promise((r) => setTimeout(r, waitMs));
+     }
+-    return response;
++    throw new NetworkError("discord", "Discord rate limited past 6 attempts");
+   }
+   /**
+    * Start Gateway WebSocket listener for receiving messages/mentions.
+@@ -1659,12 +1681,22 @@ var DiscordAdapter = class _DiscordAdapter {
          return;
        }
        if (message.author.bot) {
