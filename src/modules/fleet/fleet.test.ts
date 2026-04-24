@@ -38,6 +38,18 @@ vi.mock('../../session-manager.js', async () => {
   return { ...actual, writeSessionMessage: vi.fn() };
 });
 
+// HARD-MOCK Discord channel provisioning. The prior "env is missing
+// DISCORD_*" mechanism failed the moment the repo's .env (where
+// DISCORD_BOT_TOKEN lives for local dev) sat next to the test run —
+// loadDiscordFleetConfig calls readEnvFile('.env') and happily returned
+// real creds, so tests were creating real channels (alpha/beta/.../eta)
+// in the user's guild every time `pnpm test` ran. Hard-mocking removes
+// the leak entirely.
+vi.mock('./discord-channel.js', () => ({
+  loadDiscordFleetConfig: () => null,
+  createDiscordChannel: vi.fn(),
+  deleteDiscordChannel: vi.fn(),
+}));
 vi.mock('../agent-to-agent/write-destinations.js', () => ({
   writeDestinations: vi.fn(),
 }));
