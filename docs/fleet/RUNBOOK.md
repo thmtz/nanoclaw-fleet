@@ -136,8 +136,10 @@ scripts/
   init-fleet-master.ts           — seed via CLI (for devbox testing)
   ncf.ts + bin/ncf               — admin CLI
   test-fleet-e2e.ts              — host-only E2E
-  test-fleet-live.ts             — live E2E through real containers
-  test-fleet-discord-rest.ts     — Discord REST integration
+  test-fleet-live.ts             — live E2E through real containers (CLI channel)
+  test-fleet-discord-rest.ts     — Discord REST integration (channel CRUD)
+  test-fleet-discord-inbound.ts  — Discord → master via debug bot, one prompt
+  test-fleet-discord-full.ts     — Discord → master → worker lifecycle end-to-end
 ```
 
 ## Troubleshooting
@@ -146,7 +148,11 @@ scripts/
 |-|-|
 | Master doesn't reply in Discord | Check `tail -f /tmp/fleet-v2.log` and confirm `Discord Gateway connected`. Make sure the bot is invited to the guild and can see the channel. |
 | "OneCLI gateway not applied" | Expected if you skipped OneCLI. Confirm env-credential fallback followed with `Env credential fallback applied`. If not, check `.env` has `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. |
+| "Credit balance is too low" from Claude | Host shell has an `ANTHROPIC_API_KEY` from another project (common: `~/.zshrc` exports one from opencode / aider / etc.). Claude Agent SDK prefers `ANTHROPIC_API_KEY` over `CLAUDE_CODE_OAUTH_TOKEN` when both are set, so an exhausted key from elsewhere takes over your Max subscription. Launch the host with `env -u ANTHROPIC_API_KEY pnpm run dev` — the container-runner also refuses to forward `ANTHROPIC_API_KEY` when `.env` has `CLAUDE_CODE_OAUTH_TOKEN` (preferOauth path), so the fix is permanent once `.env` is set. |
 | `create_worker` fails with "only the master agent can create workers" | The calling session's agent_group doesn't have `fleet_role='master'`. Re-run the seed script. |
 | Worker container spawned but no reply | `ncf logs <name> --follow`. Common: bad token, unreachable shim on neuralwatt backend. |
 | `list_workers` reply never comes | `list_workers_request` writes to master inbound; if master container is idle the sweep picks it up within 60s. Send another message to nudge it. |
 | Stale archived workers accumulating | Safe — they cost a row + a folder. Future `ncf purge` command could clean them; not built yet. |
+| Container crash-loop / memory spike | `wakeContainer` refuses respawn within 5s of the last exit (`MIN_RESPAWN_INTERVAL_MS` in `container-runner.ts`). If you see a runaway spawn storm anyway, the session's `messages_in` has accumulated an unprocessable pending row (e.g. malformed content). Inspect with `sqlite3 data/v2-sessions/<ag>/<sess>/inbound.db 'SELECT id, status, tries FROM messages_in WHERE status != "completed"'`; a `DELETE` of the offender plus a fresh wake clears it. |
+| `UNIQUE constraint failed: messages_in.seq` | Retry-loop in `insertMessage` absorbs up to 32 collisions — comes from the shared `nextEvenSeq()` SELECT-then-INSERT race when multiple writers hit the same inbound.db. If you see this more than occasionally, a single deterministic duplicate is making it past Chat SDK's in-process dedupe — file a bug with the full trace. |
+| `UNIQUE constraint failed: messages_in.id` | Silently absorbed by `routeInbound` — comes from Chat SDK's Discord adapter forwarding MESSAGE_CREATE twice (legacy gateway + webhook paths in same-process mode). |
