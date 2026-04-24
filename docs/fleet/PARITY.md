@@ -47,6 +47,13 @@ ported + verified (unit test, live Discord run, or both).
 | Chat SDK double-delivery dedupe                 | done     | UNIQUE on messages_in.id absorbed by routeInbound as no-op |
 
 | Worker profiles (repos / tools / mounts / skills_repo) | done | `src/modules/fleet/worker-profile.ts` loads `~/.config/nanoclaw/worker-profiles/default.json`; `applyProfileToContainerConfig` merges into new worker's container.json; `container/worker-init.sh` runs on every worker boot to clone repos, link skills, install tools (c5472cf). GitHub token propagation via `NANOCLAW_GITHUB_TOKEN_PATH` (.env → literal token in container env) for HTTPS clone rewrite (4902959). |
+| `include_files` in `~/.config/nanoclaw/config.json` | done | CLAUDE.md compose inlines each listed file per spawn; survives SDK compaction. (4305682) |
+| Personal Dockerfile overlay | done | `container/build.sh` stacks `~/.config/nanoclaw/Dockerfile` on top of base via `--build-arg BASE=<slug>:base`. Single deterministic image tag either way. (aecee20) |
+| Energy tracking (read-through) | done | Opt-in via `NW_SHIM_USAGE_PATH`. Status pin shows per-worker `req · tok · kWh` + fleet total. `get_usage` MCP tool merges shim's `/usage/<folder>` energy data with local turn latency. (e1a16cd) |
+| `master-profiles/` reference template | done | Shipped under `examples/master-profiles/` + `examples/worker-profiles/`. Personal instructions layering (8d7723c) loads user's `~/.config/nanoclaw/instructions/master.md`. |
+| resumeSessionAt / streaming input | done (structural) | v2 always uses streaming input (MessageStream async iterable) for `sdkQuery`; resume uses `resume: continuation` by session id. The specific `resumeSessionAt` UUID anchor is not needed because v2's agent-to-agent module routes whole messages rather than spawning SDK subagent teams (the shape that triggered the v1 bug). |
+| IDLE_TIMEOUT != CONTAINER_TIMEOUT | done | v2's `host-sweep.ts` uses a single `ABSOLUTE_CEILING_MS = 30min` heartbeat-age check. The legacy `IDLE_TIMEOUT` / `CONTAINER_TIMEOUT` constants in `config.ts` are unused — no double-timer race possible. |
+| Lifecycle cleanup robustness | done | Cleanup marks any master inbound row mentioning this run's worker name/marker as completed so a rate-limit-deferred "create <name>" instruction can't revive hours later when the user sends an unrelated message. (9873420) |
 | Base image: openssh-client + uv | done | Needed for SSH clones and `uv tool install` in profiles (8d7723c). Run `./container/build.sh` or `ncf rebuild` to pick up. |
 | Personal instructions layering (global/master/worker.md) | done | `src/claude-md-compose.ts` inlines `~/.config/nanoclaw/instructions/{global,master,worker}.md` as composed CLAUDE.md fragments at every spawn. Role-gated (master.md for masters, worker.md for workers, global.md for both). (8d7723c) |
 | Mount allowlist SSH override | done | Allowlist wins over default blocklist when user explicitly allowlists `~/.ssh` etc. (c5472cf) |
@@ -57,22 +64,14 @@ ported + verified (unit test, live Discord run, or both).
 
 ## Open (not yet ported)
 
-All high-value v1 features are ported or covered by substitute v2 models.
-Two narrow gaps remain:
+All features from the v1 fork's docs (SPEC.md + architecture + guides +
+DEBUG_CHECKLIST + reference/cli.md) are ported or covered by a v2
+equivalent. One narrow behavioural gap remains:
 
 - Per-user deny within an otherwise-allowed chat. Both v1 and v2 have
   chat-wide deny and unknown-sender controls; neither previously made
   this specific case easy. See [SENDER-ACCESS.md](SENDER-ACCESS.md) for
   the documented workaround.
-- Personal `~/.config/nanoclaw/Dockerfile` overlay for the base image.
-  v2's `install_packages` MCP tool covers most practical cases (runtime
-  apt/npm additions per worker); a user-global Dockerfile layer would
-  be a nice-to-have for build-time-only customization.
-- Energy tracking (`data/worker-usage.json`, shim SSE `: energy {...}`
-  parse). The shim is v1-owned; v2 workers currently can see their own
-  turn latency + tokens via `get_usage` but not the kWh / joules
-  attribution. If/when this matters, extend the shim to write a
-  host-side usage file and have v2 read it for the status pin.
 
 ## How to verify
 
