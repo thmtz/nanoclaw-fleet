@@ -1,11 +1,18 @@
 /**
  * Throbber module — cycles a reaction emoji on the user's incoming
- * message while the agent is working, so the user sees the agent is
- * alive and processing even before the first outbound text lands.
+ * message each time the container writes a heartbeat.
  *
- * Mirrors the typing module pattern: per-session state, heartbeat-gated
- * refresh, adapter binding on startup, cleared when a user-facing
- * message is delivered.
+ * The heartbeat file's mtime is bumped by the container on every SDK
+ * event (see container/agent-runner/src/poll-loop.ts `touchHeartbeat()`),
+ * which means every inference API response. The throbber is a direct
+ * visual of that signal: emoji cycles each time the API responds. If
+ * inference hangs, the emoji stops changing and the user can see the
+ * agent is wedged — even if nothing is posted to Discord yet.
+ *
+ * No wall-clock timer drives the cycle. Host watches the heartbeat file
+ * with fs.watchFile (500ms poll granularity) and cycles on mtime change.
+ *
+ * Cleared when the first non-system user-facing message delivers.
  */
 import fs from 'fs';
 
@@ -13,20 +20,14 @@ import { heartbeatPath } from '../../session-manager.js';
 import { log } from '../../log.js';
 
 const THROBBER_EMOJIS = ['🔵', '🟦', '🔷'];
-const THROBBER_CYCLE_MS = 2000;
 /**
- * Grace window from startThrobber: react unconditionally for this long
- * regardless of heartbeat state. Covers container spawn/wake latency
- * (5–12s cold start before the first heartbeat).
+ * fs.watchFile poll granularity — stat every ~400ms. Coarser than the
+ * default 5s (way too slow for a visible throbber), finer-grained than
+ * needed for correctness. Heartbeats land faster than this in practice
+ * during active work, so each poll tick will see at most one apparent
+ * bump per window and we cycle exactly once per window.
  */
-const THROBBER_GRACE_MS = 15000;
-/**
- * After the grace window, a heartbeat must be mtimed within this many
- * ms of now to keep cycling. Heartbeats land every few hundred ms
- * during active work, so 6s is well above the working floor and small
- * enough to stop the throbber quickly when the agent goes idle.
- */
-const HEARTBEAT_FRESH_MS = 6000;
+const WATCH_INTERVAL_MS = 400;
 
 interface ReactionAdapter {
   addReaction?(
@@ -47,14 +48,16 @@ interface ReactionAdapter {
 
 interface ThrobberTarget {
   agentGroupId: string;
+  sessionId: string;
   channelType: string;
   platformId: string;
   threadId: string | null;
   messageId: string;
+  hbPath: string;
+  watcher: fs.StatWatcher;
   idx: number;
-  interval: NodeJS.Timeout;
-  startedAt: number;
-  active: boolean;
+  active: boolean; // have we placed at least one reaction?
+  lastMtimeMs: number;
 }
 
 let adapter: ReactionAdapter | null = null;
@@ -64,16 +67,6 @@ const throbbers = new Map<string, ThrobberTarget>();
  *  once from src/delivery.ts inside setDeliveryAdapter. */
 export function setThrobberAdapter(a: ReactionAdapter): void {
   adapter = a;
-}
-
-function isHeartbeatFresh(agentGroupId: string, sessionId: string): boolean {
-  const hbPath = heartbeatPath(agentGroupId, sessionId);
-  try {
-    const stat = fs.statSync(hbPath);
-    return Date.now() - stat.mtimeMs < HEARTBEAT_FRESH_MS;
-  } catch {
-    return false;
-  }
 }
 
 async function react(t: ThrobberTarget, emoji: string): Promise<void> {
@@ -92,28 +85,12 @@ async function unreact(t: ThrobberTarget, emoji: string): Promise<void> {
   }
 }
 
-function cycle(sessionId: string): void {
-  const t = throbbers.get(sessionId);
-  if (!t) return;
-
-  const withinGrace = Date.now() - t.startedAt < THROBBER_GRACE_MS;
-  if (!withinGrace && !isHeartbeatFresh(t.agentGroupId, sessionId)) {
-    // Agent idle — stop cycling.
-    clearInterval(t.interval);
-    throbbers.delete(sessionId);
-    if (t.active) {
-      for (const emoji of THROBBER_EMOJIS) {
-        void unreact(t, emoji);
-      }
-    }
-    return;
-  }
-
+function cycle(t: ThrobberTarget): void {
   const prevEmoji = THROBBER_EMOJIS[(t.idx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length];
   const nextEmoji = THROBBER_EMOJIS[t.idx % THROBBER_EMOJIS.length];
 
   // Add before remove — keeps reaction count >= 1 so the message doesn't
-  // visually jump from having reactions to none.
+  // visually jump from having reactions to none mid-cycle.
   void (async () => {
     await react(t, nextEmoji);
     if (t.active) await unreact(t, prevEmoji);
@@ -134,7 +111,7 @@ export function startThrobber(
 
   const existing = throbbers.get(sessionId);
   if (existing) {
-    // New inbound message on an already-running throbber — retarget onto
+    // New inbound message on an already-running throbber — retarget to
     // the newer message so the emoji appears where the user last spoke.
     // Clear old target's reactions best-effort.
     if (existing.active) {
@@ -145,33 +122,59 @@ export function startThrobber(
     existing.messageId = messageId;
     existing.idx = 0;
     existing.active = false;
-    existing.startedAt = Date.now();
-    cycle(sessionId);
+    // Reset lastMtimeMs — require a fresh heartbeat AFTER this inbound
+    // before the first cycle fires. Ensures the reaction signals a
+    // new API response, not a stale one from the previous turn.
+    existing.lastMtimeMs = readMtime(existing.hbPath);
     return;
   }
 
-  const t: ThrobberTarget = {
+  const hbPath = heartbeatPath(agentGroupId, sessionId);
+  const target: ThrobberTarget = {
     agentGroupId,
+    sessionId,
     channelType,
     platformId,
     threadId,
     messageId,
+    hbPath,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    watcher: null as any, // set below
     idx: 0,
-    interval: setInterval(() => cycle(sessionId), THROBBER_CYCLE_MS),
-    startedAt: Date.now(),
     active: false,
+    lastMtimeMs: readMtime(hbPath),
   };
-  t.interval.unref();
-  throbbers.set(sessionId, t);
-  // First reaction immediately — don't wait 2s.
-  cycle(sessionId);
-  log.debug('Throbber started', { sessionId, messageId });
+
+  // fs.watchFile polls stat at the configured interval and fires on any
+  // change (mtime/ctime/size). utimesSync in the container updates mtime,
+  // which fs.watch (inotify IN_MODIFY) does NOT surface on Linux — so we
+  // use watchFile + poll instead. Polling is 500ms-ish; plenty responsive
+  // for a visual throbber and cheap per-session.
+  const watcher = fs.watchFile(hbPath, { interval: WATCH_INTERVAL_MS, persistent: false }, (curr) => {
+    const t = throbbers.get(sessionId);
+    if (!t) return;
+    if (curr.mtimeMs === 0) return; // file missing (container not yet touched it)
+    if (curr.mtimeMs === t.lastMtimeMs) return;
+    t.lastMtimeMs = curr.mtimeMs;
+    cycle(t);
+  });
+  target.watcher = watcher;
+  throbbers.set(sessionId, target);
+  log.debug('Throbber started', { sessionId, messageId, hbPath });
+}
+
+function readMtime(hbPath: string): number {
+  try {
+    return fs.statSync(hbPath).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 export function stopThrobber(sessionId: string): void {
   const t = throbbers.get(sessionId);
   if (!t) return;
-  clearInterval(t.interval);
+  fs.unwatchFile(t.hbPath);
   throbbers.delete(sessionId);
   if (!t.active) return;
   // Clear all possible emojis — in case a cycle raced mid-transition.
