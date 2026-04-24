@@ -432,16 +432,31 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
 function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
   const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
   const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
-  // Inherit thread_id from the inbound routing context so replies land in the
-  // same thread the conversation is in. For non-threaded adapters the router
-  // strips thread_id at ingest, so this will already be null.
+  // thread_id rule:
+  //   - If we're replying to the same channel the inbound came from
+  //     (same platformId), preserve routing.threadId so sub-thread
+  //     conversations stay in their thread.
+  //   - If we're crossing to a different channel (destination selected
+  //     by name), thread_id MUST come from the destination. Inheriting
+  //     the inbound's thread_id here stamped Discord messages with
+  //     stale 'local' (CLI origin) ids and Discord rejected them with
+  //     "Invalid Discord thread ID: local".
+  //   - For agent-to-agent, threads don't apply.
+  let threadId: string | null;
+  if (dest.type === 'agent') {
+    threadId = null;
+  } else if (routing.platformId === platformId) {
+    threadId = routing.threadId;
+  } else {
+    threadId = dest.platformId ?? null;
+  }
   writeMessageOut({
     id: generateId(),
     in_reply_to: routing.inReplyTo,
     kind: 'chat',
     platform_id: platformId,
     channel_type: channelType,
-    thread_id: routing.threadId,
+    thread_id: threadId,
     content: JSON.stringify({ text: body }),
   });
 }
