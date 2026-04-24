@@ -117,16 +117,69 @@ function buildDestinationsSection(): string {
     ].join('\n');
   }
 
-  const lines = ['## Sending messages', '', 'You can send messages to the following destinations:', ''];
+  // Figure out the origin destination — whichever one matches the latest
+  // session_routing. That's the channel the user is actually chatting
+  // with us in, and the default reply target. Without this hint the SDK
+  // regularly picks an agent-typed destination (e.g. `master`) when the
+  // user asks "hi" in a Discord channel, routing the reply to the
+  // master agent where the user can't see it.
+  const db = getInboundDb();
+  let originName: string | undefined;
+  try {
+    const routing = db
+      .prepare('SELECT channel_type, platform_id FROM session_routing WHERE id = 1')
+      .get() as { channel_type: string | null; platform_id: string | null } | undefined;
+    if (routing?.channel_type && routing?.platform_id) {
+      const originRow = db
+        .prepare(
+          "SELECT name FROM destinations WHERE type = 'channel' AND channel_type = ? AND platform_id = ?",
+        )
+        .get(routing.channel_type, routing.platform_id) as { name: string } | undefined;
+      originName = originRow?.name;
+    }
+  } catch {
+    // fall through — session_routing or destinations table missing on
+    // very old session DBs. Default guidance still fires.
+  }
+
+  const lines: string[] = ['## Sending messages', ''];
+
+  // When the turn started from a real channel (Discord etc.), strongly
+  // bias toward plain-text replies that flow back to that channel via
+  // the scratchpad → session_routing path. Listing `<message to=...>`
+  // without this rule has repeatedly caused workers to stamp their
+  // reply with `to="master"` — routing it to the master agent where
+  // the real user (in Discord) never sees it.
+  if (originName) {
+    lines.push(
+      `**You are chatting with a user in \`${originName}\`.** Write your reply as plain text — no wrappers needed. It goes straight back to that chat.`,
+      '',
+      `Other destinations below are for **explicit cross-agent coordination only**. Do NOT wrap your reply to the user in a \`<message to="...">\` block — the user will never see it.`,
+      '',
+      '### Available destinations',
+      '',
+    );
+  } else {
+    lines.push('You can send messages to the following destinations:', '');
+  }
+
   for (const d of all) {
     const label = d.displayName && d.displayName !== d.name ? ` (${d.displayName})` : '';
-    lines.push(`- \`${d.name}\`${label}`);
+    const marker = d.name === originName ? ' ← **origin chat — plain text goes here**' : '';
+    lines.push(`- \`${d.name}\`${label}${marker}`);
   }
   lines.push('');
-  lines.push('To send a message, wrap it in a `<message to="name">...</message>` block.');
-  lines.push('You can include multiple `<message>` blocks in one response to send to multiple destinations.');
-  lines.push('Text outside of `<message>` blocks is scratchpad — logged but not sent anywhere.');
-  lines.push('Use `<internal>...</internal>` to make scratchpad intent explicit.');
+
+  if (originName) {
+    lines.push(
+      `To address a **different** destination (cross-agent handoff, escalation), wrap that one message in \`<message to="other-name">...</message>\`. Plain text outside any block still goes to the origin chat (\`${originName}\`).`,
+    );
+  } else {
+    lines.push('To send a message, wrap it in a `<message to="name">...</message>` block.');
+    lines.push('You can include multiple `<message>` blocks in one response to send to multiple destinations.');
+    lines.push('Text outside of `<message>` blocks is scratchpad — logged but not sent anywhere.');
+  }
+  lines.push('Use `<internal>...</internal>` to mark reasoning as scratchpad (logged, not sent).');
   lines.push('');
   lines.push(
     'To send a message mid-response (e.g., an acknowledgment before a long task), call the `send_message` MCP tool with the `to` parameter set to a destination name.',
