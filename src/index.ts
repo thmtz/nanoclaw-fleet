@@ -167,6 +167,34 @@ async function main(): Promise<void> {
       const adapter = getChannelAdapter(channelType);
       await adapter?.removeReaction?.(platformId, threadId, messageId, emoji);
     },
+    async pinMessage(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      messageId: string,
+    ): Promise<void> {
+      const adapter = getChannelAdapter(channelType);
+      await adapter?.pinMessage?.(platformId, threadId, messageId);
+    },
+    async unpinMessage(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      messageId: string,
+    ): Promise<void> {
+      const adapter = getChannelAdapter(channelType);
+      await adapter?.unpinMessage?.(platformId, threadId, messageId);
+    },
+    async editMessage(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      messageId: string,
+      text: string,
+    ): Promise<void> {
+      const adapter = getChannelAdapter(channelType);
+      await adapter?.editMessage?.(platformId, threadId, messageId, text);
+    },
   };
   setDeliveryAdapter(deliveryAdapter);
 

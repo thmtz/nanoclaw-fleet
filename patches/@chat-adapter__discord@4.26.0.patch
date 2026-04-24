@@ -1,8 +1,41 @@
 diff --git a/dist/index.js b/dist/index.js
-index 8b490cf67e4d4dcec82404a27ef364f440c617b6..d3cb4bfdf104261f11287a6d554c6bc186349725 100644
+index 8b490cf67e4d4dcec82404a27ef364f440c617b6..def1a3ec5c373449d61a7ae4342f86b00fa46ed1 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1499,6 +1499,12 @@ var DiscordAdapter = class _DiscordAdapter {
+@@ -1285,6 +1285,32 @@ var DiscordAdapter = class _DiscordAdapter {
+     );
+     this.logger.debug("Discord API: DELETE reaction response", { ok: true });
+   }
++  /**
++   * Pin a message to the channel. Channel must have < 50 pins.
++   */
++  async pinMessage(threadId, messageId) {
++    const { channelId, threadId: discordThreadId } = this.decodeThreadId(threadId);
++    const targetChannelId = discordThreadId || channelId;
++    this.logger.debug("Discord API: PUT pin", { channelId: targetChannelId, messageId });
++    await this.discordFetch(
++      `/channels/${targetChannelId}/pins/${messageId}`,
++      "PUT"
++    );
++    this.logger.debug("Discord API: PUT pin response", { ok: true });
++  }
++  /**
++   * Unpin a message from the channel. No-op if not currently pinned.
++   */
++  async unpinMessage(threadId, messageId) {
++    const { channelId, threadId: discordThreadId } = this.decodeThreadId(threadId);
++    const targetChannelId = discordThreadId || channelId;
++    this.logger.debug("Discord API: DELETE pin", { channelId: targetChannelId, messageId });
++    await this.discordFetch(
++      `/channels/${targetChannelId}/pins/${messageId}`,
++      "DELETE"
++    );
++    this.logger.debug("Discord API: DELETE pin response", { ok: true });
++  }
+   /**
+    * Encode an emoji for use in Discord API URLs.
+    */
+@@ -1499,6 +1525,12 @@ var DiscordAdapter = class _DiscordAdapter {
     * Make a request to the Discord API.
     */
    async discordFetch(path, method, body) {
@@ -15,7 +48,7 @@ index 8b490cf67e4d4dcec82404a27ef364f440c617b6..d3cb4bfdf104261f11287a6d554c6bc1
      const url = `${DISCORD_API_BASE}${path}`;
      const headers = {
        Authorization: `Bot ${this.botToken}`
-@@ -1506,25 +1512,41 @@ var DiscordAdapter = class _DiscordAdapter {
+@@ -1506,25 +1538,41 @@ var DiscordAdapter = class _DiscordAdapter {
      if (body) {
        headers["Content-Type"] = "application/json";
      }
@@ -73,7 +106,7 @@ index 8b490cf67e4d4dcec82404a27ef364f440c617b6..d3cb4bfdf104261f11287a6d554c6bc1
    }
    /**
     * Start Gateway WebSocket listener for receiving messages/mentions.
-@@ -1659,12 +1681,22 @@ var DiscordAdapter = class _DiscordAdapter {
+@@ -1659,12 +1707,22 @@ var DiscordAdapter = class _DiscordAdapter {
          return;
        }
        if (message.author.bot) {

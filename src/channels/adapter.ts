@@ -148,6 +148,20 @@ export interface ChannelAdapter {
   removeReaction?(platformId: string, threadId: string | null, messageId: string, emoji: string): Promise<void>;
 
   /**
+   * Pin a message in the channel (Discord/Slack-style pins). Used by the
+   * status-pin module to post a persistent channel summary.
+   *
+   * Platforms without pins omit this; callers treat absence as a no-op.
+   */
+  pinMessage?(platformId: string, threadId: string | null, messageId: string): Promise<void>;
+
+  /** Unpin a previously pinned message. */
+  unpinMessage?(platformId: string, threadId: string | null, messageId: string): Promise<void>;
+
+  /** Edit a previously posted message (same platform message id). */
+  editMessage?(platformId: string, threadId: string | null, messageId: string, text: string): Promise<void>;
+
+  /**
    * Subscribe the bot to a thread so follow-up messages route via the
    * platform's "subscribed message" path (onSubscribedMessage in Chat SDK).
    * Called by the router when a mention-sticky wiring first engages in a

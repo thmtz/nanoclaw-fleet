@@ -74,6 +74,25 @@ export interface ChannelDeliveryAdapter {
     messageId: string,
     emoji: string,
   ): Promise<void>;
+  pinMessage?(
+    channelType: string,
+    platformId: string,
+    threadId: string | null,
+    messageId: string,
+  ): Promise<void>;
+  unpinMessage?(
+    channelType: string,
+    platformId: string,
+    threadId: string | null,
+    messageId: string,
+  ): Promise<void>;
+  editMessage?(
+    channelType: string,
+    platformId: string,
+    threadId: string | null,
+    messageId: string,
+    text: string,
+  ): Promise<void>;
 }
 
 let deliveryAdapter: ChannelDeliveryAdapter | null = null;

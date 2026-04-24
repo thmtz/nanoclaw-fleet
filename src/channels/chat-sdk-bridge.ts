@@ -451,6 +451,27 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       await adapter.removeReaction(tid, messageId, emoji);
     },
 
+    async pinMessage(platformId: string, threadId: string | null, messageId: string) {
+      const tid = threadId ?? platformId;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const a = adapter as any;
+      if (typeof a.pinMessage !== 'function') return;
+      await a.pinMessage(tid, messageId);
+    },
+
+    async unpinMessage(platformId: string, threadId: string | null, messageId: string) {
+      const tid = threadId ?? platformId;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const a = adapter as any;
+      if (typeof a.unpinMessage !== 'function') return;
+      await a.unpinMessage(tid, messageId);
+    },
+
+    async editMessage(platformId: string, threadId: string | null, messageId: string, text: string) {
+      const tid = threadId ?? platformId;
+      await adapter.editMessage(tid, messageId, { markdown: transformText(text) });
+    },
+
     async teardown() {
       gatewayAbort?.abort();
       await chat.shutdown();
