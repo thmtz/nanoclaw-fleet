@@ -210,6 +210,29 @@ async function resumeWorker(
   });
   setFleetBackend(existing.folder, backend, model);
 
+  // Re-apply the current worker profile on resume. The archived worker's
+  // container.json was captured before the user may have edited their
+  // profile (and indeed before the v2 profile system even existed), so
+  // resumed workers would boot with an empty workspace. Refresh every
+  // resume so the profile changes take effect on the next container
+  // spawn without requiring destroy-fresh-create.
+  const profileOnResume = loadWorkerProfile();
+  const hasProfileContent =
+    (profileOnResume.repos && profileOnResume.repos.length > 0) ||
+    (profileOnResume.tools && profileOnResume.tools.length > 0) ||
+    (profileOnResume.mounts && profileOnResume.mounts.length > 0);
+  if (hasProfileContent) {
+    const cfg = readContainerConfig(existing.folder);
+    const withProfile = applyProfileToContainerConfig(cfg, profileOnResume);
+    writeContainerConfig(existing.folder, withProfile);
+    log.info('Worker profile applied on resume', {
+      folder: existing.folder,
+      repos: profileOnResume.repos?.length ?? 0,
+      tools: profileOnResume.tools?.length ?? 0,
+      mounts: profileOnResume.mounts?.length ?? 0,
+    });
+  }
+
   // Reprovision a channel only if none is wired — destroy with --keep-channel
   // would leave the prior wiring in place, and we shouldn't create a second.
   const existingMgs = getMessagingGroupsByAgentGroup(existing.id);
