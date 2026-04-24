@@ -62,6 +62,7 @@ function genId(prefix: string): string {
 async function main(): Promise<void> {
   const channelId = process.env.DISCORD_MASTER_CHANNEL_ID;
   const ownerDiscordId = process.env.OWNER_DISCORD_USER_ID;
+  const guildId = process.env.DISCORD_GUILD_ID;
   if (!channelId) {
     console.error('Missing DISCORD_MASTER_CHANNEL_ID');
     process.exit(2);
@@ -70,6 +71,18 @@ async function main(): Promise<void> {
     console.error('Missing OWNER_DISCORD_USER_ID');
     process.exit(2);
   }
+  if (!guildId) {
+    console.error('Missing DISCORD_GUILD_ID');
+    process.exit(2);
+  }
+
+  // Chat SDK's @chat-adapter/discord encodes channel identity as
+  // `discord:<guild>:<channel>` — the router's getMessagingGroupByPlatform
+  // lookup must match that shape, so the messaging_groups row we seed uses
+  // the same encoding. Missing this prefix is a silent drop: messages arrive
+  // at the adapter, the bridge dispatches them, but routeInbound's lookup
+  // returns undefined and the message never reaches the agent.
+  const platformId = `discord:${guildId}:${channelId}`;
 
   const db = initDb(path.join(DATA_DIR, 'v2.db'));
   runMigrations(db);
@@ -107,12 +120,12 @@ async function main(): Promise<void> {
 
   initGroupFilesystem(master as AgentGroup, { instructions: MASTER_INSTRUCTIONS });
 
-  let mg: MessagingGroup | undefined = getMessagingGroupByPlatform('discord', channelId);
+  let mg: MessagingGroup | undefined = getMessagingGroupByPlatform('discord', platformId);
   if (!mg) {
     mg = {
       id: genId('mg'),
       channel_type: 'discord',
-      platform_id: channelId,
+      platform_id: platformId,
       name: 'v2-master',
       is_group: 1,
       unknown_sender_policy: 'public',

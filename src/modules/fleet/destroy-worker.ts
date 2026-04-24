@@ -69,8 +69,11 @@ export async function handleDestroyWorker(content: Record<string, unknown>, sess
       const mga = getMessagingGroupAgentByPair(mg.id, target.id);
       if (mga) deleteMessagingGroupAgent(mga.id);
       if (discordCfg && mg.channel_type === 'discord') {
+        // platform_id is stored as `discord:<guild>:<channel>` (Chat SDK
+        // format); Discord REST expects the raw channel id.
+        const rawChannelId = mg.platform_id.startsWith('discord:') ? mg.platform_id.split(':').pop()! : mg.platform_id;
         try {
-          await deleteDiscordChannel(discordCfg, mg.platform_id);
+          await deleteDiscordChannel(discordCfg, rawChannelId);
         } catch (err) {
           log.warn('destroy_worker: Discord channel delete failed', { mgId: mg.id, err: String(err) });
         }

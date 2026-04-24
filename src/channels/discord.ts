@@ -20,8 +20,18 @@ function extractReplyContext(raw: Record<string, any>): ReplyContext | null {
 
 registerChannelAdapter('discord', {
   factory: () => {
-    const env = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_PUBLIC_KEY', 'DISCORD_APPLICATION_ID']);
+    const env = readEnvFile([
+      'DISCORD_BOT_TOKEN',
+      'DISCORD_PUBLIC_KEY',
+      'DISCORD_APPLICATION_ID',
+      'DISCORD_ALLOWED_BOT_IDS',
+    ]);
     if (!env.DISCORD_BOT_TOKEN) return null;
+    // DISCORD_ALLOWED_BOT_IDS is consumed by a patch to @chat-adapter/discord
+    // that reads it from process.env (see patches/). readEnvFile deliberately
+    // does not populate process.env, so bridge the value here — only after
+    // we know the Discord adapter is being registered.
+    if (env.DISCORD_ALLOWED_BOT_IDS) process.env.DISCORD_ALLOWED_BOT_IDS = env.DISCORD_ALLOWED_BOT_IDS;
     const discordAdapter = createDiscordAdapter({
       botToken: env.DISCORD_BOT_TOKEN,
       publicKey: env.DISCORD_PUBLIC_KEY,

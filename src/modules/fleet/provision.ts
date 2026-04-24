@@ -41,10 +41,13 @@ export async function provisionDiscordChannel(
       `worker-${workerFolder}`,
       `Fleet worker: ${workerDisplayName}`,
     );
+    // Chat SDK's adapter encodes channel identity as
+    // `discord:<guild>:<channel>` and the router looks messaging_groups up by
+    // that exact shape. Raw numeric channel IDs silently drop at routing.
     const mg: MessagingGroup = {
       id: generateId('mg'),
       channel_type: 'discord',
-      platform_id: channel.id,
+      platform_id: `discord:${discordCfg.guildId}:${channel.id}`,
       name: channel.name,
       is_group: 1,
       unknown_sender_policy: 'strict',

@@ -1,0 +1,31 @@
+diff --git a/dist/index.js b/dist/index.js
+index 8b490cf67e4d4dcec82404a27ef364f440c617b6..92b516710ac65062f89a9a55511bcf1494e96a66 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1659,12 +1659,22 @@ var DiscordAdapter = class _DiscordAdapter {
+         return;
+       }
+       if (message.author.bot) {
+-        this.logger.debug("Ignoring message from bot", {
++        const allowlist = new Set(
++          (process.env.DISCORD_ALLOWED_BOT_IDS || "").split(",").map((s) => s.trim()).filter(Boolean),
++        );
++        if (!allowlist.has(message.author.id) || message.author.id === client.user?.id) {
++          this.logger.debug("Ignoring message from bot", {
++            authorId: message.author.id,
++            authorName: message.author.username,
++            isMe: message.author.id === client.user?.id,
++            allowlisted: allowlist.has(message.author.id)
++          });
++          return;
++        }
++        this.logger.info("Accepting allowlisted bot message", {
+           authorId: message.author.id,
+-          authorName: message.author.username,
+-          isMe: message.author.id === client.user?.id
++          authorName: message.author.username
+         });
+-        return;
+       }
+       const isUserMentioned = message.mentions.has(client.user?.id ?? "");
+       const isRoleMentioned = this.mentionRoleIds.length > 0 && message.mentions.roles.some(
