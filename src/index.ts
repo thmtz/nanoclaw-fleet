@@ -14,6 +14,7 @@ import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runti
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { startOutboundWakeServer, stopOutboundWakeServer } from './outbound-wake.js';
+import { startStatusPin, stopStatusPin } from './modules/status-pin/index.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 
@@ -209,6 +210,10 @@ async function main(): Promise<void> {
   // Polling stays on as a fallback for missed wakes.
   startOutboundWakeServer();
 
+  // 5c. Pinned status messages (master + per-worker). Subscribes to the
+  // delivery adapter so it can post/edit through Discord.
+  startStatusPin();
+
   // 6. Start host sweep
   startHostSweep();
   log.info('Host sweep started');
@@ -228,6 +233,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
+  stopStatusPin();
   await stopOutboundWakeServer();
   await teardownChannelAdapters();
   process.exit(0);
