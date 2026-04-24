@@ -10,6 +10,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Always reap orphan Discord channels on exit — even when the smoke run
+# aborts partway through. test-fleet-lifecycle.ts creates workers via
+# master; if any step fails before the destroy step, the channel leaks.
+# This trap is the safety net for the recurring "why is there a stale
+# worker-* channel?" complaint.
+cleanup_orphans() {
+  echo
+  echo "== cleanup: reap stale Discord channels =="
+  ./bin/ncf reap-orphans 2>&1 | head -5 || true
+}
+trap cleanup_orphans EXIT
+
 FAILED=()
 
 ok()   { echo -e "  ✓ $1"; }
@@ -64,6 +76,45 @@ if echo "$REPLY" | grep -qE "^\[.*\]"; then
   ok "master replied to injected message"
 else
   fail "ncf inject --wait master: no reply within 30s"
+fi
+
+# ---- real Discord round-trip ---------------------------------------------
+# ncf inject bypasses Discord entirely. The actual user path is
+# Debug bot → Discord Gateway → host router → container → Discord REST.
+# If the CLI path works but this one doesn't, an outbound-routing bug is
+# silently eating replies.
+section "Discord round-trip (debug bot → master → Discord)"
+
+DEBUG_BOT_TOKEN_FILE="${HOME}/.config/nanoclaw/debug_bot_token"
+if [ ! -f "$DEBUG_BOT_TOKEN_FILE" ]; then
+  echo "  (skipped — no debug bot token at $DEBUG_BOT_TOKEN_FILE)"
+else
+  DEBUG_TOKEN=$(cat "$DEBUG_BOT_TOKEN_FILE")
+  POST_RESP=$(curl -fs -X POST -H "Authorization: Bot $DEBUG_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"content":"smoke discord round-trip — say one word"}' \
+    "https://discord.com/api/v10/channels/$MASTER_CH/messages") || POST_RESP=""
+  POST_ID=$(echo "$POST_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
+  if [ -z "$POST_ID" ]; then
+    fail "debug bot could not post to master channel"
+  else
+    DEADLINE=$((SECONDS + 60))
+    REPLIED=""
+    while [ $SECONDS -lt $DEADLINE ]; do
+      LAST_USER=$(curl -fs -H "Authorization: Bot $DEBUG_TOKEN" \
+        "https://discord.com/api/v10/channels/$MASTER_CH/messages?limit=1" 2>/dev/null \
+        | python3 -c "import sys,json; m=json.load(sys.stdin)[0]; print(m['author'].get('username',''))" 2>/dev/null || echo "")
+      case "$LAST_USER" in
+        NanoClaw*) REPLIED=1; break ;;
+      esac
+      sleep 2
+    done
+    if [ -n "$REPLIED" ]; then
+      ok "master replied on Discord within 60s"
+    else
+      fail "master did not reply on Discord within 60s"
+    fi
+  fi
 fi
 
 # ---- pinned status --------------------------------------------------------

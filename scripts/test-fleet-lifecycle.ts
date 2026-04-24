@@ -269,16 +269,55 @@ async function waitUntil<T>(
 }
 
 /**
- * Best-effort cleanup: if the worker exists and isn't already archived, ask
- * master to destroy it. Used in the failure path so aborted runs don't leave
- * orphaned Discord channels + DB rows piling up.
+ * Best-effort cleanup: nuke the worker's Discord channel directly and
+ * archive the DB row. Belt + suspenders — the master-driven destroy
+ * asks the master to destroy, which may never land if master is down
+ * or the test died mid-flight. This is the "orphan channels piling up"
+ * safety net the user has flagged repeatedly.
  */
 async function tryDestroy(masterChannel: string, debugToken: string): Promise<void> {
   try {
     const w = readWorker(WORKER_NAME);
-    if (!w || w.status === 'archived') return;
+    if (!w) return;
     console.log(`\n[cleanup] destroying worker ${WORKER_NAME} after test abort`);
-    await postMessage(masterChannel, debugToken, `destroy the worker named ${WORKER_NAME}`);
+
+    // 1. Tell master so the DB + agent-to-agent wiring gets cleaned.
+    if (w.status !== 'archived') {
+      await postMessage(masterChannel, debugToken, `destroy the worker named ${WORKER_NAME}`).catch((err) => {
+        console.warn(`  ! cleanup via master failed: ${(err as Error).message}`);
+      });
+    }
+
+    // 2. Directly delete the worker's Discord channel via bot token.
+    // If master-driven destroy already deleted it, this is a harmless 404.
+    const env = readEnvFile(['DISCORD_BOT_TOKEN']);
+    const botToken = env.DISCORD_BOT_TOKEN ?? process.env.DISCORD_BOT_TOKEN;
+    if (!botToken) return;
+    const db = new Database(path.join(DATA_DIR, 'v2.db'), { readonly: true });
+    let channelId: string | undefined;
+    try {
+      const row = db
+        .prepare(
+          `SELECT mg.platform_id
+             FROM messaging_groups mg
+             JOIN messaging_group_agents mga ON mga.messaging_group_id = mg.id
+             JOIN agent_groups ag ON ag.id = mga.agent_group_id
+            WHERE ag.folder = ? AND mg.channel_type = 'discord'
+            LIMIT 1`,
+        )
+        .get(WORKER_NAME) as { platform_id: string } | undefined;
+      channelId = row?.platform_id.split(':').pop();
+    } finally {
+      db.close();
+    }
+    if (!channelId) return;
+    const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bot ${botToken}` },
+    });
+    if (resp.ok) {
+      console.log(`  [cleanup] deleted Discord channel ${channelId} directly`);
+    }
   } catch (err) {
     console.warn(`  ! cleanup destroy failed: ${(err as Error).message}`);
   }
@@ -304,8 +343,9 @@ async function main(): Promise<void> {
 
   // Any unhandled abort (Ctrl-C, timeout, assertion failure) should still
   // attempt to destroy the worker so orphaned Discord channels don't
-  // accumulate. The destroy itself goes through master, which may be down —
-  // acceptable, the message lands in master's queue for later.
+  // accumulate. tryDestroy now also directly nukes the Discord channel
+  // via bot token as a fallback when the master-driven destroy doesn't
+  // land (master might be down, queued forever, etc.).
   process.on('SIGINT', async () => {
     await tryDestroy(masterChannel, debugToken);
     process.exit(130);
@@ -454,12 +494,16 @@ async function main(): Promise<void> {
   console.log('\n== ALL PASSED ==');
 }
 
-main().catch(async (err) => {
-  console.error('\nLifecycle E2E failed:', err);
+async function runCleanup(): Promise<void> {
   const masterChannel = process.env.DISCORD_MASTER_CHANNEL_ID;
   const debugToken = fs.existsSync(DEBUG_BOT_TOKEN_PATH)
     ? fs.readFileSync(DEBUG_BOT_TOKEN_PATH, 'utf-8').trim()
     : undefined;
   if (masterChannel && debugToken) await tryDestroy(masterChannel, debugToken);
+}
+
+main().catch(async (err) => {
+  console.error('\nLifecycle E2E failed:', err);
+  await runCleanup();
   process.exit(1);
 });
