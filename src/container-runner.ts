@@ -184,6 +184,7 @@ async function spawnContainer(session: Session): Promise<void> {
     containerConfig,
     provider,
     contribution,
+    session.id,
     agentIdentifier,
   );
 
@@ -455,6 +456,7 @@ async function buildContainerArgs(
   containerConfig: import('./container-config.js').ContainerConfig,
   provider: string,
   providerContribution: ProviderContainerContribution,
+  sessionId: string,
   agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '--rm', '--name', containerName, '--label', CONTAINER_INSTALL_LABEL];
@@ -469,6 +471,13 @@ async function buildContainerArgs(
   if (agentGroup.fleet_role) {
     args.push('-e', `NANOCLAW_FLEET_ROLE=${agentGroup.fleet_role}`);
   }
+
+  // Outbound-wake URL: container fires a best-effort POST to this after
+  // writing a messages_out row, so the host delivers immediately instead
+  // of waiting for the next 1s poll tick. Session-scoped URL lets the
+  // server skip an extra lookup.
+  const wakePort = parseInt(process.env.OUTBOUND_WAKE_PORT || '3100', 10);
+  args.push('-e', `NANOCLAW_WAKE_URL=http://host.docker.internal:${wakePort}/wake/${sessionId}`);
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {

@@ -73,7 +73,25 @@ export function writeMessageOut(msg: WriteMessageOut): number {
       $content: msg.content,
     });
 
+  // Best-effort wake so the host delivers immediately instead of waiting
+  // for the next 1s poll tick. Dropped wakes are benign — the poll catches
+  // the row on the next tick. Scheduled messages (deliver_after in the
+  // future) are skipped; they shouldn't trigger an immediate delivery.
+  if (!msg.deliver_after) notifyHostWake();
+
   return nextSeq;
+}
+
+/** Fire-and-forget POST to the host's outbound-wake endpoint. */
+function notifyHostWake(): void {
+  const url = process.env.NANOCLAW_WAKE_URL;
+  if (!url) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const f = (globalThis as any).fetch;
+  if (typeof f !== 'function') return;
+  // Don't await — delivery is an HTTP round-trip the agent shouldn't
+  // block on. A failed fetch falls back to the host's 1s poll.
+  f(url, { method: 'POST' }).catch(() => {});
 }
 
 /**
