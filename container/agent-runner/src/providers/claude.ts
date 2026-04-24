@@ -265,6 +265,11 @@ export class ClaudeProvider implements AgentProvider {
 
     const instructions = input.systemContext?.instructions;
 
+    // Allow the host to pin a specific Claude model via ANTHROPIC_MODEL
+    // (set by src/providers/claude.ts from container.json.providers.claude
+    // .model). Empty / unset ⇒ SDK picks its default (user's subscription).
+    const model = process.env.ANTHROPIC_MODEL?.trim() || undefined;
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
@@ -276,6 +281,7 @@ export class ClaudeProvider implements AgentProvider {
         allowedTools: TOOL_ALLOWLIST,
         disallowedTools: SDK_DISALLOWED_TOOLS,
         env: this.env,
+        ...(model ? { model } : {}),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],

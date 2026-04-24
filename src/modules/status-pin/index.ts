@@ -254,6 +254,19 @@ function usageSuffix(folder: string, usage: Record<string, ShimUsageEntry>): str
   return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
 }
 
+/**
+ * Last time each channel's stale-pin scan ran. Scans are the only
+ * guaranteed way to clean up pins from PRIOR host restarts that our
+ * KV no longer points at — the happy-path edit loop never even
+ * notices them. Scan every time we update a pin is too chatty; once
+ * every 10 min is cheap and still self-healing on restart.
+ */
+const lastStaleScanMs = new Map<string, number>();
+const STALE_SCAN_INTERVAL_MS = 10 * 60 * 1000;
+/** Force an immediate scan on first tick after process start, so a
+ *  pre-existing pile of leaked pins cleans up right away. */
+const PROCESS_START = Date.now();
+
 async function updateOne(
   adapter: ChannelDeliveryAdapter,
   key: string,
@@ -263,6 +276,20 @@ async function updateOne(
   text: string,
 ): Promise<void> {
   const existingId = getPin(key);
+
+  // Periodic stale-pin sweep. Covers the case where the happy-path edit
+  // succeeds every tick and we never hit the 10008 branch that previously
+  // owned the cleanup — without this, pins from prior host restarts
+  // accumulate indefinitely because the current KV value only points at
+  // the newest one.
+  const lastScan = lastStaleScanMs.get(key) ?? 0;
+  const sinceScan = Date.now() - lastScan;
+  const neverScanned = lastScan < PROCESS_START;
+  if (neverScanned || sinceScan > STALE_SCAN_INTERVAL_MS) {
+    lastStaleScanMs.set(key, Date.now());
+    await unpinStalePins(adapter, channelType, platformId, threadId, key);
+  }
+
   if (existingId) {
     try {
       await adapter.editMessage?.(channelType, platformId, threadId, existingId, text);
