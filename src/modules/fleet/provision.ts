@@ -44,13 +44,19 @@ export async function provisionDiscordChannel(
     // Chat SDK's adapter encodes channel identity as
     // `discord:<guild>:<channel>` and the router looks messaging_groups up by
     // that exact shape. Raw numeric channel IDs silently drop at routing.
+    //
+    // `public` sender policy: fleet workers run in a channel the fleet just
+    // provisioned, so there's no established allowlist of known senders yet.
+    // 'strict' would drop any user's first message in the new channel. If an
+    // install wants tighter control, flip this to 'request_approval' and wire
+    // approvers via manage-channels.
     const mg: MessagingGroup = {
       id: generateId('mg'),
       channel_type: 'discord',
       platform_id: `discord:${discordCfg.guildId}:${channel.id}`,
       name: channel.name,
       is_group: 1,
-      unknown_sender_policy: 'strict',
+      unknown_sender_policy: 'public',
       created_at: nowIso,
     };
     createMessagingGroup(mg);
@@ -60,7 +66,9 @@ export async function provisionDiscordChannel(
       agent_group_id: workerAgentGroupId,
       engage_mode: 'pattern',
       engage_pattern: '.',
-      sender_scope: 'known',
+      // sender_scope='all' so the worker responds to anyone who can post in
+      // its channel — Discord channel membership is the outer access gate.
+      sender_scope: 'all',
       ignored_message_policy: 'drop',
       session_mode: 'shared',
       priority: 0,

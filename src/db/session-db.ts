@@ -102,14 +102,32 @@ export function insertMessage(
     trigger?: 0 | 1;
   },
 ): void {
-  db.prepare(
+  const stmt = db.prepare(
     `INSERT INTO messages_in (id, seq, kind, timestamp, status, platform_id, channel_type, thread_id, content, process_after, recurrence, series_id, trigger)
      VALUES (@id, @seq, @kind, @timestamp, 'pending', @platformId, @channelType, @threadId, @content, @processAfter, @recurrence, @id, @trigger)`,
-  ).run({
-    ...message,
-    trigger: message.trigger ?? 1,
-    seq: nextEvenSeq(db),
-  });
+  );
+  // nextEvenSeq does SELECT-then-INSERT, so two concurrent writers (router +
+  // agent-to-agent module, host-sweep recurrence, etc.) can both read the
+  // same MAX(seq) and race on the same `seq` value. SQLite serializes writes
+  // with WAL, so the loser gets UNIQUE constraint failed and was retried as
+  // a whole message by the delivery loop, which in turn spawned fresh
+  // containers on every retry (OOM'd the host once). Loop here on seq
+  // collision with a fresh seq pick — at most a dozen rounds in practice,
+  // strictly bounded to avoid a runaway on an unrelated UNIQUE.
+  for (let attempt = 0; attempt < 32; attempt++) {
+    try {
+      stmt.run({
+        ...message,
+        trigger: message.trigger ?? 1,
+        seq: nextEvenSeq(db),
+      });
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/UNIQUE constraint failed: messages_in\.seq/.test(msg) && attempt < 31) continue;
+      throw err;
+    }
+  }
 }
 
 export function countDueMessages(db: Database.Database): number {

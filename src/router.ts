@@ -422,16 +422,31 @@ async function deliverToAgent(
     }
   }
 
-  writeSessionMessage(session.agent_group_id, session.id, {
-    id: messageIdForAgent(event.message.id, agent.agent_group_id),
-    kind: event.message.kind,
-    timestamp: event.message.timestamp,
-    platformId: deliveryAddr.platformId,
-    channelType: deliveryAddr.channelType,
-    threadId: deliveryAddr.threadId,
-    content: event.message.content,
-    trigger: wake ? 1 : 0,
-  });
+  try {
+    writeSessionMessage(session.agent_group_id, session.id, {
+      id: messageIdForAgent(event.message.id, agent.agent_group_id),
+      kind: event.message.kind,
+      timestamp: event.message.timestamp,
+      platformId: deliveryAddr.platformId,
+      channelType: deliveryAddr.channelType,
+      threadId: deliveryAddr.threadId,
+      content: event.message.content,
+      trigger: wake ? 1 : 0,
+    });
+  } catch (err) {
+    // Chat SDK's Discord adapter sometimes delivers the same MESSAGE_CREATE
+    // twice (legacy gateway + forwarded webhook). Chat SDK's own dedupe
+    // normally absorbs this, but a race between the two handleIncomingMessage
+    // calls can let both past to writeSessionMessage — first writes, second
+    // throws UNIQUE. Treat dup as a no-op: the agent already has the message
+    // and will wake on the first insert.
+    const message = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE constraint failed: messages_in\.id/.test(message)) {
+      log.debug('Duplicate inbound (already written)', { sessionId: session.id, msgId: event.message.id });
+      return;
+    }
+    throw err;
+  }
 
   log.info('Message routed', {
     sessionId: session.id,

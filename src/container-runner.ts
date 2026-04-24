@@ -52,6 +52,17 @@ const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
 
 /**
+ * Timestamp (ms since epoch) of the last container exit per session. Used
+ * by wakeContainer to throttle spawns when a container exits quickly
+ * (crash loop). Without this, a container that dies on an internal error
+ * (e.g. UNIQUE seq race on its own writes) plus a host-sweep that keeps
+ * seeing due messages will spawn a fresh container on every tick —
+ * enough of them in a few seconds to OOM the host.
+ */
+const lastExitMs = new Map<string, number>();
+const MIN_RESPAWN_INTERVAL_MS = 5000;
+
+/**
  * In-flight wake promises, keyed by session id. Deduplicates concurrent
  * `wakeContainer` calls while the first spawn is still mid-setup (async
  * buildContainerArgs, OneCLI gateway apply, etc.) — otherwise a second
@@ -84,6 +95,19 @@ export function wakeContainer(session: Session): Promise<void> {
   if (existing) {
     log.debug('Container wake already in-flight — joining existing promise', { sessionId: session.id });
     return existing;
+  }
+  // Crash-loop guard: refuse to respawn within MIN_RESPAWN_INTERVAL_MS of
+  // the last exit. host-sweep checks dueCount every tick and would
+  // otherwise spin up containers faster than they can fail; if a container
+  // is dying on a deterministic error, a rapid loop accomplishes nothing
+  // and can eat all system memory in seconds.
+  const lastExit = lastExitMs.get(session.id);
+  if (lastExit && Date.now() - lastExit < MIN_RESPAWN_INTERVAL_MS) {
+    log.debug('Container exited recently, deferring wake', {
+      sessionId: session.id,
+      msSinceExit: Date.now() - lastExit,
+    });
+    return Promise.resolve();
   }
   const promise = spawnContainer(session).finally(() => {
     wakePromises.delete(session.id);
@@ -166,6 +190,7 @@ async function spawnContainer(session: Session): Promise<void> {
 
   container.on('close', (code) => {
     activeContainers.delete(session.id);
+    lastExitMs.set(session.id, Date.now());
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
     log.info('Container exited', { sessionId: session.id, code, containerName });
@@ -173,6 +198,7 @@ async function spawnContainer(session: Session): Promise<void> {
 
   container.on('error', (err) => {
     activeContainers.delete(session.id);
+    lastExitMs.set(session.id, Date.now());
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
     log.error('Container spawn error', { sessionId: session.id, err });
@@ -445,6 +471,12 @@ async function buildContainerArgs(
   // from .env. Intended for prototype / local use. Production installs should
   // rely on OneCLI (key rotation, per-agent policy). Reads on every spawn so
   // token changes in .env take effect without a service restart.
+  //
+  // Precedence: .env wins over host shell. Shell ANTHROPIC_API_KEY leaking
+  // from the operator's profile has bitten us — an exhausted key from another
+  // project silently took over. When .env sets CLAUDE_CODE_OAUTH_TOKEN, we
+  // skip injecting ANTHROPIC_API_KEY entirely, since Claude SDK prefers the
+  // API key when both are present and that would defeat a Max subscription.
   if (!onecliApplied) {
     const fallbackEnv = readEnvFile([
       'ANTHROPIC_API_KEY',
@@ -452,16 +484,18 @@ async function buildContainerArgs(
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
     ]);
+    const preferOauth = !!fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN;
     for (const key of [
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_AUTH_TOKEN',
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
     ] as const) {
+      if (preferOauth && key === 'ANTHROPIC_API_KEY') continue;
       const val = fallbackEnv[key] ?? process.env[key];
       if (val) args.push('-e', `${key}=${val}`);
     }
-    log.info('Env credential fallback applied', { containerName });
+    log.info('Env credential fallback applied', { containerName, preferOauth });
   }
 
   // Host gateway

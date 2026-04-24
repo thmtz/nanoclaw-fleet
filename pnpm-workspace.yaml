@@ -5,6 +5,7 @@ onlyBuiltDependencies:
   - sharp
 patchedDependencies:
   '@chat-adapter/discord@4.26.0': patches/@chat-adapter__discord@4.26.0.patch
+  chat@4.26.0: patches/chat@4.26.0.patch
 
 pnpm:
   minimumReleaseAge: 4320

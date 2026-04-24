@@ -1,0 +1,47 @@
+diff --git a/dist/index.js b/dist/index.js
+index b9a97ced2e0d3c0c38c03e97dbcf35391ee9fda4..77a70af9689ad65f52761b455c4df30c452b7707 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2948,19 +2948,31 @@ var Chat = class {
+       });
+       return;
+     }
+-    const dedupeKey = `dedupe:${adapter.name}:${message.id}`;
+-    const isFirstProcess = await this._stateAdapter.setIfNotExists(
+-      dedupeKey,
+-      true,
+-      this._dedupeTtlMs
+-    );
+-    if (!isFirstProcess) {
+-      this.logger.debug("Skipping duplicate message", {
+-        adapter: adapter.name,
+-        messageId: message.id
+-      });
++    // PATCH (fleet): Chat SDK's dedupe races when the Discord adapter forwards
++    // the same MESSAGE_CREATE twice (legacy gateway + webhook path both fire
++    // in same-process webhook mode). First caller's SELECT + INSERT OR IGNORE
++    // can interleave with the second's SELECT, both see empty, first wins
++    // changes=1, second gets changes=0 — but sometimes timing flips and the
++    // "first" logical call loses, dropping the ONLY dispatch. Gate dedupe
++    // behind a lightweight in-process Set instead of the shared SQLite kv
++    // so we never drop the first delivery. SQLite kv is still kept in sync
++    // for cross-process dedup if ever needed.
++    const inProcessDedupe = ((this._fleetSeenIds ||= new Set()));
++    // Synchronous has+add pair before any await. JS event-loop guarantees
++    // no other coroutine can run between these two ops, so duplicates racing
++    // from the same Chat SDK instance (direct gateway + forwarded webhook)
++    // are both caught here without a race window.
++    if (inProcessDedupe.has(message.id)) {
++      this.logger.debug("Skipping duplicate message (in-process)", { messageId: message.id });
+       return;
+     }
++    inProcessDedupe.add(message.id);
++    if (inProcessDedupe.size > 10000) {
++      const iter = inProcessDedupe.values();
++      for (let i = 0; i < 1000; i++) inProcessDedupe.delete(iter.next().value);
++    }
++    const dedupeKey = `dedupe:${adapter.name}:${message.id}`;
++    await this._stateAdapter.setIfNotExists(dedupeKey, true, this._dedupeTtlMs);
+     if (adapter.persistMessageHistory) {
+       const channelId = adapter.channelIdFromThreadId(threadId);
+       const appends = [this._messageHistory.append(threadId, message)];
