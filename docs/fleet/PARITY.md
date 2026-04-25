@@ -1,5 +1,7 @@
 # Fleet v2 — Parity with nanoclaw-fleet (v1 fork)
 
+> Companion docs: [architecture/overview.md](architecture/overview.md), [DESIGN.md](DESIGN.md), [RUNBOOK.md](RUNBOOK.md).
+
 Tracks every feature the v1 nanoclaw-fleet fork added on top of upstream
 NanoClaw v1, against its current state in NanoClaw v2. "Done" means
 ported + verified (unit test, live Discord run, or both).

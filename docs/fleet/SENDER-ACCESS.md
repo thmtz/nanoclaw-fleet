@@ -1,5 +1,7 @@
 # Sender access control: v1 → v2 mapping
 
+> Companion docs: [architecture/overview.md](architecture/overview.md), [PARITY.md](PARITY.md).
+
 The v1 nanoclaw-fleet fork had a single file — `data/sender-allowlist.json` —
 that governed who could send messages to each chat. It supported two
 behaviours per chat:

@@ -1,5 +1,7 @@
 # Fleet on v2 — Design
 
+> Companion docs: [architecture/overview.md](architecture/overview.md), [architecture/master-workers.md](architecture/master-workers.md), [PARITY.md](PARITY.md), [RUNBOOK.md](RUNBOOK.md).
+
 Port `nanoclaw-fleet` affordances onto NanoClaw v2 base. Keep v2 entity model, session DB, provider registry, OneCLI credential vault, admin/owner, `create_agent`. Add back fleet-specific: Discord-channel-per-worker, destroy+preserve-workspace, runtime backend switch with Claude-Agent-SDK-over-OpenAI-compat, fuzzy model resolve, `ncf` CLI, session restore on recreate.
 
 Scope: prototype. MVP = admin in one Discord "master" channel can run `create worker X`, `destroy X`, `switch X to <backend> <model>`, `list workers`. Each worker has own channel + own container + own session. OpenAI-compat workers route via shim; Claude workers route via OneCLI. Backend and model persist in central DB.

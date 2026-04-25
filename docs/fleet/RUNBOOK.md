@@ -1,5 +1,7 @@
 # Fleet Runbook
 
+> Companion docs: [guides/setup.md](guides/setup.md), [guides/troubleshooting.md](guides/troubleshooting.md), [reference/cli.md](reference/cli.md).
+
 How to stand up a fleet-on-v2 install and drive workers.
 
 ## Prereqs
