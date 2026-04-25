@@ -1,156 +1,81 @@
-# ncf CLI Reference
+# `ncf` CLI Reference
 
-The `ncf` (NanoClaw Fleet) CLI is the unified tool for managing workers, containers, and debugging. Works from both the host machine and inside containers.
-
-## Installation
+`ncf` (NanoClaw Fleet) is the unified tool for managing workers, watching the system, and debugging. The wrapper at `./ncf` calls `npx tsx src/cli.ts`. Drop a shell alias into your dotfiles for global use:
 
 ```bash
-# From project root
-npx tsx src/cli.ts <command>
-
-# Or add alias
-alias ncf='npx tsx /path/to/nanoclaw-fleet/src/cli.ts'
+alias ncf='/path/to/nanoclaw-fleet/ncf'
 ```
+
+`ncf` works from the host. From inside a container, the master can use the same script via `cd /workspace/project && ncf <command>`.
 
 ## Commands
 
-### Status
+### `ncf status [--json] [--no-color]`
 
-```bash
-ncf status [--json]
-```
+Snapshot of the fleet: master, every worker, container state, backend, model, and usage. `--json` for machine output (used by the Discord status pin). `--no-color` for unstyled text.
 
-Show all workers, containers, backends, and usage stats.
+Fields per worker: `folder`, `name`, `jid`, `backend`, `model`, `container` (running/stopped), `requests`, `tokens`, `energyWh` (Neuralwatt only), `lastActivity`.
 
-**Output fields:**
+### `ncf create <name> [--backend <b>] [--model <m>] [--trigger <t>]`
 
-- `folder` — Group folder name (e.g., `discord_main`)
-- `name` — Display name
-- `jid` — Discord channel ID
-- `backend` — `anthropic` or `neuralwatt`
-- `model` — Model ID
-- `container` — Running container name or `null`
-- `requests` — Total requests
-- `tokens` — Total tokens
-- `energyWh` — Energy usage (Neuralwatt only)
-
-### Create
-
-```bash
-ncf create <name> [--backend <b>] [--model <m>] [--trigger <t>]
-```
-
-Create a new worker (Discord channel + workspace). Container spawns on first message.
-
-**Options:**
+Create a worker. Creates the Discord channel, registers the group, prepares the workspace, and seeds backend config. The container does not spawn until the channel receives a message.
 
 - `--backend` — `anthropic` (default) or `neuralwatt`
-- `--model` — Model ID for neuralwatt (e.g., `moonshotai/Kimi-K2.5`)
-- `--trigger` — Trigger pattern (default: `@Andy`)
+- `--model` — model id (Anthropic alias or Neuralwatt id; fuzzy matched via the shim)
+- `--trigger` — message-trigger pattern (default: `@<assistant>`). Workers normally use no trigger; only main-style channels need one.
 
-### Destroy
+If the workspace already exists at `groups/discord_<name>/`, the master is prompted to choose `resume` or `fresh`.
 
-```bash
-ncf destroy <worker>
-```
+### `ncf destroy <worker>`
 
-Tear down a worker: delete Discord channel, remove registration, clear session state. Workspace preserved.
+Tear down a worker. Kills the container, deletes the Discord channel, removes the SQLite registration, clears the agent-runner cache. The session id, the SDK state, and the workspace are preserved so a future `ncf create` with `resume` continues where you left off.
 
-### Switch
+### `ncf switch <worker> <backend> [model]`
 
-```bash
-ncf switch <worker> <backend> [model]
-```
-
-Switch a worker's backend or model. Neuralwatt-to-Neuralwatt switches are instant; cross-backend switches restart the container.
-
-**Examples:**
+Change a worker's backend or model. Examples:
 
 ```bash
-ncf switch test-worker neuralwatt moonshotai/Kimi-K2.5
-ncf switch test-worker anthropic
+ncf switch test neuralwatt moonshotai/Kimi-K2.5
+ncf switch test neuralwatt qwen-coder      # fuzzy resolved
+ncf switch test anthropic claude-opus-4-7
 ```
 
-### Restart
+Within Neuralwatt, switches take effect on the next request (no restart). Cross-backend switches (Anthropic ↔ Neuralwatt) restart the container.
 
-```bash
-ncf restart <worker> [--fresh]
-```
+### `ncf restart <worker> [--fresh]`
 
-Restart a worker's container. Use `--fresh` to clear session history first.
+Restart a worker's container. `--fresh` deletes `.claude/` first, so the SDK starts a new session. Use after host-side code changes or to recover from a crash loop.
 
-**Use cases:**
+### `ncf rebuild [worker]`
 
-- `ncf restart main` — Restart master container (picks up code changes)
-- `ncf restart main --fresh` — Fresh start, clears `.claude/` session state
-- `ncf restart worker-name` — Restart a worker container
+Rebuild the agent container image. Run after changes to `container/Dockerfile` or your personal `~/.config/nanoclaw/Dockerfile`. Agent-runner source under `container/agent-runner/src/` auto-syncs by mtime on every spawn, so a rebuild is not needed for those changes.
 
-### Rebuild
+### `ncf logs <worker|--host> [n] [flags]`
 
-```bash
-ncf rebuild [worker]
-```
+Per-worker turn audit, read from `logs/workers/<folder>/turns.jsonl`. With `--host`, follows the host log instead.
 
-Rebuild the container image. Required after `Dockerfile` or `init.sh` changes.
+- `n` — number of entries (default: 20)
+- `--cache` — only cache hits
+- `--slow` — only requests slower than 5 seconds
+- `--follow` — tail container logs live
+- `--grep <pattern>` — filter by substring
+- `--json` — raw JSONL
 
-**Note:** Agent-runner source auto-syncs by mtime on each container spawn — no rebuild needed for `container/agent-runner/src/` changes.
+### `ncf session <worker> [n] [--live | --json]`
 
-### Logs
+SDK transcript for a worker. Default shows the last 80 lines of the assembled view (tool calls, thinking blocks, replies). `--live` streams new events as they arrive. `--json` emits one JSON event per line.
 
-```bash
-ncf logs <worker> [n] [--cache|--slow|--follow|--json]
-```
+### `ncf history [worker] [--since <date>] [--limit <n>] [--json]`
 
-Show per-worker audit logs (turns).
+Worker lifecycle events from `logs/worker-events.jsonl`: created, destroyed, backend_switched, resumed.
 
-**Options:**
+- `--since` — ISO timestamp; only events at or after this time
+- `--limit` — max events (default: 50)
+- `worker` — filter to one worker (partial match accepted)
 
-- `n` — Number of entries (default: 20)
-- `--cache` — Show only cache hits
-- `--slow` — Show only slow requests (>5s)
-- `--follow` — Follow container logs in real-time
-- `--json` — JSON output
+### `ncf inject [--wait] <channel> <message>`
 
-### Session
-
-```bash
-ncf session <worker> [lines] [--json]
-```
-
-Show session transcript from the SDK's JSONL file.
-
-**Options:**
-
-- `lines` — Number of lines (default: 80)
-- `--json` — JSON output
-
-### History
-
-```bash
-ncf history [--json] [--since <date>] [--limit <n>]
-```
-
-Query worker lifecycle events from `logs/worker-events.jsonl`.
-
-**Options:**
-
-- `--since` — ISO timestamp (e.g., `2026-04-06T00:00:00Z`)
-- `--limit` — Max events (default: 50)
-- `--json` — JSON output
-
-### Inject
-
-```bash
-ncf inject <channel> <message> [--wait]
-```
-
-Inject a message to any registered channel. Useful for testing and debugging.
-
-**Options:**
-
-- `--wait` — Poll logs until agent responds, then print output
-
-**Examples:**
+Write a message into IPC for the given channel. Bypasses Discord, useful for scripted testing. With `--wait`, polls docker logs until the agent replies and prints the response.
 
 ```bash
 ncf inject main "create a worker called test"
@@ -158,59 +83,44 @@ ncf inject --wait test "what model are you?"
 ncf inject dc:1234567890 "hello"
 ```
 
-### Debug
+For end-to-end coverage that includes the Discord gateway, use the debug bot path described in [testing.md](../guides/testing.md#real-discord-with-the-debug-bot).
+
+### `ncf test [--skip-nw]`
+
+Run the standard end-to-end smoke. Creates temporary workers, exercises lifecycle, model switching, and Neuralwatt routing, then destroys them on exit. `--skip-nw` skips Neuralwatt scenarios when the shim is offline.
+
+### `ncf debug`
+
+Dump system state: project paths, database location, running containers, proxy reachability, env vars, mount allowlist resolution. The first thing to run when something feels off.
+
+## Cheat sheet
+
+| Task | Command |
+|-|-|
+| Health check | `ncf status` |
+| Make a worker | `ncf create <name>` |
+| Switch model | `ncf switch <name> neuralwatt <model>` |
+| Restart a worker | `ncf restart <name>` |
+| Restart and clear session | `ncf restart <name> --fresh` |
+| Image rebuild | `ncf rebuild` |
+| Inspect last turn | `ncf logs <name>` |
+| Cache audit | `ncf logs <name> --cache` |
+| Slow-request audit | `ncf logs <name> --slow` |
+| Watch transcript | `ncf session <name> --live` |
+| Lifecycle audit | `ncf history` |
+| Smoke test | `ncf test` |
+| Diagnostic dump | `ncf debug` |
+
+## After code changes
 
 ```bash
-ncf debug
-```
-
-Show system state: paths, database location, running containers, proxy status, config files.
-
-## When to Use What
-
-| Task                                   | Command                                   |
-| -------------------------------------- | ----------------------------------------- |
-| Check system health                    | `ncf status`                              |
-| Create a worker                        | `ncf create <name>`                       |
-| Tear down a worker                     | `ncf destroy <name>`                      |
-| Switch a worker's model                | `ncf switch <name> neuralwatt <model>`    |
-| Restart master after code changes      | `ncf restart main`                        |
-| Fresh start for master (clear session) | `ncf restart main --fresh`                |
-| Rebuild after Dockerfile changes       | `ncf rebuild`                             |
-| Debug a worker's conversation          | `ncf session <name>`                      |
-| Check cache performance                | `ncf logs <name> --cache`                 |
-| Test via CLI                           | `ncf inject --wait <name> "test message"` |
-| System diagnostics                     | `ncf debug`                               |
-
-## Common Patterns
-
-### Testing a Worker
-
-```bash
-ncf create test-e2e --backend neuralwatt --model moonshotai/Kimi-K2.5
-ncf inject --wait test-e2e "what model are you?"
-ncf logs test-e2e --cache  # Check cache hits
-ncf destroy test-e2e
-```
-
-### Debugging Master Issues
-
-```bash
-ncf restart main --fresh   # Clear stale session
-ncf inject main "list workers"
-ncf logs main 50             # Last 50 log entries
-```
-
-### After Code Changes
-
-```bash
-# Host-side changes (src/)
+# host-side (src/)
 npm run build && systemctl --user restart nanoclaw
 
-# Container-side changes (container/Dockerfile)
+# container image (container/Dockerfile or personal Dockerfile)
 ncf rebuild
+ncf restart <worker>           # next spawn picks up the new image
 
-# Agent-runner changes (container/agent-runner/src/)
-# Auto-syncs on next spawn — just restart the container
-ncf restart main
+# agent-runner (container/agent-runner/src/)
+ncf restart <worker>           # auto-synced by mtime; no rebuild needed
 ```

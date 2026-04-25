@@ -502,7 +502,11 @@ function buildContainerArgs(
 
   // Inference provider API keys — passed through to every container so
   // agents can call Fireworks / Together / Synthetic without per-worker setup.
-  const providerKeys = readEnvFile(['FIREWORKS_API_KEY', 'TOGETHER_API_KEY', 'SYNTHETIC_API_KEY']);
+  const providerKeys = readEnvFile([
+    'FIREWORKS_API_KEY',
+    'TOGETHER_API_KEY',
+    'SYNTHETIC_API_KEY',
+  ]);
   for (const [name, value] of Object.entries(providerKeys)) {
     if (value) args.push('-e', `${name}=${value}`);
   }

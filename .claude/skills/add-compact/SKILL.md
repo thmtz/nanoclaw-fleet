@@ -115,7 +115,7 @@ npm test
 
 ## Security Constraints
 
-- **Main-group or trusted/admin sender only.** The main group is the user's private self-chat and is trusted (see `docs/SECURITY.md`). Non-main groups are untrusted — a careless or malicious user could wipe the agent's short-term memory. However, the device owner (`is_from_me`) is always trusted and can compact from any group.
+- **Main-group or trusted/admin sender only.** The main group is the user's private self-chat and is trusted (see `docs/upstream/SECURITY.md`). Non-main groups are untrusted — a careless or malicious user could wipe the agent's short-term memory. However, the device owner (`is_from_me`) is always trusted and can compact from any group.
 - **No auto-compaction.** This skill implements manual compaction only. Automatic threshold-based compaction is a separate concern and should be a separate skill.
 - **No config file.** NanoClaw's philosophy is customization through code changes, not configuration sprawl.
 - **Transcript archived before compaction.** The existing `PreCompact` hook in the agent-runner archives the full transcript to `conversations/` before the SDK compacts it.

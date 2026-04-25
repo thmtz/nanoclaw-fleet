@@ -1,12 +1,13 @@
 # Streaming Shim
 
-Status: **Implemented** | Created: 2026-03-28
+The translation shim turns Neuralwatt's OpenAI-style streaming SSE into Anthropic-style streaming SSE so the Claude Agent SDK gets real-time output.
 
-The translation shim translates OpenAI streaming SSE (from Neuralwatt) into Anthropic streaming SSE (which the SDK expects). Without this, the SDK sends each request twice (streaming + non-streaming fallback), causing duplicate responses and double-counted usage. With streaming support, the SDK gets streamed chunks back and never triggers the fallback.
+Without streaming the SDK falls back to two requests per turn (streaming attempt followed by non-streaming retry), which double-counts usage and doubles latency. The shim's streaming path keeps the SDK on a single request.
 
-## SSE Format Translation
+## SSE format translation
 
-**OpenAI (Neuralwatt sends):**
+**OpenAI input from Neuralwatt:**
+
 ```
 data: {"choices": [{"delta": {"role": "assistant", "content": ""}}]}
 data: {"choices": [{"delta": {"reasoning": "thinking..."}}]}
@@ -17,10 +18,11 @@ data: {"choices": [], "usage": {"prompt_tokens": 12, "total_tokens": 62, "comple
 data: [DONE]
 ```
 
-**Anthropic (SDK expects):**
+**Anthropic output the SDK expects:**
+
 ```
 event: message_start
-data: {"type": "message_start", "message": {"id": "msg_...", "type": "message", "role": "assistant", "content": [], "model": "claude-opus-4-6", "usage": {"input_tokens": 12}}}
+data: {"type": "message_start", "message": {"id": "msg_...", "role": "assistant", "content": [], "model": "claude-opus-4-6", "usage": {"input_tokens": 12}}}
 
 event: content_block_start
 data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
@@ -38,41 +40,33 @@ event: message_stop
 data: {"type": "message_stop"}
 ```
 
-## Translation Rules
+## Translation rules
 
-Each OpenAI chunk maps to Anthropic events:
-
-| OpenAI chunk | Anthropic event(s) |
+| OpenAI chunk | Anthropic event |
 |-|-|
-| First chunk (role: assistant) | `message_start` + `content_block_start` |
-| `delta.reasoning` | `content_block_delta` with `thinking_delta` type |
-| `delta.content` | `content_block_delta` with `text_delta` type |
-| `finish_reason` present | `content_block_stop` + `message_delta` (stop_reason) |
-| `usage` chunk (empty choices) | Include in `message_delta` |
-| `: energy {...}` comment | Parse + record usage (don't forward, Anthropic has no equivalent) |
+| First chunk with `role: "assistant"` | `message_start` + `content_block_start` |
+| `delta.reasoning` | `content_block_delta` with `thinking_delta` |
+| `delta.content` | `content_block_delta` with `text_delta` |
+| `finish_reason` present | `content_block_stop` + `message_delta` carrying `stop_reason` |
+| `usage` chunk (empty `choices`) | Folded into `message_delta` |
+| `: energy {...}` SSE comment | Parsed and recorded; not forwarded (Anthropic has no equivalent) |
 | `[DONE]` | `message_stop` |
 
-Thinking content and text content are separate content blocks with separate indices.
+Thinking content and text content live in separate content blocks with separate indices. When the stream switches from `reasoning` deltas to `content` deltas, the shim closes the thinking block (`content_block_stop`) and opens a text block (`content_block_start` at the next index).
 
-## State Machine
+The translator keeps a small state machine: `currentBlockIndex`, `inThinking`, synthetic `messageId`, and accumulated `usage`.
 
-The translator tracks:
-- `currentBlockIndex`: which content block we're in
-- `inThinking`: whether we're emitting thinking deltas
-- `messageId`: synthetic ID for the response
-- `usage`: accumulated from chunks
+## Tool calls
 
-When the stream transitions from `reasoning` deltas to `content` deltas, close the thinking block (`content_block_stop`) and open a text block (`content_block_start` with next index).
+OpenAI streams tool calls in pieces:
 
-## Tool Calls
-
-OpenAI streaming tool calls arrive as:
 ```
 data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_...", "function": {"name": "get_weather", "arguments": ""}}]}}]}
 data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"loc"}}]}}]}
 ```
 
-Translate to Anthropic `tool_use` content blocks:
+The shim emits `tool_use` content blocks with `input_json_delta` partial JSON so the SDK can assemble them:
+
 ```
 event: content_block_start
 data: {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_...", "name": "get_weather"}}
@@ -81,20 +75,20 @@ event: content_block_delta
 data: {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"loc"}}
 ```
 
-## Energy Capture
+Partial JSON accumulation is the trickiest piece — keep tool schemas simple where you can.
 
-The `: energy {...}` SSE comment appears near the end of the stream. Standard SSE parsers ignore comments. The shim reads raw lines and captures this before forwarding `[DONE]`.
+## Energy capture
 
-## Implementation
+Neuralwatt sends a non-standard SSE comment line near the end:
 
-The shim's Neuralwatt handler changes from:
 ```
-const resp = await fetch(URL, { body });
-const json = await resp.json();
-return Response.json(translate(json));
+: energy {"energy_joules": 9.99, ...}
 ```
 
-To:
+Standard SSE parsers throw comment lines away. The shim reads raw lines so it can capture energy data before forwarding `[DONE]`. Captured values land in `data/worker-usage.json` and the per-worker turn log. See [energy-tracking.md](energy-tracking.md).
+
+## Implementation shape
+
 ```
 const resp = await fetch(URL, { body: { ...body, stream: true } });
 return new Response(translateStream(resp.body), {
@@ -102,10 +96,10 @@ return new Response(translateStream(resp.body), {
 });
 ```
 
-Where `translateStream` is a `TransformStream` that reads OpenAI SSE lines and writes Anthropic SSE lines.
+`translateStream` is a `TransformStream` that reads OpenAI SSE lines and writes Anthropic SSE lines. Source: `tools/anthropic-shim.ts`.
 
-## Risks
+## Limitations
 
-- Tool call streaming is complex (partial JSON accumulation). Start with text-only, add tools after.
-- Thinking/reasoning blocks need a transition detector (reasoning → content switch).
-- Error mid-stream: if Neuralwatt errors after partial response, need to emit a clean Anthropic error event.
+- Tool-call streaming relies on partial-JSON accumulation; complex schemas can hit edges.
+- Reasoning-to-content transitions assume the model produces them in order. Out-of-order streams would confuse the state machine; no observed cases so far.
+- A mid-stream upstream error is rewritten into a clean Anthropic error event so the SDK's stream parser doesn't choke. The original error body is logged on the host.

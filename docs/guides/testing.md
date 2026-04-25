@@ -1,402 +1,265 @@
 # Testing Guide
 
-How to exercise every NanoClaw behavior end-to-end. This guide is for coding agents working on this codebase and for humans verifying changes.
+How to exercise every NanoClaw Fleet behavior end-to-end. Written for both humans verifying changes and agents working on this codebase.
 
 ## Prerequisites
 
-Check that the system is running before testing:
-
 ```bash
-systemctl --user status nanoclaw        # Host process (must be active)
-systemctl --user status nanoclaw-shim   # Neuralwatt proxy (needed for NW tests only)
-docker ps                               # Docker daemon running
+systemctl --user status nanoclaw         # host process, must be active
+systemctl --user status nanoclaw-shim    # only needed for Neuralwatt tests
+docker ps                                 # docker daemon up
 ```
 
-If NanoClaw isn't running: `systemctl --user start nanoclaw`. If you need to rebuild first: `npm run build && systemctl --user restart nanoclaw`.
+If the host isn't running: `systemctl --user start nanoclaw`. After source changes: `npm run build && systemctl --user restart nanoclaw`.
 
-Host-side test tools live in `tools/`.
+## What changed → what to test
 
-## What Changed → What to Test
+| You touched | Run |
+|-|-|
+| `src/ipc.ts` (lifecycle) | Scenarios 1–4, 10, 11 |
+| `src/container-runner.ts` (mounts, env) | Scenario 1, then 12 (exec in, check env). Look for trace ids in `logs/nanoclaw.jsonl`. |
+| `container/` or `worker-profiles/` | Rebuild image, restart, message a worker. See "After container-side changes". |
+| `tools/anthropic-shim.ts` | Restart shim, scenarios 5–9, then "After shim changes". |
+| `container/agent-runner/src/` (MCP tools) | Restart, message a worker. Auto-syncs by mtime. |
+| Inference routing or model config | Scenarios 5–8. |
 
-| I changed...                              | Test by...                                                                          |
-| ----------------------------------------- | ----------------------------------------------------------------------------------- |
-| `src/ipc.ts` (worker lifecycle)           | Create, message, destroy, recreate with resume (scenarios 1-4, 10-11)               |
-| `src/container-runner.ts` (mounts, env)   | Create a worker, exec in, check mounts and env vars (scenarios 1, 12). Check trace IDs in JSONL. |
-| `container/` or `worker-profiles/`        | Rebuild image, restart, message a worker (see "After Container-Side Changes" below) |
-| `tools/anthropic-shim.ts`                 | Restart shim, curl test, message a NW worker (see "After Shim Changes" below)       |
-| `container/agent-runner/src/` (MCP tools) | Restart, message a worker, verify the tool works (auto-syncs by mtime)              |
-| Inference routing or model config         | Create NW worker, switch model, verify (scenarios 5-8)                              |
+## Quick smoke
 
-## Quick Smoke Test
-
-Run `tools/e2e-test.ts` to verify nothing major is broken. Works from both the host and inside the master container. Creates temporary workers, exercises them, and cleans up on exit. ~65 seconds.
+`tools/e2e-test.ts` creates temporary workers, exercises them, and cleans up on exit. Runs from the host or inside the master container.
 
 ```bash
-npx tsx tools/e2e-test.ts              # from host
-cd /workspace/project && npx tsx tools/e2e-test.ts   # from master container
-npx tsx tools/e2e-test.ts --skip-nw    # skip Neuralwatt tests (~45s)
+npx tsx tools/e2e-test.ts                                # ~65s
+npx tsx tools/e2e-test.ts --skip-nw                      # ~45s, no Neuralwatt
+cd /workspace/project && npx tsx tools/e2e-test.ts       # from master
 ```
 
-## Host-Side Tools
-
-The `ncf` CLI provides unified access to all NanoClaw operations:
+## Host-side tools
 
 ```bash
-ncf status [--json]                      # Show all workers, containers, backends
-ncf logs <worker> [--cache|--slow|--follow]  # Per-worker audit logs
-ncf inject [--wait] <channel> <msg>      # Send message to any channel
-ncf switch <worker> <backend> [model]    # Switch backend/model
-ncf create <name> [--backend --model]    # Create new worker
-ncf destroy <worker>                     # Destroy worker
-ncf restart <worker> [--fresh]           # Restart container
-ncf session <worker> [lines]             # Show session transcript
-ncf history [worker]                     # Worker lifecycle events
-ncf debug                                # System state dump
-ncf rebuild                              # Rebuild container image
+ncf status [--json]                              # all workers, containers, backends
+ncf logs <worker> [--cache | --slow | --follow]  # per-worker turn audit
+ncf inject [--wait] <channel> <msg>              # write a message into IPC
+ncf switch <worker> <backend> [model]            # change backend or model
+ncf create <name> [--backend ...] [--model ...]  # create
+ncf destroy <worker>                             # destroy (workspace preserved)
+ncf restart <worker> [--fresh]                   # restart container
+ncf session <worker> [n] [--live | --json]       # transcript
+ncf history [worker] [--since DATE] [--limit N]  # lifecycle events
+ncf debug                                         # paths, DB, containers, proxies
+ncf rebuild                                       # rebuild image
+ncf test [--skip-nw]                              # the smoke test above
 ```
 
-**Examples:**
+`ncf inject --wait` polls docker logs until the agent responds, then prints the output.
+
+## Scenarios
+
+### 1. Create a worker
 
 ```bash
-ncf inject master "list all workers"
-ncf inject --wait test-worker "what model are you?"
-ncf inject dc:YOUR_CHANNEL_ID "hi"
-ncf logs test-worker --cache            # Show cache hits
-ncf logs test-worker --follow           # Follow container logs
+ncf inject master "create a worker called test-e2e"   # via master
+ncf create test-e2e                                    # direct (bypasses master)
 ```
 
-The `--wait` flag polls docker logs until the agent responds and prints the output.
+Verify: `#test-e2e` channel appears, `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE folder='discord_test-e2e';"` returns a row, `ls groups/discord_test-e2e/` exists.
 
-## Test Scenarios
-
-### 1. Create a Worker
-
-```bash
-# Via master agent (natural language)
-ncf inject master "create a worker called test-e2e"
-
-# Via CLI (direct — bypasses master)
-ncf create test-e2e
-```
-
-**Verify:**
-
-- Discord channel `#test-e2e` created
-- `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE folder='discord_test-e2e';"` shows a row
-- `ls groups/discord_test-e2e/` exists (workspace created)
-
-### 2. Message a Worker
+### 2. Message a worker
 
 ```bash
 ncf inject --wait test-e2e "say hello"
 ```
 
-**Verify:**
+Verify: container appears in `docker ps`, agent replies, no errors in `logs/nanoclaw.log`.
 
-- Container spawned: `docker ps | grep test-e2e`
-- Agent responded (check `--wait` output or logs)
-- `tail -20 logs/nanoclaw.log` shows no errors
-
-### 3. Worker Session Resume
+### 3. Session resume after container kill
 
 ```bash
-# Send a message to establish a session
-ncf inject --wait test-e2e "remember the word 'pineapple'"
-
-# Kill the container (simulates crash)
+ncf inject --wait test-e2e "remember the word pineapple"
 ncf restart test-e2e
-
-# Send another message (should resume session)
 ncf inject --wait test-e2e "what word did I ask you to remember?"
 ```
 
-**Verify:**
+Verify: new container spawned, session id preserved (`sqlite3 store/messages.db "SELECT session_id FROM sessions WHERE group_folder='discord_test-e2e';"`), agent has context.
 
-- New container spawned
-- Session ID preserved in SQLite: `sqlite3 store/messages.db "SELECT session_id FROM sessions WHERE group_folder='discord_test-e2e';"`
-- Agent has conversation context (may lose some due to compaction, but should have the gist)
-
-### 4. NanoClaw Restart Recovery
+### 4. NanoClaw restart recovery
 
 ```bash
-# Note current workers
 sqlite3 store/messages.db "SELECT folder FROM registered_groups WHERE is_main=0;"
-
-# Restart
 systemctl --user restart nanoclaw
-
-# Workers should still be registered
 sqlite3 store/messages.db "SELECT folder FROM registered_groups WHERE is_main=0;"
-
-# Message a worker — should spawn and respond
 ncf inject --wait test-e2e "are you alive?"
 ```
 
-**Verify:**
+Verify: registrations survive, workers respond after the restart, workspace files intact at `groups/discord_test-e2e/`.
 
-- All workers still registered after restart
-- Workers respond to messages (fresh container spawns)
-- Workspace files intact: `ls groups/discord_test-e2e/`
-
-### 5. Neuralwatt Backend
+### 5. Neuralwatt backend
 
 ```bash
-# Create a Neuralwatt worker
-ncf inject master "create a worker called nw-test with backend neuralwatt"
-
-# Or via CLI
 ncf create nw-test --backend neuralwatt
-
-# Message it
 ncf inject --wait nw-test "what model are you running?"
 ```
 
-**Verify:**
+Verify: `data/worker-backends.json` has the entry, shim logs show requests (`tail logs/shim.error.log`), agent responds via the open-source model.
 
-- Worker routes through shim: `cat data/worker-backends.json | grep nw-test`
-- Shim logs show requests: check `logs/shim.error.log`
-- Agent responds using an open-source model
-
-### 6. Model Discovery
+### 6. Model discovery
 
 ```bash
-# List available models
 curl -s http://localhost:3003/models | head -20
-
-# Fuzzy match
-curl -s http://localhost:3003/models/resolve/kimi%20fast
-curl -s http://localhost:3003/models/resolve/qwen%20coder
+curl -s http://localhost:3003/models/resolve/kimi-fast
+curl -s http://localhost:3003/models/resolve/qwen-coder
 curl -s http://localhost:3003/models/resolve/deepseek
 ```
 
-**Verify:**
+Verify: `/models` returns the catalog, `/models/resolve/<query>` returns one matching id.
 
-- `/models` returns a list from Neuralwatt's API
-- `/models/resolve/<query>` returns a single model ID that matches the query
-
-### 7. Model Switching
+### 7. Model switching
 
 ```bash
-# Switch an existing Neuralwatt worker's model
-ncf inject master "switch nw-test to qwen coder"
-
-# Or via CLI
 ncf switch nw-test neuralwatt qwen-coder
-
-# Verify the config changed
 ncf status --json | jq '.workers[] | select(.folder=="discord_nw-test")'
-
-# Message the worker to use the new model
 ncf inject --wait nw-test "what model are you now?"
 ```
 
 ### 8. Streaming (Neuralwatt)
 
 ```bash
-# Non-streaming test
+# non-streaming
 curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: sk-ant-api03-placeholder" \
-  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" -H "x-api-key: placeholder" -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-opus-4-6","max_tokens":50,"messages":[{"role":"user","content":"Hi"}]}'
 
-# Streaming test
+# streaming
 curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: sk-ant-api03-placeholder" \
-  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" -H "x-api-key: placeholder" -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-opus-4-6","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"Hi"}]}'
 ```
 
-**Verify:**
+Verify: non-streaming returns Anthropic JSON; streaming returns `event: message_start`, `event: content_block_delta`, `event: message_stop`.
 
-- Non-streaming returns a complete JSON response in Anthropic format
-- Streaming returns SSE events (`event: message_start`, `event: content_block_delta`, etc.)
-
-### 9. Usage Tracking
+### 9. Usage tracking
 
 ```bash
-# Check usage for all workers
 curl -s http://localhost:3003/usage
-
-# Check per-worker usage
 curl -s http://localhost:3003/usage/discord_nw-test
 ```
 
-### 10. Destroy a Worker
+### 10. Destroy a worker
 
 ```bash
-ncf inject master "destroy test-e2e"
-
-# Or via CLI
 ncf destroy test-e2e
 ```
 
-**Verify:**
+Verify: Discord channel deleted, registration gone, session id still present in `sessions` (for resume), `data/sessions/discord_test-e2e/.claude/` preserved, `agent-runner-src/` cleared, `groups/discord_test-e2e/` preserved.
 
-- Discord channel deleted
-- Registration removed: `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE folder='discord_test-e2e';"` returns nothing
-- Session ID preserved: `sqlite3 store/messages.db "SELECT * FROM sessions WHERE group_folder='discord_test-e2e';"` still has a row (for resume)
-- Session dir preserved: `ls data/sessions/discord_test-e2e/.claude/` still exists (conversation history kept for resume)
-- Agent-runner cache cleared: `ls data/sessions/discord_test-e2e/agent-runner-src/` gone
-- Workspace preserved: `ls groups/discord_test-e2e/` — repos still there
-
-### 11. Recreate with Resume
-
-After destroying a worker, its workspace and session state are preserved on disk. Recreating with the same name triggers a collision prompt.
+### 11. Recreate with `resume`
 
 ```bash
-# First, destroy a worker that has done some work
-ncf inject master "destroy test-e2e"
-
-# Recreate with the same name
 ncf inject master "create a worker called test-e2e"
-# Master detects existing workspace → asks "resume" or "fresh"
-# Answer "resume"
-```
-
-**What "resume" preserves:**
-
-- Workspace (`groups/discord_test-e2e/`): repos, code changes, CLAUDE.md
-- Session ID in SQLite: the SDK resumes the previous conversation
-- SDK state (`.claude/`): conversation history, compacted context
-
-**What "resume" rebuilds:**
-
-- Fresh container (new image, re-runs `init.sh`)
-- `init.sh` skips already-cloned repos but reinstalls tools/packages
-
-**Verify:**
-
-```bash
-# Workspace intact
-ls groups/discord_test-e2e/
-
-# Session ID carried over
-sqlite3 store/messages.db "SELECT session_id FROM sessions WHERE group_folder='discord_test-e2e';"
-
-# Message the worker — it should have conversation context
+# master detects the leftover workspace and asks resume vs fresh
+# answer: resume
 ncf inject --wait test-e2e "what were we working on?"
 ```
 
-**What "fresh" does differently:** Wipes everything (workspace, session, SDK state). The worker starts completely clean as if it never existed.
+Resume preserves the workspace, the SDK session, and `.claude/`. It rebuilds the container and re-runs `init.sh` (idempotent). Choose `fresh` instead if you want a clean slate.
 
-### 12. Exec into a Container
+### 12. Exec into a container
 
 ```bash
-# Find container
 docker ps --filter name=test-e2e
-
-# Shell in
 docker exec -it $(docker ps -q --filter name=test-e2e) bash
-
-# Inside the container, check:
-ls /workspace/group/          # Repos and code
-cat /workspace/group/CLAUDE.md  # Worker instructions
-echo $ANTHROPIC_BASE_URL      # Which backend
-env | grep NANOCLAW            # Model config
+# inside:
+ls /workspace/group/
+cat /workspace/group/CLAUDE.md
+echo $ANTHROPIC_BASE_URL
+env | grep NANOCLAW
 ```
 
-## After Host-Side Changes
-
-When you modify `src/`, `tools/`, or other host code:
+## After host changes
 
 ```bash
 npm run build
 npx vitest run
 systemctl --user restart nanoclaw
-ncf inject --wait test-e2e "say hi" && tail -10 logs/nanoclaw.log
+ncf inject --wait test-e2e "ping" && tail -10 logs/nanoclaw.log
 ```
 
-## After Container-Side Changes
-
-When you modify `container/`, `worker-profiles/`, or agent-runner source:
+## After container-side changes
 
 ```bash
 npm run build
 ./container/build.sh
 systemctl --user restart nanoclaw
-# Agent-runner source auto-syncs by mtime; containers respawn on next message
-ncf inject --wait test-e2e "say hi"
+# agent-runner source auto-syncs by mtime; the next message picks it up
+ncf inject --wait test-e2e "ping"
 ```
 
-## After Shim Changes
-
-When you modify `tools/anthropic-shim.ts`:
+## After shim changes
 
 ```bash
 systemctl --user restart nanoclaw-shim
-# Test non-streaming
+
 curl -s http://localhost:3003/w/discord_nw-test/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: sk-ant-api03-placeholder" \
-  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" -H "x-api-key: placeholder" -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-opus-4-6","max_tokens":50,"messages":[{"role":"user","content":"Hi"}]}'
-# Test streaming (add "stream":true)
-# Check logs
+
 tail logs/shim.error.log
 ```
 
-## Debug Bot (True E2E Testing)
+## Real Discord with the debug bot
 
-`ncf inject` bypasses Discord — messages go directly to the DB. For true end-to-end testing through Discord (message → bot receives → agent processes → bot responds), use a separate debug bot:
+`ncf inject` writes straight to IPC, bypassing Discord. To verify the actual gateway path (Discord → host → container → Discord), use a second bot.
 
-1. Create a second Discord bot (e.g., "NanoClaw Debug") in the Developer Portal
-2. Invite it to the same server with `Send Messages`, `Read Message History`, `Add Reactions`, `View Channels`
-3. Enable **Message Content Intent** in the bot settings
-4. Save the token at `~/.config/nanoclaw/debug_bot_token`
-5. Add the bot's user ID to `.env`: `DISCORD_ALLOWED_BOT_IDS=<bot-user-id>`
-6. Restart NanoClaw
-
-The `DISCORD_ALLOWED_BOT_IDS` setting tells NanoClaw to treat messages from that bot as if they came from a human user (normally all bot messages are ignored).
+1. Create another Discord bot (e.g. "NanoClaw Debug") in the Developer Portal.
+2. Invite it with `Send Messages`, `Read Message History`, `Add Reactions`, `View Channels`.
+3. Enable **Message Content Intent** in the bot settings.
+4. Save the token at `~/.config/nanoclaw/debug_bot_token`.
+5. Add `DISCORD_ALLOWED_BOT_IDS=<bot-user-id>` to `.env`. NanoClaw normally ignores all bot messages; this allowlists the debug bot as a "user".
+6. `systemctl --user restart nanoclaw`.
 
 ```bash
-# Send a message as the debug bot
 DEBUG_TOKEN=$(cat ~/.config/nanoclaw/debug_bot_token)
+
+# send
 curl -s -X POST -H "Authorization: Bot $DEBUG_TOKEN" -H "Content-Type: application/json" \
-  -d '{"content":"hello from debug bot"}' \
+  -d '{"content":"hi from debug bot"}' \
   "https://discord.com/api/v10/channels/<channel-id>/messages"
 
-# Read messages
+# read
 curl -s -H "Authorization: Bot $DEBUG_TOKEN" \
   "https://discord.com/api/v10/channels/<channel-id>/messages?limit=5"
 ```
 
-## Reading Logs
+Prefer the debug bot when you're testing message delivery, reactions, or formatting. `ncf inject` doesn't exercise those.
+
+## Reading logs
 
 ```bash
-# Main NanoClaw logs
-tail -f logs/nanoclaw.log
-
-# Shim logs (Neuralwatt requests)
-tail -f logs/shim.error.log
-
-# Container logs (specific worker)
+tail -f logs/nanoclaw.log                                # pretty
+jq 'select(.level >= 50)' logs/nanoclaw.jsonl | tail     # errors as JSON
+tail -f logs/shim.error.log                              # shim
 docker logs $(docker ps -q --filter name=test-e2e) 2>&1 | tail -50
-
-# Enable shim debug logging (verbose request/response)
-# Set SHIM_DEBUG=1 in the shim's environment, then restart
 ```
 
-**Tracing a request end-to-end:** Every user message gets a trace ID (format: `t-<timestamp>-<hex>`) that appears in both host JSONL and container stderr. To trace a failed or slow request:
+### Trace ids end-to-end
+
+Every user message gets a trace id (`t-<ts>-<hex>`) at the host. The id propagates through container input and agent-runner stderr, so one grep follows a request across layers.
 
 ```bash
-# 1. Find the trace ID from recent host logs
-jq 'select(.msg == "Processing messages")' logs/nanoclaw.5.jsonl | tail -3
-
-# 2. Follow it across all layers
+jq 'select(.msg == "Processing messages") | .traceId' logs/nanoclaw.jsonl | tail -3
 grep "t-1775854357638-9475" logs/nanoclaw.*.jsonl logs/workers/*/stderr-*.log
 ```
 
-Container stderr is archived to `logs/workers/<folder>/stderr-<ts>.log` on every container exit (last 20 per worker), so trace IDs remain searchable after containers are removed.
+Container stderr is archived per spawn at `logs/workers/<folder>/stderr-<ts>.log` (last 20), so trace ids remain searchable after the container exits.
 
-## Common Failures
+For shim payload inspection, set `SHIM_DUMP=1` and the shim writes full request bodies to `/tmp/shim-dump-<folder>-<ts>.json`. Useful for verifying the system prompt and tools that actually reach the provider.
 
-| Symptom                                | Likely cause                                                | Fix                                                        |
-| -------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
-| Worker channel created, no response    | `requires_trigger` is 1                                     | Check SQLite, should be 0 for workers                      |
-| "ncf create: missing required fields"  | `DISCORD_GUILD_ID` not in container env                     | Check `.env` and container-runner.ts                       |
-| Agent doesn't know about MCP tools     | Agent-runner auto-sync failed or container hasn't restarted | Kill container, message worker again (auto-syncs by mtime) |
-| Container builds don't pick up changes | Docker layer caching                                        | `./container/build.sh` (uses `--no-cache`)                 |
-| Worker stuck in crash loop             | Stale session state                                         | Delete `.claude/` for that worker, restart                 |
-| Shim returns 500                       | Neuralwatt API key invalid or model not found               | Check your Neuralwatt API key file, test with curl         |
+## Common failures
+
+| Symptom | Likely cause | Fix |
+|-|-|-|
+| Worker channel exists, no response | `requires_trigger=1` | Set to 0 in `registered_groups` |
+| "ncf create: missing required fields" | `DISCORD_GUILD_ID` not exported | Confirm in `.env`; restart |
+| Agent doesn't see new MCP tools | Stale agent-runner cache | `ncf restart <worker>` |
+| Container build doesn't pick up changes | Docker layer cache | `./container/build.sh` |
+| Worker stuck in crash loop | Stale `.claude/` | Destroy and recreate with `fresh` |
+| Shim returns 500 | Bad Neuralwatt key or unknown model | Check key file; curl the model directly |

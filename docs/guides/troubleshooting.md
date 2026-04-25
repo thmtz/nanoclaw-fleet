@@ -1,143 +1,192 @@
-# NanoClaw Debug Checklist
+# Troubleshooting
 
-## Known Issues (2026-02-08)
+Common problems and their fixes. For deeper triage commands, see [debug-checklist.md](debug-checklist.md).
 
-### 1. [FIXED] Resume branches from stale tree position
-When agent teams spawns subagent CLI processes, they write to the same session JSONL. On subsequent `query()` resumes, the CLI reads the JSONL but may pick a stale branch tip (from before the subagent activity), causing the agent's response to land on a branch the host never receives a `result` for. **Fix**: pass `resumeSessionAt` with the last assistant message UUID to explicitly anchor each resume.
-
-### 2. IDLE_TIMEOUT == CONTAINER_TIMEOUT (both 30 min)
-Both timers fire at the same time, so containers always exit via hard SIGKILL (code 137) instead of graceful `_close` sentinel shutdown. The idle timeout should be shorter (e.g., 5 min) so containers wind down between messages, while container timeout stays at 30 min as a safety net for stuck agents.
-
-### 3. Cursor advanced before agent succeeds
-`processGroupMessages` advances `lastAgentTimestamp` before the agent runs. If the container times out, retries find no messages (cursor already past them). Messages are permanently lost on timeout.
-
-## Quick Status Check
+## The host isn't running
 
 ```bash
-# 1. Is the service running?
-launchctl list | grep nanoclaw
-# Expected: PID  0  com.nanoclaw (PID = running, "-" = not running, non-zero exit = crashed)
-
-# 2. Any running containers?
-container ls --format '{{.Names}} {{.Status}}' 2>/dev/null | grep nanoclaw
-
-# 3. Any stopped/orphaned containers?
-container ls -a --format '{{.Names}} {{.Status}}' 2>/dev/null | grep nanoclaw
-
-# 4. Recent errors in service log?
-grep -E 'ERROR|WARN' logs/nanoclaw.log | tail -20
-
-# 5. Is WhatsApp connected? (look for last connection event)
-grep -E 'Connected to WhatsApp|Connection closed|connection.*close' logs/nanoclaw.log | tail -5
-
-# 6. Are groups loaded?
-grep 'groupCount' logs/nanoclaw.log | tail -3
+systemctl --user status nanoclaw       # Linux
+launchctl list | grep nanoclaw         # macOS
 ```
 
-## Session Transcript Branching
+If the unit failed: `journalctl --user -u nanoclaw -n 100`. Common causes:
+
+- Wrong `WorkingDirectory` in the systemd unit. Replace `{{PROJECT_ROOT}}` with the absolute path.
+- `npm run build` was never run. `dist/` is empty.
+- Bad `.env` syntax (unquoted spaces in a value). The host fails fast.
+
+## Worker channel exists but the agent never replies
+
+Check `requires_trigger`:
 
 ```bash
-# Check for concurrent CLI processes in session debug logs
-ls -la data/sessions/<group>/.claude/debug/
-
-# Count unique SDK processes that handled messages
-# Each .txt file = one CLI subprocess. Multiple = concurrent queries.
-
-# Check parentUuid branching in transcript
-python3 -c "
-import json, sys
-lines = open('data/sessions/<group>/.claude/projects/-workspace-group/<session>.jsonl').read().strip().split('\n')
-for i, line in enumerate(lines):
-  try:
-    d = json.loads(line)
-    if d.get('type') == 'user' and d.get('message'):
-      parent = d.get('parentUuid', 'ROOT')[:8]
-      content = str(d['message'].get('content', ''))[:60]
-      print(f'L{i+1} parent={parent} {content}')
-  except: pass
-"
+sqlite3 store/messages.db "SELECT folder, requires_trigger FROM registered_groups;"
 ```
 
-## Container Timeout Investigation
+Workers should be `0`. If yours is `1`, the bot only responds to `@<assistant>` mentions, which the master never sends.
 
-```bash
-# Check for recent timeouts
-grep -E 'Container timeout|timed out' logs/nanoclaw.log | tail -10
-
-# Check container log files for the timed-out container
-ls -lt groups/*/logs/container-*.log | head -10
-
-# Read the most recent container log (replace path)
-cat groups/<group>/logs/container-<timestamp>.log
-
-# Check if retries were scheduled and what happened
-grep -E 'Scheduling retry|retry|Max retries' logs/nanoclaw.log | tail -10
+```sql
+UPDATE registered_groups SET requires_trigger=0 WHERE folder='discord_<name>';
 ```
 
-## Agent Not Responding
+## "ncf create: missing required fields"
+
+`DISCORD_GUILD_ID` isn't reaching the host process. Confirm it's in `.env` and the systemd unit reads `EnvironmentFile=` from that file. Restart after edits.
+
+## Agent doesn't see new MCP tools or instructions
+
+Stale agent-runner cache or stale CLAUDE.md. Both refresh on the next container spawn.
 
 ```bash
-# Check if messages are being received from WhatsApp
-grep 'New messages' logs/nanoclaw.log | tail -10
-
-# Check if messages are being processed (container spawned)
-grep -E 'Processing messages|Spawning container' logs/nanoclaw.log | tail -10
-
-# Check if messages are being piped to active container
-grep -E 'Piped messages|sendMessage' logs/nanoclaw.log | tail -10
-
-# Check the queue state — any active containers?
-grep -E 'Starting container|Container active|concurrency limit' logs/nanoclaw.log | tail -10
-
-# Check lastAgentTimestamp vs latest message timestamp
-sqlite3 store/messages.db "SELECT chat_jid, MAX(timestamp) as latest FROM messages GROUP BY chat_jid ORDER BY latest DESC LIMIT 5;"
+ncf restart <worker>           # respawn the container
 ```
 
-## Container Mount Issues
+For instruction changes that need to apply to all workers, also restart the host so `profile-sync` regenerates each `groups/<folder>/CLAUDE.md`:
 
 ```bash
-# Check mount validation logs (shows on container spawn)
-grep -E 'Mount validated|Mount.*REJECTED|mount' logs/nanoclaw.log | tail -10
+systemctl --user restart nanoclaw
+```
 
-# Verify the mount allowlist is readable
+## Container build doesn't pick up source changes
+
+Docker layer cache is aggressive. Use the build script — it forces a clean rebuild for the agent layer:
+
+```bash
+./container/build.sh
+```
+
+If you suspect deeper cache issues, prune the builder:
+
+```bash
+docker builder prune -af
+./container/build.sh
+```
+
+## Repos fail to clone (403 / 404)
+
+The container needs a GitHub token with `repo` scope (and `workflow` if any worker pushes `.github/workflows/*`).
+
+```bash
+# host has the token?
+cat ~/.config/nanoclaw/github_token | head -c 10
+
+# .env points at it?
+grep NANOCLAW_GITHUB_TOKEN_PATH .env
+
+# token reaches the container?
+docker exec <container> bash -c 'echo $GITHUB_TOKEN | head -c 10'
+```
+
+Classic PATs cover all orgs you belong to. Fine-grained PATs need per-org approval and break in confusing ways; use classic PATs unless you know you need fine-grained.
+
+## Worker stuck in a crash loop
+
+Stale `.claude/` is the usual culprit. Destroy and recreate with `fresh`:
+
+```bash
+ncf destroy <worker>
+ncf create <worker>             # answer "fresh" at the prompt
+```
+
+If the issue is in `init.sh` or the image, fix that first; the next spawn will pick it up.
+
+## Discord gateway zombies (no logs, no responses)
+
+The gateway socket can wedge in `CLOSE_WAIT` to Cloudflare without a visible error. Symptoms: systemd shows the unit active, but messages stop landing in the host log.
+
+```bash
+ss -tnp | grep CLOSE-WAIT | grep $(pgrep -f 'node dist')   # confirm zombies
+systemctl --user restart nanoclaw                          # fix
+```
+
+If this recurs, file a bead for a reconnect watchdog.
+
+## Status pin pile-up in `#master`
+
+The host pins one status message per channel. Stale pins should be unpinned automatically every ten minutes, but if you have multiple bot identities or recently changed the bot user, leftovers can stack up. The host now sweeps stale pins on every channel scan; restart the host to force an immediate sweep:
+
+```bash
+systemctl --user restart nanoclaw
+```
+
+If the pile keeps coming back, check the bot user id matches what the host expects:
+
+```bash
+grep '"applicationId"' logs/nanoclaw.jsonl | tail -1
+```
+
+## Shim returns 500 on Neuralwatt requests
+
+Most likely a bad API key or unknown model.
+
+```bash
+# direct hit on the shim
+curl -s http://localhost:3003/w/discord_<worker>/v1/messages \
+  -H 'Content-Type: application/json' -H 'x-api-key: placeholder' -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"claude-opus-4-6","max_tokens":40,"messages":[{"role":"user","content":"hi"}]}'
+
+# direct provider check
+curl -s https://api.neuralwatt.com/v1/models -H "Authorization: Bearer $(grep NEURALWATT_API_KEY .env | cut -d= -f2)" | head
+
+tail logs/shim.error.log
+```
+
+The shim resolves model names via fuzzy match, but requires the underlying provider to know the model. Try the canonical id directly to confirm.
+
+## "401 invalid x-api-key" from the SDK
+
+The shim default falls back to Anthropic when a folder has no entry in `data/worker-backends.json`. If you spawned a Neuralwatt worker but the entry never landed, the shim happily forwards to `api.anthropic.com` with the placeholder key. The container-runner now seeds the entry on every spawn (`seedBackendEntry` in `src/backend-defaults.ts`), so this should not happen on a fresh build. If you see it:
+
+```bash
+cat data/worker-backends.json | jq '."discord_<worker>"'
+ncf switch <worker> neuralwatt <model>     # rewrites the entry
+```
+
+## Mount denied on container spawn
+
+The mount allowlist (`~/.config/nanoclaw/mount-allowlist.json`) is read at host startup and immutable for the process. New paths require a host restart.
+
+```bash
+grep -E 'Mount.*REJECTED|mount' logs/nanoclaw.log | tail
 cat ~/.config/nanoclaw/mount-allowlist.json
-
-# Check group's container_config in DB
-sqlite3 store/messages.db "SELECT name, container_config FROM registered_groups;"
-
-# Test-run a container to check mounts (dry run)
-# Replace <group-folder> with the group's folder name
-container run -i --rm --entrypoint ls nanoclaw-agent:latest /workspace/extra/
 ```
 
-## WhatsApp Auth Issues
+Add the path to `allowedRoots`, then `systemctl --user restart nanoclaw`.
+
+## Kubernetes / image garbage collection
+
+If you run Rancher Desktop with Kubernetes enabled, `kubelet` GCs unreferenced images when disk usage crosses ~85%. NanoClaw containers run with `--rm`, so the image has no long-running referrer and gets reaped overnight.
 
 ```bash
-# Check if QR code was requested (means auth expired)
-grep 'QR\|authentication required\|qr' logs/nanoclaw.log | tail -5
-
-# Check auth files exist
-ls -la store/auth/
-
-# Re-authenticate if needed
-npm run auth
+grep -i 'nanoclaw' ~/Library/Logs/rancher-desktop/k3s.log | grep 'Removing image'
+grep -E 'image found|image NOT found' logs/nanoclaw.log
 ```
 
-## Service Management
+Disable Kubernetes if you don't need it:
 
 ```bash
-# Restart the service
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+rdctl set --kubernetes-enabled=false
+./container/build.sh
+```
 
-# View live logs
+If you need Kubernetes, push `nanoclaw-agent` to a registry the kubelet won't GC, or raise GC thresholds.
+
+## "Worker not found" from `ncf inject`
+
+The channel name resolution is partial-match. Two workers with overlapping prefixes confuse it:
+
+```bash
+ncf status        # confirms what's registered
+ncf inject discord_<exact-folder> "..."
+```
+
+## Logs to read first
+
+```bash
 tail -f logs/nanoclaw.log
-
-# Stop the service (careful — running containers are detached, not killed)
-launchctl bootout gui/$(id -u)/com.nanoclaw
-
-# Start the service
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nanoclaw.plist
-
-# Rebuild after code changes
-npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+jq 'select(.level >= 50)' logs/nanoclaw.jsonl | tail -20
+docker logs $(docker ps -q --filter name=<worker>) 2>&1 | tail -50
+tail -f logs/shim.error.log
 ```
+
+For tracing one request through every layer, see [testing.md](testing.md#trace-ids-end-to-end).

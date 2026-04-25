@@ -2,31 +2,31 @@
 
 How API traffic flows from worker containers to inference backends.
 
-## Architecture
+## Topology
 
 ```
                                 ┌──────────────────────┐
-                                │   api.anthropic.com   │
+                                │   api.anthropic.com  │
                                 └──────────┬───────────┘
                                            │
                                 ┌──────────┴───────────┐
-                                │  Credential Proxy     │
-                                │  :3001 (OAuth inject) │
+                                │  Credential Proxy    │
+                                │  :3001 (OAuth/API)   │
                                 └──────────┬───────────┘
                                            │
          ┌─────────────────────────────────┼─────────────────────────────────┐
          │                                 │                                 │
 ┌────────┴─────────┐  ┌───────────────────┴──────────┐  ┌────────────────────┴───────┐
-│  Anthropic Worker │  │  Anthropic Worker            │  │  Neuralwatt Worker         │
-│  ANTHROPIC_BASE_  │  │  ANTHROPIC_BASE_URL=         │  │  ANTHROPIC_BASE_URL=       │
-│  URL=:3001        │  │  :3001                       │  │  :3003/w/discord_foo       │
-│  (OAuth)          │  │  (OAuth)                     │  │  (API key placeholder)     │
+│ Anthropic Worker │  │ Anthropic Worker             │  │ Neuralwatt Worker          │
+│ ANTHROPIC_BASE_  │  │ ANTHROPIC_BASE_URL=          │  │ ANTHROPIC_BASE_URL=        │
+│ URL=:3001        │  │ :3001                        │  │ :3003/w/discord_foo        │
+│ (OAuth)          │  │ (API key)                    │  │ (placeholder key)          │
 └──────────────────┘  └──────────────────────────────┘  └────────────┬───────────────┘
                                                                      │
                                                           ┌──────────┴───────────┐
                                                           │  Translation Shim    │
                                                           │  :3003               │
-                                                          │  Anthropic → OpenAI  │
+                                                          │  Anthropic ↔ OpenAI  │
                                                           │  reads config/req    │
                                                           └──────────┬───────────┘
                                                                      │
@@ -36,70 +36,82 @@ How API traffic flows from worker containers to inference backends.
                                                           └──────────────────────┘
 ```
 
-## Request Flow: Anthropic Worker
+The Claude Agent SDK only knows how to speak Anthropic's Messages API. Anything else has to look like Anthropic from the SDK's side. Two outbound proxies make that work:
+
+- **Credential proxy** (`src/credential-proxy.ts`, port 3001) holds the real OAuth token or API key on the host and injects it into outbound traffic. The container only ever sees a placeholder. Required for Anthropic workers, transparent for Neuralwatt.
+- **Translation shim** (`tools/anthropic-shim.ts`, port 3003) translates Anthropic Messages requests into OpenAI `chat/completions` and translates the response back. It also tracks usage and energy.
+
+## Request flow: Anthropic worker
 
 ```
-1. Agent SDK sends POST /v1/messages
-   Headers: Authorization: Bearer <temp-api-key>
-   Body: { model: "claude-opus-4-6", messages: [...] }
+1. Agent SDK → POST /v1/messages
+   Authorization: Bearer <temp-api-key>
+   { model: "claude-opus-4-6", messages: [...] }
 
 2. Credential proxy (:3001)
-   - First request: SDK sends OAuth exchange to /api/oauth/claude_cli/create_api_key
-     Proxy replaces "Bearer placeholder" with real OAuth token
-     Anthropic returns a temporary API key
-   - Subsequent requests: SDK sends x-api-key: <temp-key>
-     Proxy passes through (temp key is already valid)
+   - First call uses /api/oauth/claude_cli/create_api_key with placeholder Bearer.
+     Proxy swaps in the real OAuth token; Anthropic returns a temporary API key.
+   - Subsequent calls send x-api-key directly; proxy passes through.
 
-3. api.anthropic.com responds with Anthropic Messages format
+3. api.anthropic.com responds in Anthropic Messages format.
 ```
 
-## Request Flow: Neuralwatt Worker
+For API-key auth the flow is simpler: the proxy injects `x-api-key` on every request. The container side never sees the secret.
+
+## Request flow: Neuralwatt worker
 
 ```
-1. Agent SDK sends POST /w/discord_foo/v1/messages
-   Headers: x-api-key: placeholder
-   Body: { model: "claude-opus-4-6", messages: [...], tools: [...] }
+1. Agent SDK → POST /w/discord_foo/v1/messages
+   x-api-key: placeholder
+   { model: "claude-opus-4-6", messages: [...], tools: [...] }
 
 2. Shim (:3003)
-   - Extracts worker folder from URL path: "discord_foo"
-   - Reads data/worker-backends.json → { backend: "neuralwatt", model: "moonshotai/Kimi-K2.5" }
-   - Translates request:
+   - Extracts the folder from the URL: "discord_foo".
+   - Reads data/worker-backends.json: { backend: "neuralwatt", model: "moonshotai/Kimi-K2.5" }.
+   - Translates the request:
      * system blocks → system message
-     * tool_use/tool_result blocks → OpenAI function call format
-     * model name → resolved Neuralwatt model
-   - Sends POST /v1/chat/completions to api.neuralwatt.com
-     Headers: Authorization: Bearer <neuralwatt-api-key>
+     * tool_use / tool_result blocks → OpenAI function-call format
+     * model id → resolved Neuralwatt model
+   - POSTs /v1/chat/completions to api.neuralwatt.com with the real API key.
 
-3. Neuralwatt responds in OpenAI format
+3. Neuralwatt responds in OpenAI format.
 
-4. Shim translates response back:
-   * function calls → tool_use content blocks
+4. Shim translates back:
+   * function_call → tool_use content blocks
    * reasoning_content → thinking blocks
-   * finish_reason → stop_reason mapping
-   * Returns Anthropic Messages format to the SDK
+   * finish_reason → stop_reason
+   * usage + energy_joules attached to the response stream
 ```
+
+The shim caches `worker-backends.json` with an mtime check, so model edits take effect on the next request without a restart.
 
 ## Configuration
 
-**Per-worker backend** is set at container creation time in `worker.env`:
+### Per-worker backend
+
+Set at container creation in `worker.env`:
+
 ```
-NANOCLAW_BACKEND=neuralwatt   # or absent for anthropic
+NANOCLAW_BACKEND=neuralwatt   # absent for anthropic
 ```
 
-`container-runner.ts` reads this and sets `ANTHROPIC_BASE_URL` accordingly. The backend cannot be changed without restarting the container.
+`src/container-runner.ts` reads this and points `ANTHROPIC_BASE_URL` at the right proxy. The backend is fixed for the container's lifetime; switching backends requires `ncf switch`, which restarts the container.
 
-**Per-worker model** (Neuralwatt only) can be changed at runtime via `data/worker-backends.json`:
+### Per-worker model (Neuralwatt)
+
+Lives in `data/worker-backends.json`:
+
 ```json
 {
   "discord_foo": { "backend": "neuralwatt", "model": "moonshotai/Kimi-K2.5" }
 }
 ```
 
-The shim re-reads this file on each request (cached with mtime check). Model changes take effect immediately.
+The shim reads this on every request (mtime-cached). Edits or `ncf switch <worker> neuralwatt <model>` take effect immediately.
 
-### Default Backend/Model from `.env`
+### Defaults from `.env`
 
-Four env vars seed `worker-backends.json` on first spawn when no entry exists:
+Four env vars seed `worker-backends.json` on the first spawn when no entry exists:
 
 ```
 NANOCLAW_DEFAULT_WORKER_BACKEND=neuralwatt
@@ -108,30 +120,38 @@ NANOCLAW_DEFAULT_MASTER_BACKEND=neuralwatt
 NANOCLAW_DEFAULT_MASTER_MODEL=zai-org/GLM-5.1-FP8
 ```
 
-Resolved by `src/backend-defaults.ts::resolveDefaultBackendConfig`, which re-reads `.env` on each call so edits take effect without restarting nanoclaw.
+`src/backend-defaults.ts::resolveDefaultBackendConfig` re-reads `.env` on every call, so edits take effect without restarting NanoClaw.
 
-**Shim routing footgun (fixed):** the shim defaults to `{ backend: 'anthropic' }` when a folder has no entry in `worker-backends.json`. If container-runner started a container with env-derived `NANOCLAW_BACKEND=neuralwatt` but never wrote the entry, the shim would route that worker's traffic to the real Anthropic API with a placeholder API key → 401 "invalid x-api-key".
+To revert a worker (or the master) back to env defaults: delete its entry from `data/worker-backends.json`. The next spawn re-seeds from `.env`.
 
-Fix: `container-runner.ts` calls `seedBackendEntry(folder, defaults)` on spawn when no entry exists, persisting the env-derived config so the shim (separate process) routes consistently. Shim and container always agree.
+### Shim seeding (so shim and container agree)
 
-### Changing an existing worker's model
+The shim (separate process) defaults to Anthropic when a folder has no entry. If the container were spawned with env-derived `NANOCLAW_BACKEND=neuralwatt` but no entry was written, the shim would route that worker's traffic to the real Anthropic API with a placeholder key and the SDK would see `401 invalid x-api-key`.
 
-- `ncf switch <worker> <backend> [model]` — explicit, persists to state file.
-- Or edit `data/worker-backends.json` directly (mtime-cached, takes effect next request).
-- To revert a worker/master back to env defaults: delete the folder's entry from `worker-backends.json`; next container spawn re-seeds from `.env`.
+To prevent this, `container-runner.ts` calls `seedBackendEntry(folder, defaults)` on every spawn when no entry exists. The shim and the container then agree on what backend to use.
 
-## Key Files
+## Provider API keys
+
+Direct provider keys are passed into every container as env vars:
+
+- `FIREWORKS_API_KEY`
+- `TOGETHER_API_KEY`
+- `SYNTHETIC_API_KEY`
+
+These are injected from `.env` (read at spawn) and exposed for ad-hoc provider calls (eval scripts, model comparisons, one-off experiments). They are independent of the per-worker routing above. Use them when you explicitly want to call a provider, not when you want the worker's normal inference path.
+
+## Key files
 
 | File | Role |
 |-|-|
-| `src/credential-proxy.ts` | OAuth/API key injection for Anthropic |
-| `tools/anthropic-shim.ts` | Anthropic→OpenAI translation + routing |
-| `src/container-runner.ts` | Sets ANTHROPIC_BASE_URL per container |
-| `data/worker-backends.json` | Runtime model config (shim reads per-request) |
+| `src/credential-proxy.ts` | OAuth and API-key injection for Anthropic |
+| `tools/anthropic-shim.ts` | Anthropic ↔ OpenAI translation, model resolution, usage tracking |
+| `src/container-runner.ts` | Sets `ANTHROPIC_BASE_URL` per container, seeds backend entries |
+| `src/backend-defaults.ts` | Resolves default backend/model from `.env` |
+| `data/worker-backends.json` | Runtime backend/model state (shim reads per request) |
 
 ## Limitations
 
-- Backend (Anthropic vs Neuralwatt) is fixed per container lifetime
-- Streaming is supported but tool call streaming can be complex (partial JSON accumulation)
-- Tool call translation covers common cases but complex schemas may hit edge cases
-- Open-source models vary in tool calling quality
+- Backend (Anthropic vs Neuralwatt) is fixed per container lifetime. Switching restarts the container.
+- Streaming is supported, but tool-call streaming requires partial-JSON accumulation; complex tool schemas can hit edges.
+- Open-source models vary in tool-calling quality; Kimi and GLM are the better-tested paths.

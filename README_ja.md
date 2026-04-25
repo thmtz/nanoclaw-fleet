@@ -31,7 +31,7 @@ curl -fsSL https://nanoclaw.dev/install-docker-sandboxes-windows.sh | bash
 
 > 現在、macOS（Apple Silicon）とWindows（x86）に対応しています。Linux対応は近日公開予定。
 
-<p align="center"><a href="https://nanoclaw.dev/blog/nanoclaw-docker-sandboxes">発表記事を読む →</a>&nbsp; · &nbsp;<a href="docs/docker-sandboxes.md">手動セットアップガイド →</a></p>
+<p align="center"><a href="https://nanoclaw.dev/blog/nanoclaw-docker-sandboxes">発表記事を読む →</a>&nbsp; · &nbsp;<a href="docs/upstream/docker-sandboxes.md">手動セットアップガイド →</a></p>
 
 ---
 
@@ -156,7 +156,7 @@ Telegram対応を追加したい場合、コアコードベースにTelegramを�
 
 単一のNode.jsプロセス。チャネルはスキルで追加され、起動時に自己登録します — オーケストレーターは認証情報が存在するチャネルを接続します。エージェントはファイルシステム分離された独立したLinuxコンテナで実行されます。マウントされたディレクトリのみアクセス可能。グループごとのメッセージキューと同時実行制御。ファイルシステム経由のIPC。
 
-詳細なアーキテクチャについては、[docs/SPEC.md](docs/SPEC.md)を参照してください。
+詳細なアーキテクチャについては、[docs/upstream/SPEC.md](docs/upstream/SPEC.md)を参照してください。
 
 主要ファイル：
 - `src/index.ts` - オーケストレーター：状態、メッセージループ、エージェント呼び出し
@@ -181,7 +181,7 @@ Dockerはクロスプラットフォーム対応（macOS、Linux、さらにWSL2
 
 **セキュリティは大丈夫ですか？**
 
-エージェントはアプリケーションレベルのパーミッションチェックの背後ではなく、コンテナで実行されます。明示的にマウントされたディレクトリのみアクセスできます。実行するものをレビューすべきですが、コードベースは十分に小さいため実際にレビュー可能です。完全なセキュリティモデルについては[docs/SECURITY.md](docs/SECURITY.md)を参照してください。
+エージェントはアプリケーションレベルのパーミッションチェックの背後ではなく、コンテナで実行されます。明示的にマウントされたディレクトリのみアクセスできます。実行するものをレビューすべきですが、コードベースは十分に小さいため実際にレビュー可能です。完全なセキュリティモデルについては[docs/upstream/SECURITY.md](docs/upstream/SECURITY.md)を参照してください。
 
 **なぜ設定ファイルがないのか？**
 

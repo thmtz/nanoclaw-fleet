@@ -1,106 +1,85 @@
-# Setup: Dynamic Worker Agents
+# Setup
 
-How to set up NanoClaw Fleet with dynamic worker spawning via Discord.
+How to get a NanoClaw Fleet instance running with Discord and dynamic workers.
 
-## Recommended: Automated Setup
-
-The fastest way to get running is to let Claude handle it:
+## Recommended: `/setup`
 
 ```bash
-git clone https://github.com/thmtz/nanoclaw-fleet.git && cd nanoclaw-fleet
-claude
+git clone https://github.com/thmtz/nanoclaw-fleet.git
+cd nanoclaw-fleet
+claude     # or your coding agent of choice
+# then: /setup
 ```
 
-Then run `/setup`. The setup skill walks you through everything below automatically, only pausing when it needs your input.
+The `/setup` skill installs Node and Docker (if missing), walks you through the Discord bot, configures `.env`, registers the master channel, and starts the systemd service. It only stops to ask for inputs it cannot generate (bot tokens, guild ids).
 
-## Manual Setup
+If you would rather drive setup by hand, the rest of this guide covers the same ground.
 
-If you prefer to set things up by hand, follow the steps below.
+## Prerequisites
 
-### Prerequisites
+- Node.js 22 or later
+- Docker, with the daemon accessible to your user
+- A Discord server you control and a Discord bot application
+- [Bun](https://bun.sh), only if you plan to route workers through Neuralwatt or another OpenAI-compatible provider (see [the shim section](#9-inference-shim-optional))
 
-- Node.js 22+
-- Docker installed and accessible to your user
-- A Discord bot application (https://discord.com/developers/applications)
-- [Bun](https://bun.sh) _(optional)_ — required only if you want to route workers through an OpenAI-compatible inference backend (e.g., Neuralwatt). See section 9.
+## Repo vs. user config
 
-### What Setup Covers
+NanoClaw separates generic code from per-installation configuration. The repo holds the host process, container image, agent runner, MCP tools, and example profiles. Your installation lives at `~/.config/nanoclaw/`.
 
-Whether you use `/setup` or follow the manual steps below, you'll configure:
+| Directory | What's in it |
+|-|-|
+| `src/` | Host process: gateway, container lifecycle, IPC |
+| `container/` | Dockerfile, agent runner, MCP tools, container skills |
+| `instructions/` | Repo-side agent instructions: global, master, worker |
+| `worker-profiles/` | Example worker profiles (templates) |
+| `tools/` | Translation shim, status helpers, restart watchdog |
+| `docs/` | These docs |
 
-1. **Claude auth**: OAuth token or Anthropic API key
-2. **Discord bot token**: from the Developer Portal
-3. **Discord Guild ID + Channel ID**: copied from Discord
-4. **GitHub PAT** _(optional)_: for workers that clone private repos
-5. **OpenAI-compatible API key** _(optional)_: for open-weight models
+| Path under `~/.config/nanoclaw/` | What it is |
+|-|-|
+| `Dockerfile` | Personal container layer (databases, dev tools) — optional |
+| `worker-profiles/default.json` | Your worker profile (repos, mounts, tools) |
+| `worker-profiles/init.sh` | Per-spawn setup script |
+| `instructions/{global,master,worker}.md` | Personal instructions, layered on top of repo defaults |
+| `mount-allowlist.json` | Hosts the worker profile is allowed to mount |
+| `Dockerfile` | Optional personal image layer |
 
-Each step explains how to create these if you don't have them yet.
+| Other state outside the repo | What it is |
+|-|-|
+| `.env` | Tokens, guild ids, defaults, container limits |
+| `data/` | SQLite database, sessions, usage metrics |
+| `groups/` | Per-agent workspaces (cloned repos, edits) |
+| `logs/` | Application and per-worker logs |
 
-## Repo vs. User Config
+When you pull NanoClaw updates later, your `~/.config/nanoclaw/` files are untouched. See [personal-config.md](personal-config.md) for the full layout.
 
-NanoClaw separates generic code from per-installation configuration. The repo contains everything needed to run any NanoClaw instance — the host process, container image, agent runner, MCP tools, and example profiles. User-specific configuration lives outside the repo at `~/.config/nanoclaw/`.
+## 1. Create a Discord server
 
-**What goes in the repo** (`nanoclaw/`):
+A dedicated server keeps worker channels organized and isolated.
 
-| Directory          | Purpose                                                                |
-| ------------------ | ---------------------------------------------------------------------- |
-| `src/`             | Host process (message routing, container lifecycle, IPC)               |
-| `container/`       | Dockerfile, agent runner, MCP tools, skills                            |
-| `instructions/`    | Agent instructions — global, master, and worker (assembled at startup) |
-| `worker-profiles/` | Example worker profiles — templates you copy and customize             |
-| `tools/`           | Utility scripts (status dashboard, shims, injection helpers)           |
-| `docs/`            | Architecture docs, setup guides, testing procedures                    |
-| `.env.example`     | Template for required environment variables                            |
+1. In Discord: click **+** at the bottom of the server list, **Create My Own**.
+2. Name it (e.g. "devbox").
+3. Settings → Advanced → enable **Developer Mode**.
+4. Right-click the server name → **Copy Server ID**. Save it for step 4.
 
-**What goes in user config** (`~/.config/nanoclaw/`):
+## 2. Configure the Discord bot
 
-| Path                           | Purpose                                                                      |
-| ------------------------------ | ---------------------------------------------------------------------------- |
-| `Dockerfile`                   | Personal container image layer — databases, test tools, CLI tools (optional) |
-| `worker-profiles/default.json` | Your worker profile — repos to clone, credential mounts, tools to install    |
-| `worker-profiles/init.sh`      | Your init script — runs inside each container at boot                        |
-| `instructions/global.md`       | Personal instructions for all agents (beads, code conventions, etc.)         |
-| `instructions/master.md`       | Personal master-only instructions (mounts, GPU workflow, etc.)               |
-| `instructions/worker.md`       | Personal worker-only instructions (mount map, repos, network)                |
+The bot needs `Manage Channels` to create and delete worker channels.
 
-**Other per-installation state** (also outside the repo):
-
-| Path      | Purpose                                                                                |
-| --------- | -------------------------------------------------------------------------------------- |
-| `.env`    | Secrets and tunables (bot tokens, guild IDs, backend config, container limits)         |
-| `data/`   | Runtime state — SQLite database, session data, usage metrics (gitignored)              |
-| `groups/` | Agent workspaces — assembled CLAUDE.md, cloned repos, uncommitted changes (gitignored) |
-| `logs/`   | Application logs (gitignored)                                                          |
-
-The setup steps below walk through creating your user config from the repo's examples. When you later update NanoClaw (pull new code), your `~/.config/nanoclaw/` files are untouched — only the repo-side defaults change, and you can merge those into your config as needed. See the [personal config guide](personal-config.md) for a detailed walkthrough of each config file, and [`examples/personal-config/`](../../examples/personal-config/) for a complete reference example.
-
-## 1. Create a Discord Server
-
-Create a dedicated Discord server for your NanoClaw instance. This keeps worker channels organized and separate from personal servers.
-
-1. In Discord: click **+** at the bottom of the server list → Create My Own
-2. Name it (e.g., "devbox server")
-3. Enable Developer Mode: Settings → App Settings → Advanced → Developer Mode
-4. Right-click the server name → **Copy Server ID** — save this for step 3
-
-## 2. Configure the Discord Bot
-
-The bot needs `Manage Channels` permission to create/delete worker channels.
-
-1. Go to https://discord.com/developers/applications
-2. Select your bot application
-3. **OAuth2** → URL Generator:
+1. Go to <https://discord.com/developers/applications>.
+2. Select (or create) your bot application.
+3. **OAuth2 → URL Generator**:
    - Scopes: `bot`
    - Bot Permissions: `Send Messages`, `Read Messages/View Channels`, `Manage Channels`, `Read Message History`
-4. Copy the generated URL, open it, and invite the bot to your server
-5. Save the bot token to `~/.config/discord/nanoclaw_bot_token`
+4. Open the generated URL and invite the bot to your server.
+5. Save the bot token to `~/.config/discord/nanoclaw_bot_token`.
 
-## 3. Create a GitHub Personal Access Token
+## 3. Create a GitHub PAT (for private repos)
 
-Workers clone private repos via HTTPS using a GitHub PAT. The container rewrites `git@github.com:` URLs to HTTPS automatically.
+Workers clone private repos over HTTPS using a GitHub personal access token. The container rewrites `git@github.com:` URLs to HTTPS automatically.
 
-1. Go to https://github.com/settings/tokens (classic tokens)
-2. Generate new token with the `repo` and `workflow` scopes. `repo` covers all orgs you're a member of. `workflow` is required to push changes to `.github/workflows/` files — without it, agents get a 403 on workflow YAML pushes.
+1. <https://github.com/settings/tokens> → classic tokens → generate.
+2. Scopes: `repo` (covers all orgs you belong to) and `workflow` (needed if any worker pushes `.github/workflows/*` changes).
 3. Save it:
 
 ```bash
@@ -111,61 +90,68 @@ chmod 600 ~/.config/nanoclaw/github_token
 
 ## 4. Configure NanoClaw
 
-Add to your `.env`:
+Add to `.env`:
 
 ```env
-DISCORD_BOT_TOKEN=<your bot token>
-DISCORD_GUILD_ID=<your server/guild ID from step 1>
+DISCORD_BOT_TOKEN=<from step 2>
+DISCORD_GUILD_ID=<from step 1>
+NANOCLAW_GITHUB_TOKEN_PATH=~/.config/nanoclaw/github_token
+
+# default backend for new workers and the master (read on every spawn):
+NANOCLAW_DEFAULT_MASTER_BACKEND=anthropic
+NANOCLAW_DEFAULT_MASTER_MODEL=claude-opus-4-7
+NANOCLAW_DEFAULT_WORKER_BACKEND=anthropic
+NANOCLAW_DEFAULT_WORKER_MODEL=claude-opus-4-7
 ```
 
-Copy the systemd service template and customize it:
+Copy the systemd template:
 
 ```bash
 mkdir -p ~/.config/systemd/user
 cp systemd/nanoclaw.service ~/.config/systemd/user/nanoclaw.service
-# Edit the file: replace {{PROJECT_ROOT}}, {{NODE_PATH}}, {{HOME}} with real paths
-# Add: Environment=NANOCLAW_GITHUB_TOKEN_PATH=/path/to/github_token
+# Edit: replace {{PROJECT_ROOT}}, {{NODE_PATH}}, {{HOME}} with real values.
 systemctl --user daemon-reload
 ```
 
-A launchd plist template is also available at `launchd/com.nanoclaw.plist` for macOS.
+A launchd plist template is at `launchd/com.nanoclaw.plist` for macOS.
 
-## 5. Create the Master Channel
+## 5. Register the master channel
 
-1. In your Discord server, create a `#master` text channel
-2. Right-click it → Copy Channel ID
-3. Register it as the main NanoClaw group:
+1. In Discord, create the `#master` text channel.
+2. Right-click → Copy Channel ID.
+3. Register it:
 
 ```bash
 sqlite3 store/messages.db \
-  "INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main) \
+  "INSERT OR REPLACE INTO registered_groups
+     (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main)
    VALUES ('dc:<channel-id>', 'Master', 'discord_main', '@YourBotName', datetime('now'), 0, 1);"
 ```
 
-Set `requires_trigger = 0` so the master responds to all messages (no @mention needed).
+`requires_trigger=0` makes the master respond to every message in `#master` without a mention.
 
-## 6. Personal Instructions (Optional)
+## 6. Personal instructions (optional)
 
-Agent instructions are assembled from layered fragments. The repo provides base instructions in `instructions/{global,master,worker}.md`. You can add personal instructions that get appended:
+Agent instructions are assembled from four fragments. The repo provides base instructions; your personal layer is appended.
 
 ```bash
 mkdir -p ~/.config/nanoclaw/instructions
-# Create any or all of these — they're all optional:
-# global.md  — applied to all agents (master + workers)
-# master.md  — master-only additions
-# worker.md  — worker-only additions
+# Create whichever you need (all optional):
+#   global.md   shared across master and workers
+#   master.md   master-only additions
+#   worker.md   worker-only additions
 ```
 
-The final CLAUDE.md for each agent is assembled at startup:
+Assembly order at startup:
 
-1. `instructions/global.md` (repo — shared base for all agents)
-2. `instructions/master.md` or `instructions/worker.md` (repo — role-specific)
-3. `~/.config/nanoclaw/instructions/global.md` (personal — all agents)
-4. `~/.config/nanoclaw/instructions/master.md` or `worker.md` (personal — role-specific)
+1. `instructions/global.md` (repo)
+2. `instructions/master.md` or `instructions/worker.md` (repo)
+3. `~/.config/nanoclaw/instructions/global.md` (personal)
+4. `~/.config/nanoclaw/instructions/master.md` or `worker.md` (personal)
 
-## 7. Set Up Worker Profiles
+The result lands in `groups/<folder>/CLAUDE.md`.
 
-Worker profiles define what repos, tools, and credentials each worker gets. Config lives at `~/.config/nanoclaw/worker-profiles/`.
+## 7. Worker profile
 
 ```bash
 mkdir -p ~/.config/nanoclaw/worker-profiles
@@ -174,52 +160,49 @@ cp worker-profiles/init.sh ~/.config/nanoclaw/worker-profiles/init.sh
 chmod +x ~/.config/nanoclaw/worker-profiles/init.sh
 ```
 
-Edit `default.json` to configure your repos, tools, and credential mounts. See the example file for the format.
+Edit `default.json` to declare repos to clone, tools to install, and mounts to expose. The example file is fully commented.
 
-## 8. Rebuild and Restart
+If the profile mounts host paths, add them to `~/.config/nanoclaw/mount-allowlist.json` (the host enforces the allowlist before spawning a container).
+
+## 8. Build and start
 
 ```bash
-# Build host code (TypeScript → dist/)
-npm run build
-
-# Rebuild agent container (needed if container/ or worker-profiles/ changed)
-./container/build.sh
-
-# Restart
+npm run build               # compile host TypeScript
+./container/build.sh        # build the agent container image
 systemctl --user restart nanoclaw
 ```
 
-## 9. Inference Shim (Optional — OpenAI-compatible backend)
+For macOS:
 
-NanoClaw can route a worker's API traffic through an OpenAI-compatible inference provider (e.g., [Neuralwatt](https://portal.neuralwatt.com), or any other provider that speaks the OpenAI chat-completions API) instead of Anthropic. This is handled by a local HTTP proxy (`tools/anthropic-shim.ts`) that translates between the Anthropic and OpenAI-compatible APIs and listens on port `3003`.
+```bash
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+```
 
-**Skip this section** if you only plan to run workers against Anthropic. Workers default to Anthropic without the shim running.
+## 9. Inference shim (optional)
 
-### Prerequisites
+The translation shim (`tools/anthropic-shim.ts`) routes worker traffic to Neuralwatt or any other OpenAI-compatible provider. Skip this if you only run Anthropic workers.
 
-The shim is written for [Bun](https://bun.sh) (it uses `Bun.serve`). Install it once per host:
+The shim runs on Bun:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
 ```
 
-### API key + base URL
-
-Get an API key from your provider (e.g., https://portal.neuralwatt.com) and add it to your `.env`. The env vars are named `NEURALWATT_*` for historical reasons, but any OpenAI-compatible `v1/chat/completions` endpoint works — just point `NEURALWATT_BASE_URL` at your provider.
+Add provider config to `.env`:
 
 ```env
 NEURALWATT_API_KEY=sk-...
-# Defaults to https://api.neuralwatt.com/v1 — override for other providers:
+# default base URL is https://api.neuralwatt.com/v1
+# override for another provider:
 # NEURALWATT_BASE_URL=https://api.example.com/v1
 ```
-
-### Systemd unit (Linux)
 
 Create `~/.config/systemd/user/nanoclaw-shim.service`:
 
 ```ini
 [Unit]
-Description=NanoClaw Inference Shim (Anthropic <-> Neuralwatt proxy)
+Description=NanoClaw inference shim (Anthropic ↔ OpenAI)
 After=network.target
 
 [Service]
@@ -236,7 +219,7 @@ StandardError=append:/path/to/nanoclaw-fleet/logs/shim.error.log
 WantedBy=default.target
 ```
 
-Enable, start, and verify:
+Enable and verify:
 
 ```bash
 systemctl --user daemon-reload
@@ -244,13 +227,31 @@ systemctl --user enable --now nanoclaw-shim
 curl -s http://localhost:3003/models | head
 ```
 
-You should see a JSON list of available models. If the shim isn't running, master will report the inference proxy on port 3003 is down when asked to create a worker with an OpenAI-compatible model — that's your signal to check `logs/shim.error.log` and `systemctl --user status nanoclaw-shim`.
+The output should be a JSON list of models. If it isn't, check `logs/shim.error.log`.
 
-Once the shim is up, you can create a shim-backed worker with `ncf create <name> --backend neuralwatt --model <model-id>` or by asking master in `#master`. (The `--backend neuralwatt` flag name is historical — it routes any worker through the shim, regardless of which OpenAI-compatible provider you've configured.)
+Once the shim is up, create a Neuralwatt worker:
 
-## 10. Test
+```bash
+./ncf create my-task --backend neuralwatt --model kimi-k2.5
+```
 
-In `#master`, send:
+The `--backend neuralwatt` name is historical — it routes through the shim regardless of which OpenAI-compatible provider you point it at.
+
+## 10. (Optional) Provider API keys
+
+If your workers need direct provider access (eval scripts, model comparisons), add API keys to `.env` and they will be injected into every container as env vars:
+
+```env
+FIREWORKS_API_KEY=fw_...
+TOGETHER_API_KEY=tgp_v1_...
+SYNTHETIC_API_KEY=syn_...
+```
+
+These are independent of the per-worker shim routing above.
+
+## 11. Test
+
+In `#master`:
 
 ```
 create a worker called test-worker
@@ -258,55 +259,39 @@ create a worker called test-worker
 
 You should see:
 
-1. The master agent acknowledges the request
-2. A new `#test-worker` channel appears in the server
-3. Sending a message in `#test-worker` spawns a container and the worker responds
+1. The master ack the request.
+2. A new `#test-worker` channel in the server.
+3. The first message in `#test-worker` spawns a container; the worker replies.
 
-## What Happens on Restart
+For more thorough end-to-end tests, see [testing.md](testing.md).
 
-When NanoClaw restarts (systemd restart, host reboot, crash):
+## What survives restart
 
-| What                           | Survives restart? | Survives destroy?    | Why                                               |
-| ------------------------------ | ----------------- | -------------------- | ------------------------------------------------- |
-| Discord channels               | ✅                | ❌ (deleted)         | Server-side                                       |
-| Registered groups (SQLite)     | ✅                | ❌ (deleted)         | On-disk database                                  |
-| Worker repos + code changes    | ✅                | ✅ (kept for resume) | Bind-mounted at `groups/{worker}/`                |
-| SDK session state (`.claude/`) | ✅                | ❌ (deleted)         | Bind-mounted at `data/sessions/{worker}/.claude/` |
-| Running containers             | ❌                | ❌                   | `--rm` flag — auto-removed on exit                |
-| Installed packages             | ❌                | ❌                   | Rebuilt by `init.sh` on next spawn                |
+| What | Survives restart? | Survives destroy? |
+|-|-|-|
+| Discord channels | Yes | No (deleted) |
+| Registered groups (SQLite) | Yes | No (deleted) |
+| Worker repos + edits | Yes | Yes (kept for resume) |
+| SDK session (`.claude/`) | Yes | Yes (kept for resume) |
+| Running containers | No (`--rm`) | No |
+| Installed packages inside the container | No | No (rebuilt by `init.sh`) |
 
-**Recovery flow (restart):** NanoClaw loads groups from SQLite on startup. Next message to any worker spawns a fresh container. `init.sh` runs but skips already-cloned repos.
+When NanoClaw restarts, the host reads registrations from SQLite, then waits. The first message to any worker spawns a fresh container; `init.sh` runs but skips already-cloned repos.
 
-**Recovery flow (destroy + recreate):** Workspace is preserved on disk. When `ncf create` is called with the same name, it detects the leftover workspace and asks whether to "resume" (keep repos/code, fresh SDK session) or "fresh" (wipe everything). SDK session state is always cleared on create to prevent stale state from crashing the new worker.
+When you destroy and recreate with the same name, the host detects the leftover workspace and asks whether to `resume` (keep repos and SDK session) or `fresh` (wipe everything).
 
 ## Troubleshooting
 
-**Worker channel created but no response to messages:**
+**Worker channel exists but no response.** Check `requires_trigger` is `0`. Then `tail -f logs/nanoclaw.log`.
 
-- Check `requires_trigger` — workers should have `requires_trigger = 0`
-- Check logs: `tail -f logs/nanoclaw.log`
+**"ncf create: missing required fields".** `DISCORD_GUILD_ID` isn't reaching the container. Confirm it's in `.env` and exported.
 
-**"ncf create: missing required fields":**
+**Agent doesn't see new MCP tools.** Stale agent-runner cache. `ncf restart <worker>` (the host auto-syncs by mtime on the next spawn).
 
-- `DISCORD_GUILD_ID` isn't reaching the container. Verify it's in `.env` and that `container-runner.ts` forwards it.
+**Container build doesn't pick up source changes.** Docker caches COPY layers. Run `./container/build.sh` (it forces a clean rebuild for the agent layer).
 
-**Agent doesn't know about ncf commands:**
+**Repo clone fails with 403/404.** Check `NANOCLAW_GITHUB_TOKEN_PATH` points to a valid PAT. Use a classic PAT with `repo` scope for the simplest setup.
 
-- Stale cached source. Kill the worker container (agent-runner auto-syncs by mtime on next spawn).
+**Bot can't create channels.** Verify the bot has `Manage Channels` and that its role is above any `@everyone` overrides for the server.
 
-**Container builds don't pick up source changes:**
-
-- Docker caches COPY layers. Use `./container/build.sh` (or `docker build --no-cache`) when `container/` changes.
-- Agent-runner source auto-syncs by mtime — kill the container and message the worker again.
-
-**Repos fail to clone (403 or 404):**
-
-- Check that `NANOCLAW_GITHUB_TOKEN_PATH` is set in the systemd service and points to a valid token file.
-- The token needs `repo` scope for private repos. Classic PATs with `repo` scope work across all orgs.
-- Fine-grained PATs need per-org approval — use classic PATs for simplicity.
-- Verify: `docker exec <container> bash -c 'echo $GITHUB_TOKEN | head -c 10'`
-
-**Bot can't create channels:**
-
-- Verify the bot has `Manage Channels` permission in the Discord server.
-- Check the bot's role in Server Settings → Roles.
+For a deeper dive, see [troubleshooting.md](troubleshooting.md).
