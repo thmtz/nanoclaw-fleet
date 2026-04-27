@@ -412,6 +412,21 @@ async function main(): Promise<void> {
   );
   step('worker recited codeword (instructions honored)', true, markerReply.content.slice(0, 80));
 
+  // After the worker has spawned (container-runner.buildMounts runs the
+  // composer), every *.instructions.md in container/agent-runner/src/
+  // mcp-tools/ should have a corresponding module-*.md in the worker's
+  // .claude-fragments/. Catches regressions where a new fragment is
+  // added but composer wiring drops it.
+  const fragmentsDir = `groups/${WORKER_NAME}/.claude-fragments`;
+  const fragmentFiles = fs.existsSync(fragmentsDir) ? fs.readdirSync(fragmentsDir) : [];
+  const requiredFragments = ['module-core.md', 'module-discord-formatting.md'];
+  const missing = requiredFragments.filter((f) => !fragmentFiles.includes(f));
+  step(
+    `composed fragments include ${requiredFragments.join(', ')}`,
+    missing.length === 0,
+    missing.length === 0 ? `${fragmentFiles.length} fragments` : `missing: ${missing.join(', ')}`,
+  );
+
   const workerPreSwitchId = worker.id;
 
   // ── 4. switch backend to neuralwatt GLM-5.1-FP8 ──
