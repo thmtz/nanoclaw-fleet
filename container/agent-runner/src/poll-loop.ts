@@ -43,6 +43,14 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   // provider decides how to use it (Claude resumes a .jsonl transcript,
   // other providers may reload a thread ID, etc.).
   let continuation: string | undefined = getStoredSessionId();
+  // First batch in this container's lifetime gets a restart banner
+  // prepended to its prompt when we're resuming a prior session. The
+  // agent then knows the workspace + repos persist but in-flight
+  // shell processes (builds, SSH sessions) were lost. v1 fleet did
+  // this; the v2 port dropped it. Reset on the first prompt we issue,
+  // not on every batch.
+  let firstBatch = true;
+  const isResume = !!continuation;
 
   if (continuation) {
     log(`Resuming agent session ${continuation}`);
@@ -147,7 +155,26 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
-    const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+    let prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+
+    // Container restart banner — fires once, on the first batch processed
+    // by this container instance, only when the SDK session is being
+    // resumed (so the agent knows context survived but in-flight shell
+    // state didn't). Skip for fresh sessions; the agent has nothing to
+    // reconcile there.
+    if (firstBatch && isResume) {
+      const ts = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+      const banner =
+        `[CONTAINER RESTARTED at ${ts}. Your workspace and repos are intact, ` +
+        `but any running processes (builds, tests, SSH sessions, background ` +
+        `jobs) were lost. The container image may have been updated, so new ` +
+        `tools or capabilities may be available. If you need to reinstall ` +
+        `tools that were lost, consider suggesting they be added to the ` +
+        `worker profile so they persist across restarts. Do not mention this ` +
+        `unless directly relevant to the user's request.]`;
+      prompt = `${banner}\n\n${prompt}`;
+    }
+    firstBatch = false;
 
     log(
       `Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}, traceIds: ${keep.map((m) => m.id).join(',')}`,
