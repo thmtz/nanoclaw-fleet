@@ -18,6 +18,8 @@ create a worker named update-docs
 
 The master spins up each worker, creates a Discord channel, clones your repos, and notifies you when ready. Switch between channels to give tasks, check progress, follow up. Destroy a worker when you're done. Recreate by name later and the workspace and chat resume.
 
+<img src="assets/screenshot-worker.png" alt="A worker investigating a CI regression" width="700">
+
 ## Quick Start
 
 ```bash
