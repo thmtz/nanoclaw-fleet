@@ -28,7 +28,7 @@ This is `thmtz/nanoclaw-fleet` — a fleet-manager fork on top of `qwibitai/nano
   - **NEVER push directly to `main`.** Always feature branch + PR.
   - **NEVER force push** unless the user explicitly asks for it.
 - **Hooks.** On every fresh clone: `git config core.hooksPath .githooks`. Runs prettier, tsc, and tests on push. Don't skip with `--no-verify`.
-- **Restart discipline.** See [`CLAUDE.local.md`](CLAUDE.local.md). Don't restart the running NanoClaw service or kill containers without explicit confirmation — workers are real long-running sessions.
+- **Restart discipline.** Don't restart the running NanoClaw service (`systemctl --user restart nanoclaw`, `launchctl kickstart`, `kill`-ing the host process) or kill running worker containers without explicit user confirmation. Workers are real long-running sessions; a restart kills active conversations and any pending turns. If a code or config change *would* require a restart to take effect, finish the change, mention that a restart is needed, and ask before doing it.
 
 ## Documentation routing
 
