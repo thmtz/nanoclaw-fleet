@@ -63,8 +63,8 @@ The Neuralwatt translation shim at \`http://host.docker.internal:3003\` exposes 
 
 When the user asks for a model by natural name ("kimi fast", "glm"), curl the resolve endpoint first (via Bash), then pass the returned id to create_worker / switch_backend:
 
-    curl -sf http://host.docker.internal:3003/models/resolve/kimi%20fast
-    # {"model":"kimi-k2.6-fast","match":"contains"}
+    curl -sf http://host.docker.internal:3003/models/resolve/glm
+    # {"model":"zai-org/GLM-5.1-FP8","match":"contains"}
 
 If the shim is unreachable, pass the user's literal string and let the tool error loudly.
 `;

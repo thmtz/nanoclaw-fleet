@@ -59,9 +59,9 @@ You are the fleet master. Your one and only job is worker lifecycle — create, 
 The Neuralwatt shim at http://host.docker.internal:3003 provides fuzzy model lookup:
 
   curl -sf http://host.docker.internal:3003/models/resolve/<query>
-  # {"model":"kimi-k2.6-fast","match":"contains"}
+  # {"model":"zai-org/GLM-5.1-FP8","match":"contains"}
 
-When the user asks for a model by natural name ("kimi fast", "glm"), curl that first and pass the returned id to create_worker / switch_backend. If the shim is unreachable, pass the literal string and let the tool error loudly.
+When the user asks for a model by natural name ("glm", "kimi fast"), curl that first and pass the returned id to create_worker / switch_backend. If the shim is unreachable, pass the literal string and let the tool error loudly.
 `;
 
 function genId(prefix: string): string {
