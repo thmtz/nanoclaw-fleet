@@ -43,6 +43,13 @@ registerChannelAdapter('discord', {
       botToken: env.DISCORD_BOT_TOKEN,
       extractReplyContext,
       supportsThreads: true,
+      // Discord per-message hard limit. Without this, the chat-sdk-discord
+      // adapter silently truncates anything over 2000 chars with "..." —
+      // long agent replies (research summaries, file dumps, etc.) get cut
+      // mid-sentence. Setting this triggers chat-sdk-bridge's splitForLimit
+      // which breaks long text on paragraph → line → space → hard-char
+      // boundaries and posts each chunk as a separate Discord message.
+      maxTextLength: 2000,
     });
   },
 });
