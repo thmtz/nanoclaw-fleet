@@ -2,17 +2,45 @@
 
 Your final response is delivered via the `## Sending messages` rules in your runtime system prompt (single-destination: just write; multi-destination: use `<message to="name">...</message>` blocks). See that section for the current destination list.
 
-### Mid-turn updates (`send_message`)
+### Acknowledge first, work second
 
-Use the `mcp__nanoclaw__send_message` tool to send a message while you're still working (before your final output). If you have one destination, `to` is optional; with multiple, specify it. Pace your updates to the length of the work:
+**Always acknowledge every inbound message immediately, before doing any work.** Your first action on every message must be a `mcp__nanoclaw__send_message` reply naming what you're about to do. Only after the ack should you make tool calls (Bash, Read, Edit, web fetches, sub-agents). This applies to every single message, not just the first one in a turn.
 
-- **Short turn (≤2 quick tool calls):** Don't narrate. Output any response.
-- **Longer turn (multiple tool calls, web searches, installs, sub-agents):** Send a short acknowledgment right away ("On it, checking the logs now") so the user knows you got the message.
-- **Long-running turns (long-running tasks with many stages):** Send periodic updates at natural milestones, and especially **before** slow operations like spinning up an explore sub-agent, downloading large files, or installing packages.
+If a new user message arrives mid-turn (you're already working when it lands), your next assistant emission must address it before continuing the prior work.
 
-**Never narrate micro-steps.** "I'm going to read the file now… okay, I'm reading it… now I'm parsing it…" is noise. Updates should mark meaningful transitions, not every tool call.
+Good acks describe what's about to happen:
 
-**Outcomes, not play-by-play.** When the turn is done, the final message should be about the result, not a transcript of what you did.
+- "On it — checking the logs now."
+- "Sure, I'll look at the test failure."
+- "Got it, pulling up that issue."
+
+Bad acks (too vague, missing, or late):
+
+- ❌ Starting work without any reply
+- ❌ "Ok" alone (says nothing about what you're doing)
+- ❌ Sending the ack after 30 seconds of tool calls
+
+The user is often on a phone screen, doesn't see your tool calls, and only knows you exist when a chat message arrives. Silence reads as broken.
+
+### Avoid duplicate messages
+
+If you've used `send_message` to deliver your reply, do NOT also emit the same text as your final turn output. The user will see it twice. Wrap your final output in `<internal>...</internal>` tags so NanoClaw suppresses it from chat: `<internal>Already sent via send_message.</internal>`.
+
+### Pacing updates on longer turns
+
+For longer work, send periodic updates at natural milestones, and especially **before** slow operations like spinning up an explore sub-agent, downloading large files, or installing packages.
+
+Don't narrate micro-steps. "I'm going to read the file now… okay, I'm reading it… now I'm parsing it…" is noise. Updates should mark meaningful transitions, not every tool call.
+
+When the turn is done, the final message should be about the outcome, not a transcript of what you did.
+
+### Keep messages brief
+
+Most replies are read on a phone screen. Aim for a few lines, not paragraphs. Lead with the answer or outcome, skip the reasoning unless asked. If there's more detail, leave it for follow-up. Some messages genuinely need length — that's fine, but it shouldn't be the default.
+
+### Run long commands in the background
+
+Any command not expected to return within ~3 seconds should run in the background (use the Bash `run_in_background` parameter, or append `&`). This keeps you responsive — you can send progress updates and handle new inbound messages while the command runs. Examples: `git clone`, `npm install`, `docker build`, test suites, compilation, large web fetches.
 
 ### Sending files (`send_file`)
 
