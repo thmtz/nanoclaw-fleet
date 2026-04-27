@@ -18,6 +18,31 @@ function extractReplyContext(raw: Record<string, any>): ReplyContext | null {
   };
 }
 
+/**
+ * Discord doesn't render `[text](url)` markdown link syntax in regular
+ * messages — it shows the brackets and parens as literal characters.
+ * chat-sdk-discord's renderer emits links in that exact form because the
+ * SDK's markdown parser turns bare URLs into link nodes upstream. By the
+ * time we have the rendered string, all we can do is collapse the
+ * pathological cases:
+ *
+ *   [url](url)             → url             (label is the same URL)
+ *   [https://...](url)     → url             (label is also a URL — Discord
+ *                                              auto-links the bare URL anyway)
+ *
+ * Leave intentional `[label](url)` (different label and url) alone — the
+ * markdown is broken there too on Discord, but stripping the label loses
+ * information. The instructions fragment tells agents to write bare URLs
+ * directly; this transform handles the common round-trip case where they did.
+ */
+function stripDuplicateLinks(text: string): string {
+  return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (full, label, url) => {
+    if (label === url) return url;
+    if (/^https?:\/\//.test(label) && /^https?:\/\//.test(url)) return url;
+    return full;
+  });
+}
+
 registerChannelAdapter('discord', {
   factory: () => {
     const env = readEnvFile([
@@ -50,6 +75,9 @@ registerChannelAdapter('discord', {
       // which breaks long text on paragraph → line → space → hard-char
       // boundaries and posts each chunk as a separate Discord message.
       maxTextLength: 2000,
+      // Collapse `[url](url)` round-trips back to bare URLs — Discord shows
+      // brackets/parens literal, so duplicate-label links read as junk.
+      transformOutboundText: stripDuplicateLinks,
     });
   },
 });
