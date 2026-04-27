@@ -7,8 +7,8 @@
  *      marker FLEET-E2E-<id>". Master should ack + create.
  *   2. Assert DB: worker agent_group exists + channel provisioned.
  *   3. Post in worker's channel: "what's your marker?" — worker should recite.
- *   4. Post to master: "switch <name> to neuralwatt kimi-k2.6".
- *   5. Assert DB: agent_provider='neuralwatt', fleet_model='kimi-k2.6'.
+ *   4. Post to master: "switch <name> to neuralwatt with model zai-org/GLM-5.1-FP8".
+ *   5. Assert DB: agent_provider='neuralwatt', fleet_model='zai-org/GLM-5.1-FP8'.
  *   6. Post in worker's channel: "we talked about a marker. what was it?" —
  *      worker should remember (session preserved across provider switch).
  *   7. Post to master: "destroy worker <name>". Master acks.
@@ -355,7 +355,7 @@ async function main(): Promise<void> {
   console.log(`  worker:   ${WORKER_NAME}`);
   console.log(`  marker:   ${MARKER}`);
   console.log(`  master:   ${masterChannel}`);
-  console.log(`  backends: claude → ${SKIP_SWITCH ? 'skip switch' : 'neuralwatt kimi-k2.6'}`);
+  console.log(`  backends: claude → ${SKIP_SWITCH ? 'skip switch' : 'neuralwatt GLM-5.1-FP8'}`);
 
   console.log('\n[0] purge master backlog + reap orphan worker channels');
   purgeMasterBacklog();
@@ -414,10 +414,10 @@ async function main(): Promise<void> {
 
   const workerPreSwitchId = worker.id;
 
-  // ── 4. switch backend to neuralwatt kimi-k2.6 ──
+  // ── 4. switch backend to neuralwatt GLM-5.1-FP8 ──
   let switched: AgentGroupRow | undefined;
   if (!SKIP_SWITCH) {
-    console.log(`\n[4] master: switch worker to neuralwatt kimi-k2.6`);
+    console.log(`\n[4] master: switch worker to neuralwatt GLM-5.1-FP8`);
     await postMessage(
       masterChannel,
       debugToken,
