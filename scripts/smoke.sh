@@ -31,11 +31,12 @@ section() { echo; echo "== $1 =="; }
 # ---- prerequisites --------------------------------------------------------
 section "prerequisites"
 
-if ! ps -ef | grep -q "[t]sx src/index.ts"; then
-  fail "host (pnpm run dev) is not running"
+if ! ps -ef | grep -qE "[t]sx src/index\.ts|[n]ode .*/dist/index\.js"; then
+  fail "host is not running (neither pnpm run dev nor node dist/index.js)"
   echo
   echo "SMOKE ABORTED — start the host first:"
-  echo "  pnpm run dev &"
+  echo "  pnpm run dev &           # or"
+  echo "  systemctl --user start nanoclaw"
   exit 1
 fi
 ok "host is running"
