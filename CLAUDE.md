@@ -15,7 +15,52 @@ If you are a fresh install (you ran `git clone`, not `git pull`) and there are n
 
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/`.
+Personal Claude assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/`. Fleet-specific architecture and guides live in [`docs/fleet/`](docs/fleet/).
+
+## Fork workflow
+
+This is `thmtz/nanoclaw-fleet` — a fleet-manager fork on top of `qwibitai/nanoclaw` v2. The fleet additions live alongside the upstream code; both should follow the same rules.
+
+- **Trunk-based.** Create feature branches from `main` for all changes. Push as PRs targeting `main`. Rebase merge (no merge commits, no squash). Keep PRs small and focused.
+- **Branch prefixes.** `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `chore/`, `ci/`. Imperative-mood description.
+- **Critical rules.**
+  - **NEVER push to any branch without explicit user confirmation.**
+  - **NEVER push directly to `main`.** Always feature branch + PR.
+  - **NEVER force push** unless the user explicitly asks for it.
+- **Hooks.** On every fresh clone: `git config core.hooksPath .githooks`. Runs prettier, tsc, and tests on push. Don't skip with `--no-verify`.
+- **Restart discipline.** See [`CLAUDE.local.md`](CLAUDE.local.md). Don't restart the running NanoClaw service or kill containers without explicit confirmation — workers are real long-running sessions.
+
+## Documentation routing
+
+Read the relevant doc before working on a subsystem. Each one is short and focused.
+
+- **First time?** [`docs/fleet/architecture/overview.md`](docs/fleet/architecture/overview.md) for fleet topology, then [`docs/fleet/guides/testing.md`](docs/fleet/guides/testing.md) for verification commands.
+- **Worker create / destroy / resume:** [`docs/fleet/architecture/master-workers.md`](docs/fleet/architecture/master-workers.md).
+- **Inference routing (Claude vs Neuralwatt):** [`docs/fleet/architecture/inference-routing.md`](docs/fleet/architecture/inference-routing.md).
+- **Claude.md composition + personal layer:** [`docs/fleet/architecture/instructions.md`](docs/fleet/architecture/instructions.md).
+- **Worker profile (repos, tools, mounts):** [`docs/fleet/architecture/worker-profile.md`](docs/fleet/architecture/worker-profile.md).
+- **Status pin + throbber:** [`docs/fleet/architecture/status-pin-throbber.md`](docs/fleet/architecture/status-pin-throbber.md).
+- **Observability (events, turns, traces, energy):** [`docs/fleet/architecture/observability.md`](docs/fleet/architecture/observability.md).
+- **`ncf` CLI reference:** [`docs/fleet/reference/cli.md`](docs/fleet/reference/cli.md).
+- **Setup from scratch:** [`docs/fleet/guides/setup.md`](docs/fleet/guides/setup.md).
+- **Personal config (`~/.config/nanoclaw/`):** [`docs/fleet/guides/personal-config.md`](docs/fleet/guides/personal-config.md).
+- **Troubleshooting:** [`docs/fleet/guides/troubleshooting.md`](docs/fleet/guides/troubleshooting.md).
+
+For the upstream v2 baseline (entity model, two-DB session split, channel adapters, providers, isolation), see [`docs/`](docs/).
+
+## After making changes
+
+After implementing a feature or fix, do all three before declaring done.
+
+1. **Update docs.** `docs/fleet/architecture/` if behaviour changed; `docs/fleet/guides/testing.md` if a new test path was added; `.env.example` if env vars were added; `docs/fleet/reference/cli.md` if `ncf` flags changed.
+2. **Personally exercise the change.** Compiling and `pnpm test` are not enough.
+   - Code change in `src/`: build, restart the host (with confirmation per CLAUDE.local.md), `ncf inject --wait <worker> "ping"`, watch the reply.
+   - Container-side change (`container/Dockerfile`, `worker-init.sh`, `agent-runner/src/`): rebuild the image (`./container/build.sh` or `ncf rebuild`), `ncf restart <worker>`, message the worker.
+   - Worker lifecycle change: create a worker, message it, switch its backend, destroy it, recreate with the same name (resume), confirm DB state and Discord channel state at every step.
+   - Inference / shim change: curl the shim, then send a real turn through a Neuralwatt worker.
+3. **Check logs after each test.** `tail -f logs/host.log`, `ncf logs <worker> --follow`, and `jq 'select(.level >= 50)' logs/host.jsonl` for errors. See [`docs/fleet/guides/testing.md`](docs/fleet/guides/testing.md) for the full E2E checklist.
+
+If you can't exercise it (no Discord, no shim, etc.), say so explicitly — don't claim it works on the strength of unit tests alone.
 
 ## Quick Context
 
