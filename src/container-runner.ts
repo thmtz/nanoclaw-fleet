@@ -364,6 +364,16 @@ function buildMounts(
     mounts.push(...providerContribution.mounts);
   }
 
+  // Tailscale socket — lets containers run `tailscale ssh` and other CLI ops
+  // through the host's tailscaled. The container's tailscale binary (installed
+  // by container/Dockerfile) talks to this socket directly. Optional — if
+  // tailscaled isn't running on the host, the mount is skipped and workers
+  // simply lack Tailscale access.
+  const tailscaleSock = '/var/run/tailscale/tailscaled.sock';
+  if (fs.existsSync(tailscaleSock)) {
+    mounts.push({ hostPath: tailscaleSock, containerPath: tailscaleSock, readonly: false });
+  }
+
   return mounts;
 }
 
@@ -468,6 +478,14 @@ async function buildContainerArgs(
   agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '--rm', '--name', containerName, '--label', CONTAINER_INSTALL_LABEL];
+
+  // Tailscale DNS — when the host runs tailscaled, MagicDNS lets the
+  // container resolve hosts like `prod-db-01` via 100.100.100.100. The
+  // public fallback (1.1.1.1) keeps github/pypi/etc working. Without
+  // these, `tailscale ssh ops@host` resolves the wrong way and fails.
+  if (fs.existsSync('/var/run/tailscale/tailscaled.sock')) {
+    args.push('--dns', '100.100.100.100', '--dns', '1.1.1.1');
+  }
 
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).

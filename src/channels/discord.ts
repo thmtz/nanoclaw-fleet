@@ -20,26 +20,57 @@ function extractReplyContext(raw: Record<string, any>): ReplyContext | null {
 
 /**
  * Discord doesn't render `[text](url)` markdown link syntax in regular
- * messages — it shows the brackets and parens as literal characters.
- * chat-sdk-discord's renderer emits links in that exact form because the
- * SDK's markdown parser turns bare URLs into link nodes upstream. By the
- * time we have the rendered string, all we can do is collapse the
- * pathological cases:
+ * messages — brackets and parens show as literal characters. chat-sdk-
+ * discord's `formatConverter.renderPostable` turns bare URLs in agent
+ * markdown into link nodes and emits them as `[url](url)`. Collapse those
+ * pathological cases back to a bare URL:
  *
- *   [url](url)             → url             (label is the same URL)
- *   [https://...](url)     → url             (label is also a URL — Discord
- *                                              auto-links the bare URL anyway)
+ *   [url](url)             → url
+ *   [http url](other url)  → url
  *
- * Leave intentional `[label](url)` (different label and url) alone — the
- * markdown is broken there too on Discord, but stripping the label loses
- * information. The instructions fragment tells agents to write bare URLs
- * directly; this transform handles the common round-trip case where they did.
+ * Leave intentional `[label](url)` (non-URL label) alone — markdown is
+ * still broken there on Discord, but losing the label is worse than
+ * showing it raw.
  */
-function stripDuplicateLinks(text: string): string {
+export function stripDuplicateLinks(text: string): string {
   return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (full, label, url) => {
     if (label === url) return url;
     if (/^https?:\/\//.test(label) && /^https?:\/\//.test(url)) return url;
     return full;
+  });
+}
+
+/**
+ * Wrap the chat-sdk-discord adapter so we can post-process the rendered
+ * Discord text after `formatConverter.renderPostable` has done its
+ * markdown→Discord conversion. The bridge's `transformOutboundText` hook
+ * runs *before* render and so doesn't see the link wrapping. Wrapping at
+ * the adapter level lets us render once, fix the duplicate-link cases,
+ * and short-circuit the second render by passing `{raw: rendered}`
+ * (which the converter forwards verbatim except for @-mention conversion).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function wrapAdapterForLinkFix(adapter: any): any {
+  const origPost = adapter.postMessage?.bind(adapter);
+  const origEdit = adapter.editMessage?.bind(adapter);
+  const renderer = adapter.formatConverter;
+  if (!origPost || !renderer) return adapter;
+
+  const fix = (msg: Record<string, unknown>): Record<string, unknown> => {
+    if (typeof msg !== 'object' || msg === null) return msg;
+    if ('raw' in msg) return msg;
+    if (!('markdown' in msg) && !('text' in msg)) return msg;
+    const rendered: string = renderer.renderPostable(msg);
+    const fixed = stripDuplicateLinks(rendered);
+    if (fixed === rendered) return msg;
+    return { ...msg, raw: fixed, markdown: undefined, text: undefined };
+  };
+
+  return Object.assign(Object.create(Object.getPrototypeOf(adapter)), adapter, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    postMessage: (tid: string, message: any) => origPost(tid, fix(message)),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    editMessage: origEdit ? (tid: string, mid: string, message: any) => origEdit(tid, mid, fix(message)) : undefined,
   });
 }
 
@@ -63,7 +94,7 @@ registerChannelAdapter('discord', {
       applicationId: env.DISCORD_APPLICATION_ID,
     });
     return createChatSdkBridge({
-      adapter: discordAdapter,
+      adapter: wrapAdapterForLinkFix(discordAdapter),
       concurrency: 'concurrent',
       botToken: env.DISCORD_BOT_TOKEN,
       extractReplyContext,
@@ -75,9 +106,6 @@ registerChannelAdapter('discord', {
       // which breaks long text on paragraph → line → space → hard-char
       // boundaries and posts each chunk as a separate Discord message.
       maxTextLength: 2000,
-      // Collapse `[url](url)` round-trips back to bare URLs — Discord shows
-      // brackets/parens literal, so duplicate-label links read as junk.
-      transformOutboundText: stripDuplicateLinks,
     });
   },
 });
