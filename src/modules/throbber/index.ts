@@ -10,9 +10,17 @@
  * agent is wedged — even if nothing is posted to Discord yet.
  *
  * No wall-clock timer drives the cycle. Host watches the heartbeat file
- * with fs.watchFile (500ms poll granularity) and cycles on mtime change.
+ * with fs.watchFile (~400ms poll granularity) and cycles on mtime change.
  *
- * Cleared when the first non-system user-facing message delivers.
+ * When a new user message arrives mid-turn (streaming-input pattern: the
+ * SDK pushes the new message into the active query rather than starting
+ * a new turn), the throbber retargets the cycling onto the latest
+ * message but leaves the previous message's current emoji in place. Old
+ * messages keep their final emoji as an "I saw this" badge until the
+ * turn ends, then `stopThrobber` clears reactions across every inbound
+ * id we touched in the session. This was the v1→v2 regression: v2's
+ * first cut stripped reactions off older messages immediately on
+ * retarget, so anything that wasn't the very latest read as silent.
  */
 import fs from 'fs';
 
@@ -21,11 +29,11 @@ import { log } from '../../log.js';
 
 const THROBBER_EMOJIS = ['🔵', '🟦', '🔷'];
 /**
- * fs.watchFile poll granularity — stat every ~400ms. Coarser than the
- * default 5s (way too slow for a visible throbber), finer-grained than
- * needed for correctness. Heartbeats land faster than this in practice
- * during active work, so each poll tick will see at most one apparent
- * bump per window and we cycle exactly once per window.
+ * fs.watchFile poll granularity. Coarser than the default 5s (way too
+ * slow for a visible throbber), finer-grained than needed for
+ * correctness. Heartbeats land faster than this in practice during
+ * active work, so each poll tick will see at most one apparent bump
+ * per window and we cycle exactly once per window.
  */
 const WATCH_INTERVAL_MS = 400;
 
@@ -46,17 +54,28 @@ interface ReactionAdapter {
   ): Promise<void>;
 }
 
+interface InflightMessage {
+  messageId: string;
+  /** Last emoji we placed on this message, or undefined if no react landed. */
+  lastEmoji?: string;
+}
+
 interface ThrobberTarget {
   agentGroupId: string;
   sessionId: string;
   channelType: string;
   platformId: string;
   threadId: string | null;
-  messageId: string;
+  /**
+   * In-flight inbound messages we've reacted to during this throbber's
+   * lifetime, in arrival order. The last entry is the active cycling
+   * target; older entries keep their last emoji as an "in-flight"
+   * badge until stopThrobber clears them.
+   */
+  inflight: InflightMessage[];
   hbPath: string;
   watcher: fs.StatWatcher;
   idx: number;
-  active: boolean; // have we placed at least one reaction?
   lastMtimeMs: number;
 }
 
@@ -69,33 +88,45 @@ export function setThrobberAdapter(a: ReactionAdapter): void {
   adapter = a;
 }
 
-async function react(t: ThrobberTarget, emoji: string): Promise<void> {
+async function react(t: ThrobberTarget, messageId: string, emoji: string): Promise<void> {
   try {
-    await adapter?.addReaction?.(t.channelType, t.platformId, t.threadId, t.messageId, emoji);
+    await adapter?.addReaction?.(t.channelType, t.platformId, t.threadId, messageId, emoji);
   } catch {
     // Best effort — never let throbber errors bubble.
   }
 }
 
-async function unreact(t: ThrobberTarget, emoji: string): Promise<void> {
+async function unreact(t: ThrobberTarget, messageId: string, emoji: string): Promise<void> {
   try {
-    await adapter?.removeReaction?.(t.channelType, t.platformId, t.threadId, t.messageId, emoji);
+    await adapter?.removeReaction?.(t.channelType, t.platformId, t.threadId, messageId, emoji);
   } catch {
     // Best effort.
   }
 }
 
-function cycle(t: ThrobberTarget): void {
-  const prevEmoji = THROBBER_EMOJIS[(t.idx - 1 + THROBBER_EMOJIS.length) % THROBBER_EMOJIS.length];
-  const nextEmoji = THROBBER_EMOJIS[t.idx % THROBBER_EMOJIS.length];
+function activeMessage(t: ThrobberTarget): InflightMessage | undefined {
+  return t.inflight[t.inflight.length - 1];
+}
 
-  // Add before remove — keeps reaction count >= 1 so the message doesn't
-  // visually jump from having reactions to none mid-cycle.
+function cycle(t: ThrobberTarget): void {
+  const active = activeMessage(t);
+  if (!active) return;
+
+  const nextEmoji = THROBBER_EMOJIS[t.idx % THROBBER_EMOJIS.length];
+  const prevEmoji = active.lastEmoji;
+
+  // Add before remove on the SAME message — keeps a reaction visible
+  // throughout the cycle on the active message. Older inflight messages
+  // keep whatever emoji was last placed on them; that's their "in-flight"
+  // badge.
   void (async () => {
-    await react(t, nextEmoji);
-    if (t.active) await unreact(t, prevEmoji);
-    t.active = true;
+    await react(t, active.messageId, nextEmoji);
+    if (prevEmoji && prevEmoji !== nextEmoji) {
+      await unreact(t, active.messageId, prevEmoji);
+    }
+    active.lastEmoji = nextEmoji;
   })();
+
   t.idx++;
 }
 
@@ -111,20 +142,17 @@ export function startThrobber(
 
   const existing = throbbers.get(sessionId);
   if (existing) {
-    // New inbound message on an already-running throbber — retarget to
-    // the newer message so the emoji appears where the user last spoke.
-    // Clear old target's reactions best-effort.
-    if (existing.active) {
-      for (const emoji of THROBBER_EMOJIS) {
-        void unreact(existing, emoji);
-      }
+    // New inbound during an active throbber — retarget the cycling onto
+    // the new message. Leave the previous target's current emoji as an
+    // "in-flight" badge; stopThrobber will clear all of them when the
+    // turn ends.
+    if (!existing.inflight.some((m) => m.messageId === messageId)) {
+      existing.inflight.push({ messageId });
     }
-    existing.messageId = messageId;
     existing.idx = 0;
-    existing.active = false;
-    // Reset lastMtimeMs — require a fresh heartbeat AFTER this inbound
-    // before the first cycle fires. Ensures the reaction signals a
-    // new API response, not a stale one from the previous turn.
+    // Reset lastMtimeMs — wait for a fresh heartbeat AFTER this inbound
+    // before cycling. The reaction signals a new API response, not a
+    // stale one from before this message arrived.
     existing.lastMtimeMs = readMtime(existing.hbPath);
     return;
   }
@@ -136,24 +164,22 @@ export function startThrobber(
     channelType,
     platformId,
     threadId,
-    messageId,
+    inflight: [{ messageId }],
     hbPath,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     watcher: null as any, // set below
     idx: 0,
-    active: false,
     lastMtimeMs: readMtime(hbPath),
   };
 
   // fs.watchFile polls stat at the configured interval and fires on any
-  // change (mtime/ctime/size). utimesSync in the container updates mtime,
-  // which fs.watch (inotify IN_MODIFY) does NOT surface on Linux — so we
-  // use watchFile + poll instead. Polling is 500ms-ish; plenty responsive
-  // for a visual throbber and cheap per-session.
+  // change. utimesSync in the container updates mtime, which fs.watch
+  // (inotify IN_MODIFY) does NOT surface on Linux — so we use watchFile
+  // + poll instead.
   const watcher = fs.watchFile(hbPath, { interval: WATCH_INTERVAL_MS, persistent: false }, (curr) => {
     const t = throbbers.get(sessionId);
     if (!t) return;
-    if (curr.mtimeMs === 0) return; // file missing (container not yet touched it)
+    if (curr.mtimeMs === 0) return; // file missing
     if (curr.mtimeMs === t.lastMtimeMs) return;
     t.lastMtimeMs = curr.mtimeMs;
     cycle(t);
@@ -176,10 +202,14 @@ export function stopThrobber(sessionId: string): void {
   if (!t) return;
   fs.unwatchFile(t.hbPath);
   throbbers.delete(sessionId);
-  if (!t.active) return;
-  // Clear all possible emojis — in case a cycle raced mid-transition.
-  for (const emoji of THROBBER_EMOJIS) {
-    void unreact(t, emoji);
+  // Clear every emoji we ever placed on every in-flight message in this
+  // throbber's lifetime. Try every emoji on every message — cheap and
+  // covers cycle-mid-transition races where lastEmoji might not match
+  // what's actually on the server.
+  for (const m of t.inflight) {
+    for (const emoji of THROBBER_EMOJIS) {
+      void unreact(t, m.messageId, emoji);
+    }
   }
-  log.debug('Throbber stopped', { sessionId });
+  log.debug('Throbber stopped', { sessionId, inflight: t.inflight.length });
 }
