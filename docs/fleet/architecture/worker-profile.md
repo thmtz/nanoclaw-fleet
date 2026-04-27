@@ -97,5 +97,4 @@ The allowlist is read once at host startup. New entries require a restart.
 | `container/worker-init.sh` | Boot script (clones, tools, skills) |
 | `src/modules/mount-security/index.ts` | Allowlist validation |
 | `examples/worker-profiles/example.json` | Reference template |
-| `examples/worker-profiles/init.sh` | Reference init script (for forks that need a fully custom one) |
-| `examples/worker-profiles/CLAUDE.worker.example.md` | Reference worker-side CLAUDE.md fragment |
+| `examples/worker-profiles/init.sh.example` | Reference init script (for forks that need a fully custom one) |
