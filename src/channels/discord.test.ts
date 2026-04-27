@@ -1,15 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-// Re-implement the same regex inline so this test pins behavior even if
-// the helper is refactored or moved. Equivalent to stripDuplicateLinks
-// in src/channels/discord.ts.
-function stripDuplicateLinks(text: string): string {
-  return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (full, label, url) => {
-    if (label === url) return url;
-    if (/^https?:\/\//.test(label) && /^https?:\/\//.test(url)) return url;
-    return full;
-  });
-}
+import { stripDuplicateLinks } from './discord.js';
 
 describe('Discord stripDuplicateLinks', () => {
   it('collapses [url](url) where label equals url', () => {

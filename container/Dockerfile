@@ -79,6 +79,14 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" && \
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh \
     && uv --version
 
+# ---- Tailscale CLI -----------------------------------------------------------
+# Workers reach Tailscale hosts (`tailscale ssh ops@prod-db-01`,
+# `tailscale status`) by talking to the host's tailscaled via the mounted
+# /var/run/tailscale/tailscaled.sock. The CLI just needs to be on PATH.
+# Optional — if the host doesn't run tailscaled, the socket isn't mounted
+# and the CLI prints a clear "no tailscaled running" error.
+RUN curl -fsSL https://tailscale.com/install.sh | sh
+
 # ---- agent-runner deps -------------------------------------------------------
 # Deps are cached independently of CLI versions. Source is NOT baked in —
 # it's provided by the shared RO mount at runtime.
