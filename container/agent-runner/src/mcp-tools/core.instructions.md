@@ -24,7 +24,11 @@ The user is often on a phone screen, doesn't see your tool calls, and only knows
 
 ### Avoid duplicate messages
 
-If you've used `send_message` to deliver your reply, do NOT also emit the same text as your final turn output. The user will see it twice. Wrap your final output in `<internal>...</internal>` tags so NanoClaw suppresses it from chat: `<internal>Already sent via send_message.</internal>`.
+`send_message` posts a chat reply immediately. Your final turn output is _also_ delivered as a chat message — so if `send_message` already ran this turn, the user sees the same content twice.
+
+To suppress the duplicate, wrap the final output in `<internal>...</internal>` and NanoClaw drops it from chat.
+
+**Only do this if a real `send_message` tool_use ran earlier in the same turn.** If none did, your final output IS the user-visible reply — write it as a normal chat message. A stand-alone `<internal>...</internal>` with no preceding `send_message` produces silence: the formatter drops the wrap, no other content is sent, the user gets nothing.
 
 ### Pacing updates on longer turns
 
