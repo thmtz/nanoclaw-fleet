@@ -35,6 +35,7 @@ import Database from 'better-sqlite3';
 
 import { DATA_DIR, GROUPS_DIR } from '../../config.js';
 import { createAgentGroup, getAgentGroup, getAgentGroupByFolder } from '../../db/agent-groups.js';
+import { getMessagingGroup } from '../../db/messaging-groups.js';
 import { createSession, getSessionsByAgentGroup } from '../../db/sessions.js';
 import { initGroupFilesystem } from '../../group-init.js';
 import { sessionDir } from '../../session-manager.js';
@@ -326,13 +327,26 @@ export async function handleForkWorker(content: Record<string, unknown>, session
     copyOverlayDeep(srcClaudeShared, dstClaudeShared);
   }
 
+  // Each fork session's thread_id needs to match what the router will
+  // synthesize when an inbound from fork's NEW Discord channel arrives —
+  // otherwise findSession misses the cloned session and auto-creates a
+  // second one (with empty DBs), orphaning the cloned history. The
+  // convention is thread_id = mg.platform_id for non-threaded channel
+  // messages, so derive it from the freshly-provisioned messaging group.
+  const forkMg = provision.messagingGroupId ? getMessagingGroup(provision.messagingGroupId) : undefined;
+  const forkThreadId = forkMg?.platform_id ?? null;
+
   for (const srcSess of sourceSessions) {
     const forkSessionId = generateId('sess');
     const newSession: Session = {
       id: forkSessionId,
       agent_group_id: forkId,
       messaging_group_id: provision.messagingGroupId,
-      thread_id: srcSess.thread_id,
+      // Inherit source's thread_id was wrong — that's the source's
+      // channel, not the fork's. Use the fork mg's platform_id instead so
+      // the router routes inbound traffic into the cloned session
+      // instead of auto-creating a second one with empty DBs.
+      thread_id: forkThreadId,
       agent_provider: srcSess.agent_provider,
       status: 'active',
       container_status: 'idle',
