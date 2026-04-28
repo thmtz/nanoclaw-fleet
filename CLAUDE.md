@@ -5,8 +5,9 @@
 This is NanoClaw v2, a ground-up rewrite with breaking changes throughout. It cannot be merged into an existing v1 install. Attempting to resolve the conflicts by hand, run builds, or "fix" anything will corrupt the user's install and burn tokens for no result.
 
 **Do this instead:**
+
 1. Abort the merge: `git merge --abort` (or `git reset --hard ORIG_HEAD` if the merge already completed).
-2. Tell the user, verbatim: *"This is the v2 rewrite — it can't be merged into your existing install. Run `bash migrate-v2.sh` to migrate instead."*
+2. Tell the user, verbatim: _"This is the v2 rewrite — it can't be merged into your existing install. Run `bash migrate-v2.sh` to migrate instead."_
 3. Wait for the user to confirm before doing anything else. Do not attempt the migration yourself.
 
 If you are a fresh install (you ran `git clone`, not `git pull`) and there are no conflicts, ignore this banner and continue below.
@@ -27,8 +28,8 @@ This is `thmtz/nanoclaw-fleet` — a fleet-manager fork on top of `qwibitai/nano
   - **NEVER push to any branch without explicit user confirmation.**
   - **NEVER push directly to `main`.** Always feature branch + PR.
   - **NEVER force push** unless the user explicitly asks for it.
-- **Hooks.** On every fresh clone: `git config core.hooksPath .githooks`. Runs prettier, tsc, and tests on push. Don't skip with `--no-verify`.
-- **Restart discipline.** Don't restart the running NanoClaw service (`systemctl --user restart nanoclaw`, `launchctl kickstart`, `kill`-ing the host process) or kill running worker containers without explicit user confirmation. Workers are real long-running sessions; a restart kills active conversations and any pending turns. If a code or config change *would* require a restart to take effect, finish the change, mention that a restart is needed, and ask before doing it.
+- **Hooks.** Husky installs `.husky/` hooks automatically on `pnpm install` (via the `prepare` script). `pre-commit` formats staged files with Prettier and re-stages them; `pre-push` runs `format:check`, host + container `tsc`, and host `vitest run`. Don't skip with `--no-verify` unless you know exactly why.
+- **Restart discipline.** Don't restart the running NanoClaw service (`systemctl --user restart nanoclaw`, `launchctl kickstart`, `kill`-ing the host process) or kill running worker containers without explicit user confirmation. Workers are real long-running sessions; a restart kills active conversations and any pending turns. If a code or config change _would_ require a restart to take effect, finish the change, mention that a restart is needed, and ask before doing it.
 
 ## Documentation routing
 
@@ -96,32 +97,32 @@ Exactly one writer per file — no cross-mount lock contention. Heartbeat is a f
 
 ## Central DB
 
-`data/v2.db` holds everything that isn't per-session: users, user_roles, agent_groups, messaging_groups, wiring, pending_approvals, user_dms, chat_sdk_* (for the Chat SDK bridge), schema_version. Migrations live at `src/db/migrations/`.
+`data/v2.db` holds everything that isn't per-session: users, user*roles, agent_groups, messaging_groups, wiring, pending_approvals, user_dms, chat_sdk*\* (for the Chat SDK bridge), schema_version. Migrations live at `src/db/migrations/`.
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Entry point: init DB, migrations, channel adapters, delivery polls, sweep, shutdown |
-| `src/router.ts` | Inbound routing: messaging group → agent group → session → `inbound.db` → wake |
-| `src/delivery.ts` | Polls `outbound.db`, delivers via adapter, handles system actions (schedule, approvals, etc.) |
-| `src/host-sweep.ts` | 60s sweep: `processing_ack` sync, stale detection, due-message wake, recurrence |
-| `src/session-manager.ts` | Resolves sessions; opens `inbound.db` / `outbound.db`; manages heartbeat path |
-| `src/container-runner.ts` | Spawns per-agent-group Docker containers with session DB + outbox mounts, OneCLI `ensureAgent` |
-| `src/container-runtime.ts` | Runtime selection (Docker vs Apple containers), orphan cleanup |
-| `src/modules/permissions/access.ts` | `canAccessAgentGroup` — owner / global admin / scoped admin / member resolution against `user_roles` + `agent_group_members` |
-| `src/modules/approvals/primitive.ts` | `pickApprover`, `pickApprovalDelivery`, `requestApproval`, approval-handler registry |
-| `src/command-gate.ts` | Router-side admin command gate — queries `user_roles` directly (no env var, no container-side check) |
-| `src/onecli-approvals.ts` | OneCLI credentialed-action approval bridge |
-| `src/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
-| `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills, agent-runner-src overlay) |
-| `src/db/` | DB layer — agent_groups, messaging_groups, sessions, user_roles, user_dms, pending_*, migrations |
-| `src/channels/` | Channel adapter infra (registry, Chat SDK bridge); specific channel adapters are skill-installed from the `channels` branch |
-| `src/providers/` | Host-side provider container-config (`claude` baked in; `opencode` etc. installed from the `providers` branch) |
-| `container/agent-runner/src/` | Agent-runner: poll loop, formatter, provider abstraction, MCP tools, destinations |
-| `container/skills/` | Container skills mounted into every agent session |
-| `groups/<folder>/` | Per-agent-group filesystem (CLAUDE.md, skills, per-group `agent-runner-src/` overlay) |
-| `scripts/init-first-agent.ts` | Bootstrap the first DM-wired agent (used by `/init-first-agent` skill) |
+| File                                 | Purpose                                                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                       | Entry point: init DB, migrations, channel adapters, delivery polls, sweep, shutdown                                          |
+| `src/router.ts`                      | Inbound routing: messaging group → agent group → session → `inbound.db` → wake                                               |
+| `src/delivery.ts`                    | Polls `outbound.db`, delivers via adapter, handles system actions (schedule, approvals, etc.)                                |
+| `src/host-sweep.ts`                  | 60s sweep: `processing_ack` sync, stale detection, due-message wake, recurrence                                              |
+| `src/session-manager.ts`             | Resolves sessions; opens `inbound.db` / `outbound.db`; manages heartbeat path                                                |
+| `src/container-runner.ts`            | Spawns per-agent-group Docker containers with session DB + outbox mounts, OneCLI `ensureAgent`                               |
+| `src/container-runtime.ts`           | Runtime selection (Docker vs Apple containers), orphan cleanup                                                               |
+| `src/modules/permissions/access.ts`  | `canAccessAgentGroup` — owner / global admin / scoped admin / member resolution against `user_roles` + `agent_group_members` |
+| `src/modules/approvals/primitive.ts` | `pickApprover`, `pickApprovalDelivery`, `requestApproval`, approval-handler registry                                         |
+| `src/command-gate.ts`                | Router-side admin command gate — queries `user_roles` directly (no env var, no container-side check)                         |
+| `src/onecli-approvals.ts`            | OneCLI credentialed-action approval bridge                                                                                   |
+| `src/user-dm.ts`                     | Cold-DM resolution + `user_dms` cache                                                                                        |
+| `src/group-init.ts`                  | Per-agent-group filesystem scaffold (CLAUDE.md, skills, agent-runner-src overlay)                                            |
+| `src/db/`                            | DB layer — agent*groups, messaging_groups, sessions, user_roles, user_dms, pending*\*, migrations                            |
+| `src/channels/`                      | Channel adapter infra (registry, Chat SDK bridge); specific channel adapters are skill-installed from the `channels` branch  |
+| `src/providers/`                     | Host-side provider container-config (`claude` baked in; `opencode` etc. installed from the `providers` branch)               |
+| `container/agent-runner/src/`        | Agent-runner: poll loop, formatter, provider abstraction, MCP tools, destinations                                            |
+| `container/skills/`                  | Container skills mounted into every agent session                                                                            |
+| `groups/<folder>/`                   | Per-agent-group filesystem (CLAUDE.md, skills, per-group `agent-runner-src/` overlay)                                        |
+| `scripts/init-first-agent.ts`        | Bootstrap the first DM-wired agent (used by `/init-first-agent` skill)                                                       |
 
 ## Channels and Providers (skill-installed)
 
@@ -148,7 +149,7 @@ API keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway. 
 
 When the host first spawns a session for a new agent group, `container-runner.ts:385` calls `onecli.ensureAgent({ name, identifier })`. The OneCLI `POST /api/agents` endpoint creates the agent in **`selective`** secret mode — meaning **no secrets are assigned to it by default**, even if the secrets exist in the vault and have host patterns that would otherwise match.
 
-Symptom: container starts, the proxy + CA cert are wired correctly, but the agent gets `401 Unauthorized` (or similar) from APIs whose credentials *are* in the vault. The credential just isn't in this agent's allow-list.
+Symptom: container starts, the proxy + CA cert are wired correctly, but the agent gets `401 Unauthorized` (or similar) from APIs whose credentials _are_ in the vault. The credential just isn't in this agent's allow-list.
 
 The SDK does not expose `setSecretMode` — the only fix is the CLI (or the web UI at `http://127.0.0.1:10254`).
 
@@ -174,7 +175,7 @@ If you've just enabled `mode all`, no container restart is needed — the gatewa
 
 Approval-gating credentialed actions is a **two-sided** flow:
 
-- **Server-side** (OneCLI gateway): decides *when* to hold a request and emit a pending approval. As of `onecli@1.3.0`, the CLI does **not** expose this — `rules create --action` only accepts `block` or `rate_limit`, and `secrets create` has no approval flag. Approval policies must be configured via the OneCLI web UI at `http://127.0.0.1:10254`. If/when the CLI grows an `approve` action, this section needs updating.
+- **Server-side** (OneCLI gateway): decides _when_ to hold a request and emit a pending approval. As of `onecli@1.3.0`, the CLI does **not** expose this — `rules create --action` only accepts `block` or `rate_limit`, and `secrets create` has no approval flag. Approval policies must be configured via the OneCLI web UI at `http://127.0.0.1:10254`. If/when the CLI grows an `approve` action, this section needs updating.
 - **Host-side** (nanoclaw): receives pending approvals and routes them to a human. `src/modules/approvals/onecli-approvals.ts` registers a callback via `onecli.configureManualApproval(cb)` (long-polls `GET /api/approvals/pending`). The callback uses `pickApprover` + `pickApprovalDelivery` from `src/modules/approvals/primitive.ts` to DM an approver. Approvers are resolved from the `user_roles` table — preference order: scoped admins for the agent group → global admins → owners. There is no env var like `NANOCLAW_ADMIN_USER_IDS`; roles are persisted in the central DB only.
 
 If approvals are configured server-side but the host callback isn't running (or throws), every credentialed call hangs until the gateway times out. Conversely, if the gateway has no rule asking for approval, the host callback never fires regardless of how it's wired.
@@ -188,15 +189,15 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 - **Operational skills** — instruction-only workflows (`/setup`, `/debug`, `/customize`, `/init-first-agent`, `/manage-channels`, `/init-onecli`, `/update-nanoclaw`).
 - **Container skills** — loaded inside agent containers at runtime (`container/skills/`: `welcome`, `self-customize`, `agent-browser`, `slack-formatting`).
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time install, auth, service config |
+| Skill               | When to Use                                                                      |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `/setup`            | First-time install, auth, service config                                         |
 | `/init-first-agent` | Bootstrap the first DM-wired agent (channel pick → identity → wire → welcome DM) |
-| `/manage-channels` | Wire channels to agent groups with isolation level decisions |
-| `/customize` | Adding channels, integrations, behavior changes |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream updates into a customized install |
-| `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials |
+| `/manage-channels`  | Wire channels to agent groups with isolation level decisions                     |
+| `/customize`        | Adding channels, integrations, behavior changes                                  |
+| `/debug`            | Container issues, logs, troubleshooting                                          |
+| `/update-nanoclaw`  | Bring upstream updates into a customized install                                 |
+| `/init-onecli`      | Install OneCLI Agent Vault and migrate `.env` credentials                        |
 
 ## Contributing
 
@@ -221,6 +222,7 @@ cd container/agent-runner && bun test      # Container tests (bun:test)
 Container typecheck is a separate tsconfig — if you edit `container/agent-runner/src/`, run `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` from root (or `bun run typecheck` from `container/agent-runner/`).
 
 Service management:
+
 ```bash
 # macOS (launchd)
 launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
@@ -238,24 +240,25 @@ Host logs: `logs/nanoclaw.log` (normal) and `logs/nanoclaw.error.log` (errors on
 This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspace.yaml`. New package versions must exist on the npm registry for 3 days before pnpm will resolve them.
 
 **Rules — do not bypass without explicit human approval:**
+
 - **`minimumReleaseAgeExclude`**: Never add entries without human sign-off. If a package must bypass the release age gate, the human must approve and the entry must pin the exact version being excluded (e.g. `package@1.2.3`), never a range.
 - **`onlyBuiltDependencies`**: Never add packages to this list without human approval — build scripts execute arbitrary code during install.
 - **`pnpm install --frozen-lockfile`** should be used in CI, automation, and container builds. Never run bare `pnpm install` in those contexts.
 
 ## Docs Index
 
-| Doc | Purpose |
-|-----|---------|
-| [docs/architecture.md](docs/architecture.md) | Full architecture writeup |
-| [docs/api-details.md](docs/api-details.md) | Host API + DB schema details |
-| [docs/db.md](docs/db.md) | DB architecture overview: three-DB model, cross-mount rules, readers/writers map |
-| [docs/db-central.md](docs/db-central.md) | Central DB (`data/v2.db`) — every table + migration system |
-| [docs/db-session.md](docs/db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
-| [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
-| [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
-| [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
-| [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |
-| [docs/build-and-runtime.md](docs/build-and-runtime.md) | Runtime split (Node host + Bun container), lockfiles, image build surface, CI, key invariants |
+| Doc                                                          | Purpose                                                                                       |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)                 | Full architecture writeup                                                                     |
+| [docs/api-details.md](docs/api-details.md)                   | Host API + DB schema details                                                                  |
+| [docs/db.md](docs/db.md)                                     | DB architecture overview: three-DB model, cross-mount rules, readers/writers map              |
+| [docs/db-central.md](docs/db-central.md)                     | Central DB (`data/v2.db`) — every table + migration system                                    |
+| [docs/db-session.md](docs/db-session.md)                     | Per-session `inbound.db` + `outbound.db` schemas + seq parity                                 |
+| [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface                                                   |
+| [docs/isolation-model.md](docs/isolation-model.md)           | Three-level channel isolation model                                                           |
+| [docs/setup-wiring.md](docs/setup-wiring.md)                 | What's wired, what's open in the setup flow                                                   |
+| [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture                                                           |
+| [docs/build-and-runtime.md](docs/build-and-runtime.md)       | Runtime split (Node host + Bun container), lockfiles, image build surface, CI, key invariants |
 
 ## Container Build Cache
 

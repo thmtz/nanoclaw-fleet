@@ -1,1 +1,22 @@
-pnpm run format:fix
+#!/usr/bin/env sh
+# Format only the files staged for this commit, then re-stage them so the
+# formatted version is what actually gets committed. Without the re-stage,
+# the working tree gets formatted but the commit still captured the
+# pre-format version — which is what CI's `format:check` kept catching.
+#
+# `--diff-filter=ACMR` avoids trying to format deleted files; the regex
+# limits to extensions prettier handles.
+
+set -e
+
+STAGED=$(git diff --name-only --cached --diff-filter=ACMR | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml)$' || true)
+
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+# shellcheck disable=SC2086
+pnpm exec prettier --write $STAGED
+
+# shellcheck disable=SC2086
+git add $STAGED
