@@ -5,6 +5,7 @@ import type { Adapter } from 'chat';
 import {
   createChatSdkBridge,
   fetchAttachmentFromUrl,
+  isPublicHostnameForAttachmentUrl,
   shouldFetchAttachment,
   splitForLimit,
 } from './chat-sdk-bridge.js';
@@ -157,5 +158,65 @@ describe('fetchAttachmentFromUrl', () => {
       return new Response('not found', { status: 404 });
     }) as typeof fetch;
     await expect(fetchAttachmentFromUrl('https://example.test/missing')).rejects.toThrow(/HTTP 404/);
+  });
+
+  it('rejects non-https schemes (no fetch issued)', async () => {
+    let fetched = false;
+    globalThis.fetch = (async () => {
+      fetched = true;
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchAttachmentFromUrl('http://cdn.discordapp.com/attachments/1.txt')).toBeNull();
+    expect(await fetchAttachmentFromUrl('file:///etc/passwd')).toBeNull();
+    expect(fetched).toBe(false);
+  });
+
+  it('rejects IP-literal and localhost hostnames (SSRF guard)', async () => {
+    let fetched = false;
+    globalThis.fetch = (async () => {
+      fetched = true;
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchAttachmentFromUrl('https://127.0.0.1/bytes')).toBeNull();
+    expect(await fetchAttachmentFromUrl('https://169.254.169.254/latest/meta-data/')).toBeNull();
+    expect(await fetchAttachmentFromUrl('https://localhost:3001/x')).toBeNull();
+    expect(await fetchAttachmentFromUrl('https://[::1]/x')).toBeNull();
+    expect(fetched).toBe(false);
+  });
+
+  it('rejects unparseable URLs (no fetch issued)', async () => {
+    let fetched = false;
+    globalThis.fetch = (async () => {
+      fetched = true;
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchAttachmentFromUrl('not a url')).toBeNull();
+    expect(fetched).toBe(false);
+  });
+});
+
+describe('isPublicHostnameForAttachmentUrl', () => {
+  it('accepts public CDN hostnames', () => {
+    expect(isPublicHostnameForAttachmentUrl('cdn.discordapp.com')).toBe(true);
+    expect(isPublicHostnameForAttachmentUrl('media.discordapp.net')).toBe(true);
+    expect(isPublicHostnameForAttachmentUrl('files.slack.com')).toBe(true);
+  });
+
+  it('rejects IPv4 literals', () => {
+    expect(isPublicHostnameForAttachmentUrl('127.0.0.1')).toBe(false);
+    expect(isPublicHostnameForAttachmentUrl('169.254.169.254')).toBe(false);
+    expect(isPublicHostnameForAttachmentUrl('10.0.0.1')).toBe(false);
+    expect(isPublicHostnameForAttachmentUrl('192.168.1.1')).toBe(false);
+    expect(isPublicHostnameForAttachmentUrl('8.8.8.8')).toBe(false);
+  });
+
+  it('rejects IPv6 literals and localhost', () => {
+    expect(isPublicHostnameForAttachmentUrl('::1')).toBe(false);
+    expect(isPublicHostnameForAttachmentUrl('fe80::1')).toBe(false);
+    expect(isPublicHostnameForAttachmentUrl('localhost')).toBe(false);
+  });
+
+  it('rejects empty hostname', () => {
+    expect(isPublicHostnameForAttachmentUrl('')).toBe(false);
   });
 });
