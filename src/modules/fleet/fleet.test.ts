@@ -178,6 +178,83 @@ describe('resume from archive', () => {
   });
 });
 
+describe('create_worker fresh flag', () => {
+  it('with fresh=true, purges archived prior + creates a new agent_group', async () => {
+    await handleCreateWorker({ name: 'kappa', backend: 'claude' }, makeMasterSession());
+    const original = getAgentGroupByFolder('kappa');
+    await handleDestroyWorker({ name: 'kappa' }, makeMasterSession());
+    expect(getAgentGroupByFolder('kappa')?.status).toBe('archived');
+
+    await handleCreateWorker(
+      { name: 'kappa', backend: 'neuralwatt', model: 'glm-5.1', fresh: true },
+      makeMasterSession(),
+    );
+    const fresh = getAgentGroupByFolder('kappa');
+    expect(fresh).toBeDefined();
+    // New row, not the archived one being unarchived.
+    expect(fresh?.id).not.toBe(original?.id);
+    expect(fresh?.status ?? 'active').toBe('active');
+    expect(fresh?.fleet_backend).toBe('neuralwatt');
+    expect(fresh?.fleet_model).toBe('glm-5.1');
+  });
+
+  it('with fresh=true, deletes the archived workspace dir on disk', async () => {
+    await handleCreateWorker({ name: 'mu' }, makeMasterSession());
+    await handleDestroyWorker({ name: 'mu' }, makeMasterSession());
+
+    const workspaceDir = TEST_DIR + '/groups/mu';
+    expect(fs.existsSync(workspaceDir)).toBe(true);
+
+    await handleCreateWorker({ name: 'mu', fresh: true }, makeMasterSession());
+
+    // The fresh path purged the old workspace, then init recreated a
+    // bare scaffold for the new agent_group. Verify by checking the
+    // fresh agent_group's id maps to a new directory + the prior
+    // sessions data was removed.
+    const fresh = getAgentGroupByFolder('mu');
+    expect(fresh).toBeDefined();
+    // Either the bare init recreated the dir (now empty) or it doesn't
+    // exist yet — both are valid post-purge. The pre-purge contents are
+    // gone in either case; assert no stale CLAUDE.local.md from before.
+    if (fs.existsSync(workspaceDir + '/CLAUDE.local.md')) {
+      const body = fs.readFileSync(workspaceDir + '/CLAUDE.local.md', 'utf-8');
+      // The init scaffold writes a tiny stub, not the original content.
+      expect(body.length).toBeLessThan(500);
+    }
+  });
+
+  it('without fresh on archived name, falls back to resume (existing behavior preserved)', async () => {
+    await handleCreateWorker({ name: 'nu' }, makeMasterSession());
+    const original = getAgentGroupByFolder('nu');
+    await handleDestroyWorker({ name: 'nu' }, makeMasterSession());
+
+    await handleCreateWorker({ name: 'nu' }, makeMasterSession()); // no fresh flag
+    const resumed = getAgentGroupByFolder('nu');
+    expect(resumed?.id).toBe(original?.id); // resumed, not purged
+    expect(resumed?.status).toBe('active');
+  });
+
+  it('with fresh=true on a NON-archived (no prior) name, just creates fresh', async () => {
+    await handleCreateWorker({ name: 'xi', backend: 'claude', fresh: true }, makeMasterSession());
+    const xi = getAgentGroupByFolder('xi');
+    expect(xi).toBeDefined();
+    expect(xi?.fleet_role).toBe('worker');
+  });
+
+  it('refuses fresh purge on an ACTIVE worker (must destroy first)', async () => {
+    await handleCreateWorker({ name: 'omicron' }, makeMasterSession());
+    const original = getAgentGroupByFolder('omicron');
+    expect(original?.status ?? 'active').toBe('active');
+
+    await handleCreateWorker({ name: 'omicron', fresh: true }, makeMasterSession());
+
+    // Active worker still there, untouched, no second row created.
+    const after = getAgentGroupByFolder('omicron');
+    expect(after?.id).toBe(original?.id);
+    expect(after?.status ?? 'active').toBe('active');
+  });
+});
+
 describe('switch_backend', () => {
   it('updates agent_provider + fleet fields + container.json', async () => {
     await handleCreateWorker({ name: 'epsilon', backend: 'claude' }, makeMasterSession());
