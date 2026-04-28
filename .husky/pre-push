@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+# Run the same checks CI runs (minus bun container tests, which currently
+# flake — see the runPollLoop leak; tests don't actually cancel the loop on
+# abort, so the loop polls onto a closed DB after teardown and bun reports
+# late-describe / sqlite errors). Drop them back in once that's fixed.
+#
+# Skip with `git push --no-verify` only when you know what you're doing.
+
+set -e
+
+echo "→ format:check"
+pnpm run format:check
+
+echo "→ typecheck (host)"
+pnpm exec tsc --noEmit
+
+echo "→ typecheck (container)"
+pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit
+
+echo "→ host tests"
+pnpm exec vitest run
+
+echo "✓ all pre-push checks green"
