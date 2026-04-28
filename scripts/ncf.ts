@@ -14,7 +14,7 @@
  *   ncf                          — usage
  *   ncf status [--json]
  *   ncf list [--json]
- *   ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>]
+ *   ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>] [--fresh]
  *   ncf destroy <name> [--keep-channel]
  *   ncf switch <name> <backend> [model]
  *   ncf logs <name> [--follow]   — docker logs for the worker's container
@@ -32,7 +32,7 @@ const SCRIPT_USAGE = `ncf — NanoClaw Fleet CLI
 Usage:
   ncf status [--json]
   ncf list [--json]
-  ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>]
+  ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>] [--fresh]
   ncf destroy <name> [--keep-channel]
   ncf switch <name> <backend> [model]
   ncf fork <source> <fork_name>
@@ -248,22 +248,25 @@ function cmdList(args: string[]): void {
 function cmdCreate(args: string[]): void {
   const name = args[0];
   if (!name || name.startsWith('--')) {
-    console.error('usage: ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>]');
+    console.error('usage: ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>] [--fresh]');
     process.exit(1);
   }
   let backend: string | undefined;
   let model: string | undefined;
   let instructions: string | undefined;
+  let fresh = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--backend') backend = args[++i];
     else if (args[i] === '--model') model = args[++i];
     else if (args[i] === '--instructions') instructions = args[++i];
+    else if (args[i] === '--fresh') fresh = true;
   }
   writeSystemAction('create_worker', {
     name,
     backend: backend ?? null,
     model: model ?? null,
     instructions: instructions ?? null,
+    fresh,
   });
 }
 

@@ -43,7 +43,7 @@ export const createWorker: McpToolDefinition = {
   tool: {
     name: 'create_worker',
     description:
-      "Create a new fleet worker. Each worker gets its own Discord channel and container. Use when the user asks for a new worker. Fire-and-forget — you'll get a system message when it's ready.",
+      "Create a new fleet worker. Each worker gets its own Discord channel and container. Fire-and-forget — you'll get a system message when it's ready.\n\nResume vs fresh: if a worker with the requested name was previously destroyed (status='archived'), the default behavior is to RESUME from archive — workspace files, CLAUDE.local.md, and prior conversation history come back. Backend/model can change on resume.\n\nWhen the user asks for a fresh / clean / new-from-scratch worker on a name that has archived history, you MUST first confirm with them that the prior workspace + conversation history will be PERMANENTLY DELETED, then call this tool with `fresh: true`. Setting fresh=true silently destroys the prior state — there is no undo. Skip the confirmation only when the user explicitly asked for fresh AND acknowledged the data loss in the same message.",
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -57,6 +57,11 @@ export const createWorker: McpToolDefinition = {
         instructions: {
           type: 'string',
           description: 'Seed CLAUDE.local.md for the new worker — personality, role, tooling hints.',
+        },
+        fresh: {
+          type: 'boolean',
+          description:
+            'Force a clean slate even if an archived worker with this name exists. PERMANENTLY DELETES the prior workspace + session history. Confirm with the user FIRST. Default false (resume from archive when one exists).',
         },
       },
       required: ['name'],
@@ -76,10 +81,13 @@ export const createWorker: McpToolDefinition = {
         backend: args.backend ?? null,
         model: args.model ?? null,
         instructions: args.instructions ?? null,
+        fresh: args.fresh === true,
       }),
     });
-    log(`create_worker: ${id} → "${name}"`);
-    return ok(`Creating worker "${name}". You will be notified when it is ready.`);
+    log(`create_worker: ${id} → "${name}"${args.fresh ? ' (fresh)' : ''}`);
+    return ok(
+      `Creating worker "${name}"${args.fresh ? ' (fresh — purging any archived prior)' : ''}. You will be notified when it is ready.`,
+    );
   },
 };
 
