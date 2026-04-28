@@ -58,6 +58,7 @@ vi.mock('../agent-to-agent/write-destinations.js', () => ({
 const { handleCreateWorker } = await import('./create-worker.js');
 const { handleDestroyWorker } = await import('./destroy-worker.js');
 const { handleSwitchBackend } = await import('./switch-backend.js');
+const { handleForkWorker } = await import('./fork-worker.js');
 const { listWorkers } = await import('./list-workers.js');
 
 const TEST_DIR = '/tmp/nanoclaw-test-fleet';
@@ -187,6 +188,74 @@ describe('switch_backend', () => {
     expect(w?.fleet_model).toBe('kimi-k2.5');
     const cfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/epsilon/container.json', 'utf-8'));
     expect(cfg.provider).toBe('neuralwatt');
+  });
+});
+
+describe('fork_worker', () => {
+  it("creates a new agent_group with the source worker's backend + model", async () => {
+    await handleCreateWorker({ name: 'src1', backend: 'neuralwatt', model: 'kimi-k2.5' }, makeMasterSession());
+    await handleForkWorker({ source: 'src1', name: 'fork1' }, makeMasterSession());
+
+    const fork = getAgentGroupByFolder('fork1');
+    expect(fork).toBeDefined();
+    expect(fork?.id).not.toBe(getAgentGroupByFolder('src1')?.id);
+    expect(fork?.fleet_role).toBe('worker');
+    expect(fork?.fleet_backend).toBe('neuralwatt');
+    expect(fork?.fleet_model).toBe('kimi-k2.5');
+    expect(fork?.status ?? 'active').toBe('active');
+  });
+
+  it('rejects fork name collision with an existing worker', async () => {
+    await handleCreateWorker({ name: 'src2' }, makeMasterSession());
+    await handleCreateWorker({ name: 'taken' }, makeMasterSession());
+    const beforeIds = new Set([getAgentGroupByFolder('src2')?.id, getAgentGroupByFolder('taken')?.id]);
+
+    await handleForkWorker({ source: 'src2', name: 'taken' }, makeMasterSession());
+
+    // No new agent_group created (the existing 'taken' is unchanged).
+    const after = getAgentGroupByFolder('taken');
+    expect(beforeIds.has(after?.id)).toBe(true);
+  });
+
+  it('rejects when source worker does not exist', async () => {
+    await handleForkWorker({ source: 'nope', name: 'fork-of-nope' }, makeMasterSession());
+    expect(getAgentGroupByFolder('fork-of-nope')).toBeUndefined();
+  });
+
+  it('rejects when source and fork names match', async () => {
+    await handleCreateWorker({ name: 'src3' }, makeMasterSession());
+    await handleForkWorker({ source: 'src3', name: 'src3' }, makeMasterSession());
+    // Source still the only one with this folder.
+    expect(getAgentGroupByFolder('src3')?.fleet_role).toBe('worker');
+  });
+
+  it('rejects non-master callers', async () => {
+    updateAgentGroup('ag-master', { fleet_role: null });
+    await handleForkWorker({ source: 'whatever', name: 'still-noop' }, makeMasterSession());
+    expect(getAgentGroupByFolder('still-noop')).toBeUndefined();
+  });
+
+  it('writes a forked event to worker-events.jsonl', async () => {
+    await handleCreateWorker({ name: 'src4' }, makeMasterSession());
+    await handleForkWorker({ source: 'src4', name: 'fork4' }, makeMasterSession());
+
+    const eventsFile = require('path').resolve(process.cwd(), 'logs/worker-events.jsonl');
+    const fsLocal = require('fs');
+    if (fsLocal.existsSync(eventsFile)) {
+      const lines = fsLocal.readFileSync(eventsFile, 'utf-8').trim().split('\n');
+      const forkedRow = lines
+        .map((l: string) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .find((e: { event: string; folder: string }) => e.event === 'forked' && e.folder === 'fork4');
+      expect(forkedRow).toBeDefined();
+      expect(forkedRow.details.source).toBe('src4');
+    }
   });
 });
 
