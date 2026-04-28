@@ -197,6 +197,15 @@ function readMtime(hbPath: string): number {
   }
 }
 
+/**
+ * Test-only — surface the in-flight message list a session is tracking.
+ * Used by src/modules/throbber/index.test.ts to verify retarget keeps
+ * prior messages instead of stripping their reactions.
+ */
+export function _throbberInflightForTest(sessionId: string): string[] | undefined {
+  return throbbers.get(sessionId)?.inflight.map((m) => m.messageId);
+}
+
 export function stopThrobber(sessionId: string): void {
   const t = throbbers.get(sessionId);
   if (!t) return;
