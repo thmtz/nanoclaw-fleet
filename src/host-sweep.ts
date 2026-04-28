@@ -50,7 +50,25 @@ const SWEEP_INTERVAL_MS = 60_000;
 // Absolute idle ceiling for a running container. If the heartbeat file hasn't
 // been touched in this long, the container is either stuck or doing genuinely
 // nothing — kill and restart on the next inbound.
-export const ABSOLUTE_CEILING_MS = 30 * 60 * 1000;
+//
+// Configurable via `HOST_ABSOLUTE_CEILING_MS`:
+//   - unset / 0 / negative / non-numeric → ceiling DISABLED (no idle reaping).
+//     Use this when workers may legitimately sit idle for hours between user
+//     messages, or run very long Bash commands that don't stream events.
+//   - positive integer → enforce that many ms.
+//
+// The claim-stuck check (CLAIM_STUCK_MS) still fires regardless: if a message
+// was claimed and the container went silent past tolerance with no heartbeat
+// since, that container is killed. So a wedged-mid-message container always
+// dies; an idle one only dies when this knob is set.
+function readCeilingMsFromEnv(): number {
+  const raw = process.env.HOST_ABSOLUTE_CEILING_MS;
+  if (raw == null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n;
+}
+export const ABSOLUTE_CEILING_MS = readCeilingMsFromEnv();
 // Stuck tolerance window applied per 'processing' claim — "did we see any
 // signs of life since this message was claimed?"
 export const CLAIM_STUCK_MS = 60 * 1000;
@@ -72,8 +90,11 @@ export function decideStuckAction(args: {
   heartbeatMtimeMs: number; // 0 when heartbeat file absent
   containerState: ContainerState | null;
   claims: Array<{ message_id: string; status_changed: string }>;
+  // Override for tests. Production callers omit; the env-derived value is used.
+  absoluteCeilingMs?: number;
 }): StuckDecision {
   const { now, heartbeatMtimeMs, containerState, claims } = args;
+  const absoluteCeilingMs = args.absoluteCeilingMs ?? ABSOLUTE_CEILING_MS;
   const declaredBashMs = bashTimeoutMs(containerState);
 
   // Ceiling check only applies when we have an actual heartbeat timestamp.
@@ -84,11 +105,19 @@ export function decideStuckAction(args: {
   // process not running" cleanup path, not here. If a fresh container is
   // hanging at the gate (claimed a message but never did anything) the
   // claim-stuck check below handles it.
+  //
+  // Ceiling is enforced only when ABSOLUTE_CEILING_MS > 0. Default ships as
+  // 0 (disabled) so workers can sit idle indefinitely; opt in via the
+  // HOST_ABSOLUTE_CEILING_MS env var. Declared-Bash extension still applies:
+  // a long-running Bash with declared timeout extends whatever ceiling is
+  // configured, never below the declaration.
   if (heartbeatMtimeMs !== 0) {
-    const heartbeatAge = now - heartbeatMtimeMs;
-    const ceiling = Math.max(ABSOLUTE_CEILING_MS, declaredBashMs ?? 0);
-    if (heartbeatAge > ceiling) {
-      return { action: 'kill-ceiling', heartbeatAgeMs: heartbeatAge, ceilingMs: ceiling };
+    const ceiling = Math.max(absoluteCeilingMs, declaredBashMs ?? 0);
+    if (ceiling > 0) {
+      const heartbeatAge = now - heartbeatMtimeMs;
+      if (heartbeatAge > ceiling) {
+        return { action: 'kill-ceiling', heartbeatAgeMs: heartbeatAge, ceilingMs: ceiling };
+      }
     }
   }
 

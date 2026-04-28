@@ -110,6 +110,16 @@ The container touches `/workspace/.heartbeat` on every SDK event. The host's thr
 
 This is not a log — it's a side-channel for liveness. Mentioned here because it's the cheapest "is the agent still alive?" check available.
 
+**Important:** "every SDK event" means streaming chunks during an active LLM call — not the LLM call itself. An idle container between turns produces no events and the heartbeat freezes. That's by design but it interacts with the absolute-idle ceiling below.
+
+### Absolute idle ceiling
+
+`src/host-sweep.ts` runs a periodic check: if the heartbeat hasn't been touched in `HOST_ABSOLUTE_CEILING_MS` and there's no longer-declared Bash timeout in flight, the container is killed and respawned on the next inbound. **Default: 0 (disabled)** — workers can sit idle indefinitely. Set the env var to a positive number of milliseconds to opt in (e.g. `HOST_ABSOLUTE_CEILING_MS=1800000` for the historical 30-min behaviour).
+
+The separate per-claim "stuck" check still runs regardless: a container that has claimed a message and gone silent past `max(60s, declared_bash_ms)` since the claim is killed even with the ceiling disabled. So a wedged-mid-message container still dies; an idle one only dies when the ceiling is set.
+
+Knob lives in `src/host-sweep.ts::ABSOLUTE_CEILING_MS` (env-derived at startup).
+
 ## Log surfaces
 
 | Surface                                    | What's there                    | How to read                                          |

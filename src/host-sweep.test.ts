@@ -5,9 +5,12 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { ABSOLUTE_CEILING_MS, CLAIM_STUCK_MS, decideStuckAction } from './host-sweep.js';
+import { CLAIM_STUCK_MS, decideStuckAction } from './host-sweep.js';
 
 const BASE = Date.parse('2026-04-20T12:00:00.000Z');
+// Tests pin the ceiling locally — the production constant is env-derived
+// and defaults to 0 (disabled).
+const ABSOLUTE_CEILING_MS = 30 * 60 * 1000;
 
 function claim(id: string, offsetMs: number) {
   return { message_id: id, status_changed: new Date(BASE - offsetMs).toISOString() };
@@ -21,22 +24,58 @@ describe('decideStuckAction', () => {
         heartbeatMtimeMs: BASE - 5_000,
         containerState: null,
         claims: [],
+        absoluteCeilingMs: ABSOLUTE_CEILING_MS,
       }),
     ).toEqual({ action: 'ok' });
   });
 
-  it('returns kill-ceiling when heartbeat older than 30 min', () => {
+  it('returns kill-ceiling when heartbeat older than the configured ceiling', () => {
     const heartbeatMtimeMs = BASE - ABSOLUTE_CEILING_MS - 1_000;
     const res = decideStuckAction({
       now: BASE,
       heartbeatMtimeMs,
       containerState: null,
       claims: [],
+      absoluteCeilingMs: ABSOLUTE_CEILING_MS,
     });
     expect(res.action).toBe('kill-ceiling');
     if (res.action !== 'kill-ceiling') return;
     expect(res.ceilingMs).toBe(ABSOLUTE_CEILING_MS);
     expect(res.heartbeatAgeMs).toBeGreaterThan(ABSOLUTE_CEILING_MS);
+  });
+
+  it('does NOT kill on stale heartbeat when ceiling is 0 (disabled)', () => {
+    // Default production behaviour: HOST_ABSOLUTE_CEILING_MS unset → ceiling
+    // disabled → workers can sit idle indefinitely. Claim-stuck still fires
+    // separately when a message is in flight; that test below covers it.
+    const heartbeatMtimeMs = BASE - 24 * 60 * 60 * 1000; // a full day stale
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs,
+      containerState: null,
+      claims: [],
+      absoluteCeilingMs: 0,
+    });
+    expect(res.action).toBe('ok');
+  });
+
+  it('still extends with a declared Bash timeout when env ceiling is 0', () => {
+    // ceiling=0 + Bash declared 2h timeout, heartbeat 45min stale → 'ok'.
+    // Bash declaration still protects long commands even when the env ceiling
+    // is disabled — we only ever go MORE permissive, never less.
+    const twoHrMs = 2 * 60 * 60 * 1000;
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: BASE - 45 * 60 * 1000,
+      containerState: {
+        current_tool: 'Bash',
+        tool_declared_timeout_ms: twoHrMs,
+        tool_started_at: new Date(BASE - 45 * 60 * 1000).toISOString(),
+      },
+      claims: [],
+      absoluteCeilingMs: 0,
+    });
+    expect(res.action).toBe('ok');
   });
 
   it('skips the ceiling check when no heartbeat file exists (fresh container not yet ticked)', () => {
@@ -49,6 +88,7 @@ describe('decideStuckAction', () => {
       heartbeatMtimeMs: 0,
       containerState: null,
       claims: [],
+      absoluteCeilingMs: ABSOLUTE_CEILING_MS,
     });
     expect(res.action).toBe('ok');
   });
@@ -67,11 +107,11 @@ describe('decideStuckAction', () => {
     expect(res.action).toBe('kill-claim');
   });
 
-  it('extends the ceiling when Bash has a declared timeout longer than 30 min', () => {
+  it('extends the ceiling when Bash has a declared timeout longer than the configured ceiling', () => {
     const twoHrMs = 2 * 60 * 60 * 1000;
     const res = decideStuckAction({
       now: BASE,
-      // 45 min — over the default ceiling, but under the Bash timeout
+      // 45 min — over the configured ceiling, but under the Bash timeout
       heartbeatMtimeMs: BASE - 45 * 60 * 1000,
       containerState: {
         current_tool: 'Bash',
@@ -79,6 +119,7 @@ describe('decideStuckAction', () => {
         tool_started_at: new Date(BASE - 45 * 60 * 1000).toISOString(),
       },
       claims: [],
+      absoluteCeilingMs: ABSOLUTE_CEILING_MS,
     });
     expect(res.action).toBe('ok');
   });
