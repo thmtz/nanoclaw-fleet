@@ -509,22 +509,28 @@ function cmdRestart(args: string[]): void {
     spawnSync('docker', ['rm', '-f', container], { stdio: 'inherit' });
   }
   if (args.includes('--fresh')) {
+    // Container writes/reads its SDK session id under the key `sdk_session_id`
+    // — see container/agent-runner/src/db/session-state.ts:SDK_SESSION_KEY.
+    // Earlier code deleted `stored_session_id` here, which was a silent no-op
+    // (no row by that name) so --fresh effectively did nothing and the next
+    // wake resumed the same SDK session. Caught while debugging k2.6-dbg
+    // post-compaction hallucination loop — `--fresh` looked successful from
+    // the CLI but the agent kept resuming the poisoned session.
+    let cleared = 0;
     for (const s of listSessions(worker.id)) {
       const outPath = outboundDbPath(s.agent_group_id, s.id);
-      const inPath = outPath.replace(/outbound\.db$/, 'inbound.db');
-      for (const p of [outPath, inPath]) {
-        if (!fs.existsSync(p)) continue;
-        const db = new Database(p);
-        try {
-          db.prepare("DELETE FROM session_state WHERE key = 'stored_session_id'").run();
-        } catch {
-          /* table might not exist on inbound side */
-        } finally {
-          db.close();
-        }
+      if (!fs.existsSync(outPath)) continue;
+      const db = new Database(outPath);
+      try {
+        const res = db.prepare("DELETE FROM session_state WHERE key = 'sdk_session_id'").run();
+        cleared += res.changes;
+      } catch {
+        /* session_state may be absent on a brand-new outbound.db */
+      } finally {
+        db.close();
       }
     }
-    console.log(`restarted ${worker.folder} (fresh session)`);
+    console.log(`restarted ${worker.folder} (fresh session — cleared ${cleared} sdk_session_id row(s))`);
   } else {
     console.log(`restarted ${worker.folder} (resumes session on next message)`);
   }
