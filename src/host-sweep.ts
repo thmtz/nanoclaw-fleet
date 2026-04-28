@@ -15,10 +15,12 @@
  *   tries++. Existing retry machinery does the rest.
  *
  *   If the container IS running:
- *     1. Absolute ceiling: heartbeat age > max(30 min, current_bash_timeout)
- *        → kill. Covers the "alive but silent for 30 min" case. Extended
- *        only while Bash is declared as running longer, honouring the
- *        user's own timeout directive. Kill then resets processing rows.
+ *     1. Absolute ceiling: heartbeat age > max(HOST_ABSOLUTE_CEILING_MS,
+ *        current_bash_timeout) → kill. Default ceiling is 0 (disabled),
+ *        so idle containers persist until a real signal of trouble. Set
+ *        HOST_ABSOLUTE_CEILING_MS=<positive ms> to opt in. Bash declared
+ *        timeouts always extend the active ceiling on top of whatever is
+ *        configured. Kill then resets processing rows.
  *
  *     2. Message-scoped stuck: for each 'processing' row, tolerance =
  *        max(60s, current_bash_timeout_ms_if_Bash_running). If
