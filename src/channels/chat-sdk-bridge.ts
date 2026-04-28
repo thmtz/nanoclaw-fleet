@@ -61,11 +61,43 @@ export function shouldFetchAttachment(entry: { mimeType?: string; type?: string;
   return false;
 }
 
+/**
+ * Reject URLs whose hostname is an IP literal (any v4/v6 form) or `localhost`.
+ * SSRF guard: chat-sdk attachments are supposed to come from public CDNs
+ * (cdn.discordapp.com, media.discordapp.net, files.slack.com, etc.). A
+ * malicious or buggy adapter handing us http://169.254.169.254/ or
+ * http://127.0.0.1:3001/ could exfiltrate cloud metadata or hit the local
+ * credential proxy. None of the supported chat platforms ever surface IP
+ * literals, so blanket-rejecting them is safe.
+ */
+export function isPublicHostnameForAttachmentUrl(host: string): boolean {
+  if (!host) return false;
+  if (host === 'localhost') return false;
+  // IPv4 literal
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+  // IPv6 literal (raw or [bracketed]). The bracketed form keeps the colons.
+  if (host.includes(':')) return false;
+  return true;
+}
+
+const ATTACHMENT_FETCH_TIMEOUT_MS = Number(process.env.BRIDGE_ATTACHMENT_FETCH_TIMEOUT_MS ?? 10_000);
+
 export async function fetchAttachmentFromUrl(url: string, declaredSize?: number): Promise<Buffer | null> {
   if (declaredSize != null && declaredSize > ATTACHMENT_MAX_BYTES) {
     return null;
   }
-  const resp = await fetch(url);
+
+  // SSRF guard: https-only, no IP-literal / localhost hosts.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:') return null;
+  if (!isPublicHostnameForAttachmentUrl(parsed.hostname)) return null;
+
+  const resp = await fetch(url, { signal: AbortSignal.timeout(ATTACHMENT_FETCH_TIMEOUT_MS) });
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}`);
   }
