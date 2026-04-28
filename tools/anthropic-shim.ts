@@ -375,11 +375,11 @@ async function forwardToAnthropic(request: Request, body: Buffer, rewrittenUrl?:
   });
 }
 
-// Anthropic pass-through with trace. Buffers the response body so we can
-// log it; cost is one extra in-memory copy per request. SSE responses
-// (stream=true) come back as the same Anthropic SSE bytes the SDK already
-// parses, so we re-serve them verbatim — but parse them ourselves to
-// reconstruct the final message shape for the trace log.
+// Anthropic pass-through with trace. Tees the response body — one branch
+// streams to the client unchanged, the other accumulates into a buffer
+// asynchronously for the trace log. Critical: do NOT buffer the whole
+// response before returning, or SDK streaming UX (throbber + partial
+// rendering) breaks on every claude-direct call.
 async function traceAnthropic(
   request: Request,
   bodyBuffer: Buffer,
@@ -416,46 +416,83 @@ async function traceAnthropic(
     throw err;
   }
 
-  const respBuf = Buffer.from(await resp.arrayBuffer());
-  let parsedResp: any = null;
-  let stopReason: string | null = null;
-  let inTok: number | null = null;
-  let outTok: number | null = null;
-
-  if (isStream) {
-    parsedResp = assembleAnthropicSse(respBuf.toString('utf-8'));
-    stopReason = parsedResp.stop_reason;
-    inTok = parsedResp.usage?.input_tokens ?? null;
-    outTok = parsedResp.usage?.output_tokens ?? null;
-  } else {
-    parsedResp = safeJson(respBuf);
-    stopReason = parsedResp?.stop_reason ?? null;
-    inTok = parsedResp?.usage?.input_tokens ?? null;
-    outTok = parsedResp?.usage?.output_tokens ?? null;
+  // No body (HEAD, 204, etc.) — log and return as-is.
+  if (!resp.body) {
+    appendTrace({
+      ts: new Date().toISOString(),
+      worker: workerFolder,
+      backend: 'anthropic',
+      model_in: reqJson?.model,
+      model_out: reqJson?.model,
+      method: request.method,
+      path: url.pathname,
+      status: resp.status,
+      stream: isStream,
+      latency_ms: Date.now() - startMs,
+      req_size: bodyBuffer.length,
+      resp_size: 0,
+      req_body: reqJson,
+      resp_body: null,
+      error: resp.ok ? null : `upstream ${resp.status}`,
+    });
+    return new Response(null, { status: resp.status, headers: resp.headers });
   }
 
-  appendTrace({
-    ts: new Date().toISOString(),
-    worker: workerFolder,
-    backend: 'anthropic',
-    model_in: reqJson?.model,
-    model_out: reqJson?.model,
-    method: request.method,
-    path: url.pathname,
-    status: resp.status,
-    stream: isStream,
-    latency_ms: Date.now() - startMs,
-    req_size: bodyBuffer.length,
-    resp_size: respBuf.length,
-    stop_reason: stopReason,
-    input_tokens: inTok,
-    output_tokens: outTok,
-    req_body: reqJson,
-    resp_body: parsedResp,
-    error: resp.ok ? null : `upstream ${resp.status}`,
-  });
+  const [forClient, forTrace] = resp.body.tee();
 
-  return new Response(respBuf, { status: resp.status, headers: resp.headers });
+  // Drain the trace branch off the hot path — fire-and-forget. Errors here
+  // must never block the client response or the request from completing.
+  void (async () => {
+    try {
+      const reader = forTrace.getReader();
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+      const respBuf = Buffer.concat(chunks);
+      let parsedResp: any = null;
+      let stopReason: string | null = null;
+      let inTok: number | null = null;
+      let outTok: number | null = null;
+      if (isStream) {
+        parsedResp = assembleAnthropicSse(respBuf.toString('utf-8'));
+        stopReason = parsedResp.stop_reason;
+        inTok = parsedResp.usage?.input_tokens ?? null;
+        outTok = parsedResp.usage?.output_tokens ?? null;
+      } else {
+        parsedResp = safeJson(respBuf);
+        stopReason = parsedResp?.stop_reason ?? null;
+        inTok = parsedResp?.usage?.input_tokens ?? null;
+        outTok = parsedResp?.usage?.output_tokens ?? null;
+      }
+      appendTrace({
+        ts: new Date().toISOString(),
+        worker: workerFolder,
+        backend: 'anthropic',
+        model_in: reqJson?.model,
+        model_out: reqJson?.model,
+        method: request.method,
+        path: url.pathname,
+        status: resp.status,
+        stream: isStream,
+        latency_ms: Date.now() - startMs,
+        req_size: bodyBuffer.length,
+        resp_size: respBuf.length,
+        stop_reason: stopReason,
+        input_tokens: inTok,
+        output_tokens: outTok,
+        req_body: reqJson,
+        resp_body: parsedResp,
+        error: resp.ok ? null : `upstream ${resp.status}`,
+      });
+    } catch (err: any) {
+      console.error(`[proxy:trace] anthropic tee drain failed: ${err.message}`);
+    }
+  })();
+
+  return new Response(forClient, { status: resp.status, headers: resp.headers });
 }
 
 // ── Trace logging ──────────────────────────────────────────────
@@ -1003,6 +1040,13 @@ const server = Bun.serve({
                   }
                   traceContent.push({ type: 'tool_use', id: tc.id, name: tc.name, input: parsedInput });
                 }
+                // resp_size: total assembled chars across content blocks.
+                // Bytes-on-the-wire isn't tracked for the streaming neuralwatt
+                // path because we re-emit Anthropic SSE rather than re-buffer
+                // the OpenAI bytes. Char count is enough for "is the response
+                // tiny / huge?" triage; turns.jsonl carries the accurate
+                // result_text_length.
+                const traceToolJsonLen = Object.values(toolCallAccum).reduce((a, t) => a + (t.args?.length ?? 0), 0);
                 appendTrace({
                   ts: new Date().toISOString(),
                   worker: workerFolder,
@@ -1015,7 +1059,7 @@ const server = Bun.serve({
                   stream: true,
                   latency_ms: Date.now() - startMs,
                   req_size: bodyBuffer.length,
-                  resp_size: traceText.length + traceThinking.length,
+                  resp_size: traceText.length + traceThinking.length + traceToolJsonLen,
                   stop_reason: stopReason,
                   input_tokens: usage.prompt_tokens ?? null,
                   output_tokens: usage.completion_tokens ?? null,
