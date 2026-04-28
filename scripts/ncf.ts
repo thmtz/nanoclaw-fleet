@@ -43,6 +43,7 @@ Usage:
   ncf reap-orphans [--dry-run]
   ncf history [name] [--since <iso>] [--limit N] [--event <kind>] [--json]
   ncf turns <name> [--limit N] [--slow <ms>]
+  ncf trace <name> [--limit N] [--full] [--json] [--errors-only]
   ncf rebuild
 `;
 
@@ -74,7 +75,9 @@ interface SessionRow {
 function getMaster(): AgentRow {
   const db = openCentral();
   try {
-    const row = db.prepare("SELECT * FROM agent_groups WHERE fleet_role = 'master' LIMIT 1").get() as AgentRow | undefined;
+    const row = db.prepare("SELECT * FROM agent_groups WHERE fleet_role = 'master' LIMIT 1").get() as
+      | AgentRow
+      | undefined;
     if (!row) {
       console.error("No fleet master found. Seed one with 'pnpm exec tsx scripts/init-fleet-master.ts' first.");
       process.exit(2);
@@ -120,7 +123,9 @@ function writeSystemAction(action: string, payload: Record<string, unknown>): vo
   const session = getMasterSession(master.id);
   const dbPath = outboundDbPath(session.agent_group_id, session.id);
   if (!fs.existsSync(dbPath)) {
-    console.error(`Master outbound.db missing: ${dbPath}\nIs the host running and has the master ever processed a message?`);
+    console.error(
+      `Master outbound.db missing: ${dbPath}\nIs the host running and has the master ever processed a message?`,
+    );
     process.exit(2);
   }
   const db = new Database(dbPath);
@@ -139,9 +144,7 @@ function writeSystemAction(action: string, payload: Record<string, unknown>): vo
 function listWorkers(): AgentRow[] {
   const db = openCentral();
   try {
-    return db
-      .prepare(`SELECT * FROM agent_groups WHERE fleet_role = 'worker' ORDER BY name`)
-      .all() as AgentRow[];
+    return db.prepare(`SELECT * FROM agent_groups WHERE fleet_role = 'worker' ORDER BY name`).all() as AgentRow[];
   } finally {
     db.close();
   }
@@ -180,7 +183,9 @@ function findAgentByName(name: string): AgentRow | undefined {
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
-    return db.prepare('SELECT * FROM agent_groups WHERE folder = ? OR name = ?').get(folder, name) as AgentRow | undefined;
+    return db.prepare('SELECT * FROM agent_groups WHERE folder = ? OR name = ?').get(folder, name) as
+      | AgentRow
+      | undefined;
   } finally {
     db.close();
   }
@@ -330,12 +335,16 @@ function cmdSession(args: string[]): void {
   try {
     console.log(`== ${worker.folder} / ${sess.id} ==\n`);
     const ins = inDb
-      .prepare('SELECT timestamp, kind, substr(content, 1, 200) AS content FROM messages_in ORDER BY timestamp DESC LIMIT 10')
+      .prepare(
+        'SELECT timestamp, kind, substr(content, 1, 200) AS content FROM messages_in ORDER BY timestamp DESC LIMIT 10',
+      )
       .all() as Array<{ timestamp: string; kind: string; content: string }>;
     console.log('-- inbound --');
     for (const r of ins.reverse()) console.log(`  [${r.timestamp}] ${r.kind}: ${r.content}`);
     const outs = out
-      .prepare('SELECT timestamp, kind, substr(content, 1, 200) AS content FROM messages_out ORDER BY timestamp DESC LIMIT 10')
+      .prepare(
+        'SELECT timestamp, kind, substr(content, 1, 200) AS content FROM messages_out ORDER BY timestamp DESC LIMIT 10',
+      )
       .all() as Array<{ timestamp: string; kind: string; content: string }>;
     console.log('\n-- outbound --');
     for (const r of outs.reverse()) console.log(`  [${r.timestamp}] ${r.kind}: ${r.content}`);
@@ -507,9 +516,7 @@ function cmdRestart(args: string[]): void {
         if (!fs.existsSync(p)) continue;
         const db = new Database(p);
         try {
-          db.prepare(
-            "DELETE FROM session_state WHERE key = 'stored_session_id'",
-          ).run();
+          db.prepare("DELETE FROM session_state WHERE key = 'stored_session_id'").run();
         } catch {
           /* table might not exist on inbound side */
         } finally {
@@ -533,10 +540,14 @@ function cmdDebug(): void {
   const db = openCentral();
   try {
     const rows = db
-      .prepare(`SELECT name, folder, fleet_role, status, fleet_backend, fleet_model FROM agent_groups ORDER BY fleet_role, name`)
+      .prepare(
+        `SELECT name, folder, fleet_role, status, fleet_backend, fleet_model FROM agent_groups ORDER BY fleet_role, name`,
+      )
       .all();
     for (const r of rows as Array<Record<string, unknown>>) {
-      console.log(`  ${r.fleet_role ?? '—'}\t${r.status}\t${r.folder}\t${r.fleet_backend ?? '—'}${r.fleet_model ? ` (${r.fleet_model})` : ''}`);
+      console.log(
+        `  ${r.fleet_role ?? '—'}\t${r.status}\t${r.folder}\t${r.fleet_backend ?? '—'}${r.fleet_model ? ` (${r.fleet_model})` : ''}`,
+      );
     }
   } finally {
     db.close();
@@ -733,6 +744,138 @@ function cmdTurns(args: string[]): void {
   if (entries.length === 0) console.log('(no matching turns)');
 }
 
+const TRACES_DIR = path.resolve(process.cwd(), 'logs', 'shim-traces');
+
+interface TraceEntry {
+  ts: string;
+  worker: string;
+  backend: 'anthropic' | 'neuralwatt';
+  model_in?: string;
+  model_out?: string;
+  method: string;
+  path: string;
+  status: number;
+  stream: boolean;
+  latency_ms: number;
+  req_size: number;
+  resp_size: number;
+  stop_reason?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  req_body?: unknown;
+  resp_body?: unknown;
+  error?: string | null;
+}
+
+function summariseAnthropicMessage(msg: any, full: boolean): string {
+  if (!msg || typeof msg !== 'object') return String(msg ?? '');
+  // Request shape: { model, messages: [...], system, tools, max_tokens, stream }
+  if (Array.isArray(msg.messages)) {
+    const parts: string[] = [];
+    if (msg.system) {
+      const sys = typeof msg.system === 'string' ? msg.system : JSON.stringify(msg.system);
+      parts.push(`system: ${full ? sys : truncate(sys, 240)}`);
+    }
+    for (const m of msg.messages) {
+      const role = m.role ?? '?';
+      const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      parts.push(`${role}: ${full ? content : truncate(content, 320)}`);
+    }
+    if (msg.tools?.length) parts.push(`tools: ${msg.tools.map((t: any) => t.name).join(', ')}`);
+    return parts.join('\n');
+  }
+  // Response shape: { content: [...], stop_reason, usage }
+  if (Array.isArray(msg.content)) {
+    const parts: string[] = [];
+    for (const block of msg.content) {
+      if (block.type === 'text') parts.push(`text: ${full ? block.text : truncate(block.text ?? '', 480)}`);
+      else if (block.type === 'thinking')
+        parts.push(`thinking: ${full ? block.thinking : truncate(block.thinking ?? '', 240)}`);
+      else if (block.type === 'tool_use')
+        parts.push(
+          `tool_use ${block.name}(${full ? JSON.stringify(block.input) : truncate(JSON.stringify(block.input ?? {}), 240)})`,
+        );
+      else parts.push(`${block.type}: ${truncate(JSON.stringify(block), 240)}`);
+    }
+    return parts.join('\n');
+  }
+  const s = JSON.stringify(msg);
+  return full ? s : truncate(s, 600);
+}
+
+function truncate(s: string, n: number): string {
+  if (!s || s.length <= n) return s;
+  return `${s.slice(0, n)}… (+${s.length - n}ch)`;
+}
+
+function cmdTrace(args: string[]): void {
+  const name = args[0];
+  if (!name) {
+    console.error('usage: ncf trace <name> [--limit N] [--full] [--json] [--errors-only]');
+    process.exit(1);
+  }
+  let limit = 5;
+  let full = false;
+  let json = false;
+  let errorsOnly = false;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--limit') limit = parseInt(args[++i], 10);
+    else if (args[i] === '--full') full = true;
+    else if (args[i] === '--json') json = true;
+    else if (args[i] === '--errors-only') errorsOnly = true;
+  }
+
+  const worker = findAgentByName(name);
+  if (!worker) {
+    console.error(`unknown worker: ${name}`);
+    process.exit(1);
+  }
+  const file = path.join(TRACES_DIR, `${worker.folder}.jsonl`);
+  if (!fs.existsSync(file)) {
+    console.log(`(no traces yet at ${file})`);
+    console.log(
+      `tip: shim writes here only after a worker hits /v1/messages — confirm via 'ncf inject ${worker.folder} ping --wait'`,
+    );
+    return;
+  }
+  const lines = fs.readFileSync(file, 'utf-8').trim().split('\n').filter(Boolean);
+  let entries: TraceEntry[] = [];
+  for (const ln of lines) {
+    try {
+      entries.push(JSON.parse(ln) as TraceEntry);
+    } catch {
+      // skip malformed
+    }
+  }
+  if (errorsOnly) entries = entries.filter((e) => e.error || e.status >= 400 || e.status === 0);
+  entries = entries.slice(-limit);
+
+  if (json) {
+    for (const e of entries) console.log(JSON.stringify(e));
+    return;
+  }
+  if (entries.length === 0) {
+    console.log('(no matching traces)');
+    return;
+  }
+  for (const e of entries) {
+    const status = e.status === 0 ? 'ERR' : String(e.status);
+    const tokens =
+      e.input_tokens != null || e.output_tokens != null
+        ? ` in=${e.input_tokens ?? '?'} out=${e.output_tokens ?? '?'}`
+        : '';
+    const stop = e.stop_reason ? ` stop=${e.stop_reason}` : '';
+    const stream = e.stream ? ' (stream)' : '';
+    const model = e.model_out && e.model_out !== e.model_in ? `${e.model_in}→${e.model_out}` : (e.model_in ?? '?');
+    console.log(`\n── [${e.ts}] ${e.backend}/${model} ${e.path} ${status}${stream} ${e.latency_ms}ms${tokens}${stop}`);
+    if (e.error) console.log(`  error: ${e.error}`);
+    console.log(`  req (${e.req_size}b):`);
+    for (const ln of summariseAnthropicMessage(e.req_body, full).split('\n')) console.log(`    ${ln}`);
+    console.log(`  resp (${e.resp_size}b):`);
+    for (const ln of summariseAnthropicMessage(e.resp_body, full).split('\n')) console.log(`    ${ln}`);
+  }
+}
+
 // ── Entry ────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -771,6 +914,8 @@ function main(): void {
       return;
     case 'turns':
       return cmdTurns(rest);
+    case 'trace':
+      return cmdTrace(rest);
     case 'rebuild':
       return cmdRebuild(rest);
     case '-h':
