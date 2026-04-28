@@ -346,6 +346,12 @@ async function processQuery(
   const traceId = initialBatchIds.join(',');
   const tStart = Date.now();
   let firstEventAt: number | null = null;
+  // Count of mcp__nanoclaw__send_message tool_use events in the current
+  // turn. Reset on every result so each turn's count stands alone.
+  // dispatchResultText reads this to decide whether the final turn text
+  // is a duplicate of a real reply already delivered via send_message
+  // (drop it) or the only output the agent produced (surface it).
+  let sendMessageToolUseCount = 0;
   try {
     for await (const event of query.events) {
       if (firstEventAt === null) {
@@ -355,7 +361,11 @@ async function processQuery(
       handleEvent(event, routing);
       touchHeartbeat();
 
-      if (event.type === 'init') {
+      if (event.type === 'tool_use') {
+        if (event.tool_name === 'mcp__nanoclaw__send_message') {
+          sendMessageToolUseCount++;
+        }
+      } else if (event.type === 'init') {
         queryContinuation = event.continuation;
         // Persist immediately so a mid-turn container crash still lets the
         // next wake resume the conversation. Without this, the session id
@@ -389,8 +399,11 @@ async function processQuery(
           stop_reason: usage?.stop_reason ?? null,
         });
         if (event.text) {
-          dispatchResultText(event.text, routing);
+          dispatchResultText(event.text, routing, { sendMessageToolUseCount });
         }
+        // Reset for the next turn (streaming-input mode pushes follow-up
+        // user messages into the same query, each producing its own result).
+        sendMessageToolUseCount = 0;
       }
     }
   } finally {
@@ -432,8 +445,18 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
  * cleaned text (with <internal> tags stripped) is sent to that destination.
  * This preserves the simple case of one user on one channel — the agent
  * doesn't need to know about wrapping syntax at all.
+ *
+ * `send_message` auto-suppress: when the agent issued any
+ * `mcp__nanoclaw__send_message` tool_use this turn (tracked in the poll
+ * loop via the `tool_use` ProviderEvent), the final turn text is treated
+ * as redundant and dropped — send_message already delivered the reply
+ * to chat. This relieves the agent of the burden of remembering to wrap
+ * its closing line in `<internal>...</internal>` for de-duplication.
+ * Multi-destination output (`<message to="...">` blocks) still dispatches
+ * normally regardless, since those address agents/channels other than
+ * the one send_message hit.
  */
-function dispatchResultText(text: string, routing: RoutingContext): void {
+function dispatchResultText(text: string, routing: RoutingContext, opts: { sendMessageToolUseCount: number }): void {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
   let match: RegExpExecArray | null;
@@ -462,7 +485,35 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
     scratchpadParts.push(text.slice(lastIndex));
   }
 
-  const scratchpad = stripInternalTags(scratchpadParts.join(''));
+  const rawScratchpad = scratchpadParts.join('');
+  const stripped = stripInternalTags(rawScratchpad);
+  // Salvage path: if the agent's only output was `<internal>...</internal>`
+  // (so stripping leaves nothing) AND no send_message tool_use covered
+  // the reply, treat the inner content as the actual message. Surfaces
+  // the agent's template / scratchpad text rather than dropping it
+  // silently — silence reads as "agent broken"; even a weird-looking
+  // ack ("Acknowledged via send_message.") signals the user can ask
+  // for the substantive answer.
+  let scratchpad = stripped;
+  if (!stripped && opts.sendMessageToolUseCount === 0) {
+    const unwrapped = rawScratchpad.replace(/<\/?internal>/g, '').trim();
+    if (unwrapped) scratchpad = unwrapped;
+  }
+
+  // send_message ran this turn → final text is a duplicate / wrap-up;
+  // drop it. This is the canonical path for ack-then-work flows: agent
+  // calls send_message early, does its tool work, lets its closing
+  // statement fall through here, formatter suppresses it. No
+  // `<internal>` wrap required from the agent.
+  if (sent === 0 && opts.sendMessageToolUseCount > 0) {
+    if (scratchpad) {
+      log(
+        `[scratchpad] auto-suppressed (send_message ran ${opts.sendMessageToolUseCount}x this turn): ` +
+          `${scratchpad.slice(0, 200)}${scratchpad.length > 200 ? '…' : ''}`,
+      );
+    }
+    return;
+  }
 
   // Single-destination shortcut: the agent wrote plain text — send to
   // the session's originating channel. Prefer session_routing (written

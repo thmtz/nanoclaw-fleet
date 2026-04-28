@@ -82,6 +82,68 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
+  it('auto-suppresses final turn text when send_message tool_use ran this turn', async () => {
+    // Agent ran send_message early (the canonical ack-then-work flow), then
+    // its closing scratchpad ("<internal>done</internal>") falls through.
+    // dispatchResultText must drop the final text so the user doesn't see
+    // a duplicate or template-junk line. The MCP-side send_message itself
+    // is a no-op in MockProvider, so the only thing that *would* land in
+    // outbound is the scratchpad — assert nothing lands.
+    insertMessage(
+      'm1',
+      { sender: 'Alice', text: 'Do the thing' },
+      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
+    );
+
+    const provider = new MockProvider(
+      {},
+      () => '<internal>Sent reply via send_message. No further output needed.</internal>',
+      ['mcp__nanoclaw__send_message'],
+    );
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
+
+    // Wait for the result event by waiting for the message to be ack'd.
+    await waitFor(() => getPendingMessages().length === 0, 1500);
+    controller.abort();
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('salvages internal-only output when no send_message ran (rather than going silent)', async () => {
+    // Bug PR #93 surfaced: agent emits ONLY <internal>...</internal> with no
+    // send_message tool_use. Old behavior stripped the wrapper, leaving
+    // empty text, leaving the user with silence. New behavior unwraps the
+    // <internal> block and surfaces the text — weird-looking but not
+    // silent, so the user can see the agent's broken state and ask again.
+    insertMessage(
+      'm1',
+      { sender: 'Alice', text: 'Hi' },
+      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
+    );
+
+    const provider = new MockProvider(
+      {},
+      () => '<internal>Acknowledged via send_message.</internal>',
+      [], // no tool_use this turn
+    );
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 1500);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('Acknowledged via send_message.');
+
+    await loopPromise.catch(() => {});
+  });
+
   it('should process messages arriving after loop starts', async () => {
     const provider = new MockProvider({}, () => '<message to="discord-test">Processed</message>');
     const controller = new AbortController();

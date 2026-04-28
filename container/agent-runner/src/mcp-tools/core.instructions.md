@@ -24,11 +24,9 @@ The user is often on a phone screen, doesn't see your tool calls, and only knows
 
 ### Avoid duplicate messages
 
-`send_message` posts a chat reply immediately. Your final turn output is _also_ delivered as a chat message — so if `send_message` already ran this turn, the user sees the same content twice.
+`send_message` posts a chat reply immediately. Your final turn output is also normally delivered as a chat message. NanoClaw automatically suppresses the final turn output when `send_message` ran this turn, so you'll never get a duplicate — just write naturally. No `<internal>...</internal>` wrapping needed for de-duplication.
 
-To suppress the duplicate, wrap the final output in `<internal>...</internal>` and NanoClaw drops it from chat.
-
-**Only do this if a real `send_message` tool_use ran earlier in the same turn.** If none did, your final output IS the user-visible reply — write it as a normal chat message. A stand-alone `<internal>...</internal>` with no preceding `send_message` produces silence: the formatter drops the wrap, no other content is sent, the user gets nothing.
+(Internal scratchpad wrapping is still useful for genuinely-internal reasoning that you don't want delivered to chat — see "Internal thoughts" below.)
 
 ### Pacing updates on longer turns
 
