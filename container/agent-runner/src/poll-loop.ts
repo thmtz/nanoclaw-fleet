@@ -5,7 +5,14 @@ import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { logTurn } from './audit-log.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
 import { getSessionRouting } from './db/session-routing.js';
-import { formatMessages, extractRouting, categorizeMessage, isClearCommand, stripInternalTags, type RoutingContext } from './formatter.js';
+import {
+  formatMessages,
+  extractRouting,
+  categorizeMessage,
+  isClearCommand,
+  stripInternalTags,
+  type RoutingContext,
+} from './formatter.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -25,10 +32,18 @@ export interface PollLoopConfig {
   systemContext?: {
     instructions?: string;
   };
+  /**
+   * Optional abort signal. When aborted, the loop exits at its next
+   * boundary instead of running forever. In production the loop is kept
+   * alive for the container's lifetime (no signal passed); tests pass
+   * an `AbortController.signal` so they can stop the loop deterministically
+   * before tearing down the session DB.
+   */
+  signal?: AbortSignal;
 }
 
 /**
- * Main poll loop. Runs indefinitely until the process is killed.
+ * Main poll loop. Runs until aborted or the process is killed.
  *
  * 1. Poll messages_in for pending rows
  * 2. Format into prompt, call provider.query()
@@ -62,6 +77,10 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
   let pollCount = 0;
   while (true) {
+    if (config.signal?.aborted) {
+      log('Poll loop aborted via signal');
+      return;
+    }
     // Skip system messages — they're responses for MCP tools (e.g., ask_user_question)
     const messages = getPendingMessages().filter((m) => m.kind !== 'system');
     pollCount++;
@@ -191,7 +210,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
     try {
-      const result = await processQuery(query, routing, processingIds);
+      const result = await processQuery(query, routing, processingIds, config.signal);
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setStoredSessionId(continuation);
@@ -269,9 +288,27 @@ async function processQuery(
   query: AgentQuery,
   routing: RoutingContext,
   initialBatchIds: string[],
+  signal: AbortSignal | undefined,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
+
+  // If the caller's signal aborts mid-query, end the query promptly so the
+  // for-await below exits and the outer loop can return at its next
+  // iteration. Without this, mid-query aborts (e.g. test teardown) would
+  // wait forever on a long-running query stream.
+  const onAbort = (): void => {
+    try {
+      query.abort();
+    } catch {
+      // Best effort — provider may have already ended.
+    }
+  };
+  if (signal?.aborted) {
+    onAbort();
+  } else if (signal) {
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
   // We do NOT force-end the stream on silence — keeping the query open is
@@ -359,6 +396,7 @@ async function processQuery(
   } finally {
     done = true;
     clearInterval(pollHandle);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   return { continuation: queryContinuation };
@@ -373,7 +411,9 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
       log(`Result: ${event.text ? event.text.slice(0, 200) : '(empty)'}`);
       break;
     case 'error':
-      log(`Error: ${event.message} (retryable: ${event.retryable}${event.classification ? `, ${event.classification}` : ''})`);
+      log(
+        `Error: ${event.message} (retryable: ${event.retryable}${event.classification ? `, ${event.classification}` : ''})`,
+      );
       break;
     case 'progress':
       log(`Progress: ${event.message}`);

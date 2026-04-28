@@ -21,7 +21,11 @@ afterEach(() => {
   closeSessionDb();
 });
 
-function insertMessage(id: string, content: object, opts?: { platformId?: string; channelType?: string; threadId?: string }) {
+function insertMessage(
+  id: string,
+  content: object,
+  opts?: { platformId?: string; channelType?: string; threadId?: string },
+) {
   getInboundDb()
     .prepare(
       `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, thread_id, content)
@@ -32,7 +36,11 @@ function insertMessage(id: string, content: object, opts?: { platformId?: string
 
 describe('poll loop integration', () => {
   it('should pick up a message, process it, and write a response', async () => {
-    insertMessage('m1', { sender: 'Alice', text: 'What is the meaning of life?' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' });
+    insertMessage(
+      'm1',
+      { sender: 'Alice', text: 'What is the meaning of life?' },
+      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
+    );
 
     const provider = new MockProvider({}, () => '<message to="discord-test">42</message>');
 
@@ -93,18 +101,22 @@ describe('poll loop integration', () => {
   });
 });
 
-// Helper: run poll loop until aborted or timeout
+// Helper: run poll loop until aborted or timeout. Passes the signal
+// directly into runPollLoop so the loop exits cleanly at its next
+// iteration boundary instead of leaving a leaked while(true) running
+// past closeSessionDb (which was the source of the bun-test
+// SQLiteError + late-describe flakes).
 async function runPollLoopWithTimeout(provider: MockProvider, signal: AbortSignal, timeoutMs: number): Promise<void> {
-  return Promise.race([
-    runPollLoop({
-      provider,
-      cwd: '/tmp',
-    }),
-    new Promise<void>((_, reject) => {
-      signal.addEventListener('abort', () => reject(new Error('aborted')));
-    }),
-    new Promise<void>((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
-  ]);
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+  // Combined signal: abort if either the test's controller fires or the
+  // timeout elapses. AbortSignal.any is supported in Bun + Node 22+.
+  const combined = AbortSignal.any([signal, timeoutController.signal]);
+  try {
+    await runPollLoop({ provider, cwd: '/tmp', signal: combined });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
