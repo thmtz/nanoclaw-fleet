@@ -55,8 +55,9 @@ After implementing a feature or fix, do all three before declaring done.
 
 1. **Update docs.** `docs/fleet/architecture/` if behaviour changed; `docs/fleet/guides/testing.md` if a new test path was added; `.env.example` if env vars were added; `docs/fleet/reference/cli.md` if `ncf` flags changed.
 2. **Personally exercise the change.** Compiling and `pnpm test` are not enough.
-   - Code change in `src/`: build, restart the host (with confirmation per CLAUDE.local.md), `ncf inject --wait <worker> "ping"`, watch the reply.
+   - Code change in `src/`: **`pnpm run build` FIRST**, then restart the host (with confirmation per CLAUDE.local.md), then `ncf inject --wait <worker> "ping"`, watch the reply. The systemd unit runs `dist/index.js` — without a rebuild the restart silently loads the old code and your test "passes" against stale behavior. Confirm `dist/<your-file>.js` mtime is newer than the source before restarting.
    - Container-side change (`container/Dockerfile`, `worker-init.sh`, `agent-runner/src/`): rebuild the image (`./container/build.sh` or `ncf rebuild`), `ncf restart <worker>`, message the worker.
+   - Inference shim (`tools/anthropic-shim.ts`): runs straight from source via `bun run`, no build step — restart `nanoclaw-shim.service` and confirm new code is on disk (right git branch / merged to main) before the restart.
    - Worker lifecycle change: create a worker, message it, switch its backend, destroy it, recreate with the same name (resume), confirm DB state and Discord channel state at every step.
    - Inference / shim change: curl the shim, then send a real turn through a Neuralwatt worker.
 3. **Check logs after each test.** `tail -f logs/host.log`, `ncf logs <worker> --follow`, and `jq 'select(.level >= 50)' logs/host.jsonl` for errors. See [`docs/fleet/guides/testing.md`](docs/fleet/guides/testing.md) for the full E2E checklist.

@@ -17,18 +17,18 @@ If anything is red, see [troubleshooting.md](troubleshooting.md).
 
 ## What changed → what to test
 
-| You touched | Run |
-|-|-|
-| `src/modules/fleet/create-worker.ts` | Smoke + lifecycle script (creates, messages, destroys) |
-| `src/modules/fleet/destroy-worker.ts` | Lifecycle script step "destroy then resume" |
-| `src/modules/fleet/switch-backend.ts` | Lifecycle script "switch to neuralwatt" |
-| `src/modules/fleet/discord-channel.ts` or `provision.ts` | Lifecycle script "channel created" assertion |
-| `src/providers/{claude,neuralwatt}.ts` | Smoke + `ncf debug` (verify env injection) |
-| `src/modules/status-pin/` | Smoke (verifies pin landed and edits) |
-| `src/modules/throbber/` | Manual: send message, watch reaction emoji cycle |
-| `container/agent-runner/src/mcp-tools/fleet.ts` | Lifecycle script (master tool calls) |
-| `container/worker-init.sh` | Create a worker with repos/tools, exec in, verify |
-| `scripts/ncf.ts` | Manual `ncf <command>` checks |
+| You touched                                              | Run                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------ |
+| `src/modules/fleet/create-worker.ts`                     | Smoke + lifecycle script (creates, messages, destroys) |
+| `src/modules/fleet/destroy-worker.ts`                    | Lifecycle script step "destroy then resume"            |
+| `src/modules/fleet/switch-backend.ts`                    | Lifecycle script "switch to neuralwatt"                |
+| `src/modules/fleet/discord-channel.ts` or `provision.ts` | Lifecycle script "channel created" assertion           |
+| `src/providers/{claude,neuralwatt}.ts`                   | Smoke + `ncf debug` (verify env injection)             |
+| `src/modules/status-pin/`                                | Smoke (verifies pin landed and edits)                  |
+| `src/modules/throbber/`                                  | Manual: send message, watch reaction emoji cycle       |
+| `container/agent-runner/src/mcp-tools/fleet.ts`          | Lifecycle script (master tool calls)                   |
+| `container/worker-init.sh`                               | Create a worker with repos/tools, exec in, verify      |
+| `scripts/ncf.ts`                                         | Manual `ncf <command>` checks                          |
 
 ## Smoke test
 
@@ -163,21 +163,22 @@ ncf restart <worker>
 
 ## Common failures
 
-| Symptom | Likely cause | Fix |
-|-|-|-|
-| Worker channel created, no agent reply | Master never wrote to inbound | Check `ncf debug` for sessions; tail host.log |
-| `ncf create` returns "channel already exists" | Orphan from a prior failed run | `ncf reap-orphans` |
-| Neuralwatt worker 401s on first turn | Shim's `worker-backends.json` missing the entry | Set `NW_SHIM_CONFIG_PATH` and rerun `ncf switch <worker> neuralwatt <model>` |
-| Status pin appears multiple times | Stale pins from a prior bot identity | Restart the host; the sweep runs on startup |
-| Container builds don't pick up changes | Docker layer cache | `./container/build.sh` rebuilds the agent layer |
-| Master doesn't see fleet MCP tools | `fleet_role` not set on master agent_group | Re-run `init-fleet-master-discord.ts` |
+| Symptom                                         | Likely cause                                                                                                   | Fix                                                                                          |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Worker channel created, no agent reply          | Master never wrote to inbound                                                                                  | Check `ncf debug` for sessions; tail host.log                                                |
+| `ncf create` returns "channel already exists"   | Orphan from a prior failed run                                                                                 | `ncf reap-orphans`                                                                           |
+| Neuralwatt worker 401s on first turn            | Shim's `worker-backends.json` missing the entry                                                                | Set `NW_SHIM_CONFIG_PATH` and rerun `ncf switch <worker> neuralwatt <model>`                 |
+| Restarted host, change still didn't take effect | Forgot `pnpm run build` — host runs `dist/index.js`, not `src/`. The restart silently loaded old compiled code | `pnpm run build`, confirm `stat -c %y dist/<file>.js` is newer than the source, then restart |
+| Status pin appears multiple times               | Stale pins from a prior bot identity                                                                           | Restart the host; the sweep runs on startup                                                  |
+| Container builds don't pick up changes          | Docker layer cache                                                                                             | `./container/build.sh` rebuilds the agent layer                                              |
+| Master doesn't see fleet MCP tools              | `fleet_role` not set on master agent_group                                                                     | Re-run `init-fleet-master-discord.ts`                                                        |
 
 ## Files
 
-| File | Role |
-|-|-|
-| `scripts/smoke.sh` | Quick end-to-end smoke |
-| `scripts/test-fleet-lifecycle.ts` | Deeper 8-step lifecycle |
-| `scripts/init-fleet-master-discord.ts` | Master seeding |
-| `scripts/ncf.ts` | The CLI itself |
-| `~/.config/nanoclaw/debug_bot_token` | Debug bot token |
+| File                                   | Role                    |
+| -------------------------------------- | ----------------------- |
+| `scripts/smoke.sh`                     | Quick end-to-end smoke  |
+| `scripts/test-fleet-lifecycle.ts`      | Deeper 8-step lifecycle |
+| `scripts/init-fleet-master-discord.ts` | Master seeding          |
+| `scripts/ncf.ts`                       | The CLI itself          |
+| `~/.config/nanoclaw/debug_bot_token`   | Debug bot token         |
