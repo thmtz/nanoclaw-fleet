@@ -17,10 +17,12 @@
 import { registerDeliveryAction } from '../../delivery.js';
 import { handleCreateWorker } from './create-worker.js';
 import { handleDestroyWorker } from './destroy-worker.js';
+import { handleForkWorker } from './fork-worker.js';
 import { handleListWorkersRequest } from './list-workers.js';
 import { handleSwitchBackend } from './switch-backend.js';
 
 registerDeliveryAction('create_worker', handleCreateWorker);
 registerDeliveryAction('destroy_worker', handleDestroyWorker);
 registerDeliveryAction('switch_backend', handleSwitchBackend);
+registerDeliveryAction('fork_worker', handleForkWorker);
 registerDeliveryAction('list_workers_request', handleListWorkersRequest);
