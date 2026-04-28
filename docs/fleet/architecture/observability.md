@@ -35,13 +35,13 @@ Grep one id across host and container logs to follow a request end-to-end. There
 {"timestamp":"2026-04-24T...","event":"destroyed","worker":"foo","folder":"discord_foo"}
 ```
 
-| Field | Meaning |
-|-|-|
-| `timestamp` | ISO 8601 UTC |
-| `event` | `created` \| `destroyed` \| `backend_switched` \| `resumed` |
-| `worker` | display name |
-| `folder` | folder slug (e.g. `discord_foo`) |
-| `details` | event-specific (backend, model, parent folder, etc.) |
+| Field       | Meaning                                                     |
+| ----------- | ----------------------------------------------------------- |
+| `timestamp` | ISO 8601 UTC                                                |
+| `event`     | `created` \| `destroyed` \| `backend_switched` \| `resumed` |
+| `worker`    | display name                                                |
+| `folder`    | folder slug (e.g. `discord_foo`)                            |
+| `details`   | event-specific (backend, model, parent folder, etc.)        |
 
 Written by `src/modules/fleet/events.ts::logWorkerEvent()` from each delivery handler. Queryable from the host via `ncf history` and from inside any container via the `worker_history` MCP tool, both with filters on worker, event type, since-date, and limit.
 
@@ -66,6 +66,34 @@ Source: `container/agent-runner/src/audit-log.ts`. Tokens come straight from the
 
 `ncf turns <name> [--limit N] [--slow MS]` reads this file. Useful when triaging "this worker is slow" — `ncf turns foo --slow 5000` shows turns over five seconds.
 
+## Shim req/resp traces
+
+`turns.jsonl` answers "did this turn finish, and how long did it take?" but not "what did the agent ask the model, and what came back?" For that, the shim writes one line per `/v1/messages` call into `logs/shim-traces/<folder>.jsonl`:
+
+```json
+{
+  "ts": "2026-04-27T...",
+  "worker": "discord_foo",
+  "backend": "neuralwatt",
+  "model_in": "claude-sonnet-4-6",
+  "model_out": "Qwen/Qwen3.5-397B-A17B-FP8",
+  "status": 200,
+  "stream": true,
+  "latency_ms": 4321,
+  "input_tokens": 35506,
+  "output_tokens": 612,
+  "stop_reason": "end_turn",
+  "req_body": { "model": "...", "messages": [...], "system": "...", "tools": [...] },
+  "resp_body": { "content": [{"type":"text","text":"..."}, {"type":"tool_use","name":"Bash","input":{...}}], "stop_reason": "end_turn" }
+}
+```
+
+The full request body and an Anthropic-shape final response are stored — for streaming, the response is reconstructed from the SSE we already emit, so no extra parsing happens on the hot path. Tool-use inputs are reassembled from `input_json_delta` fragments and JSON-parsed.
+
+`ncf trace <name> [--limit N] [--full] [--errors-only] [--json]` reads this file. The default print summarises each entry — system prompt + last few messages + assistant content blocks, each truncated. `--full` keeps everything verbatim.
+
+This only covers traffic that flows through the shim — neuralwatt-backed workers and any anthropic-backed workers that route through it. A claude-direct worker that talks straight to `api.anthropic.com` won't appear here. Disable with `SHIM_TRACES=0` or change the directory with `SHIM_TRACES_DIR=...`. There's no automatic rotation: delete the files when they get too big — they're diagnostic, not historical.
+
 ## Energy read-through
 
 The Neuralwatt shim writes per-folder usage into a shared accumulator file. When `NW_SHIM_USAGE_PATH` points at it, the fleet reads through:
@@ -84,14 +112,15 @@ This is not a log — it's a side-channel for liveness. Mentioned here because i
 
 ## Log surfaces
 
-| Surface | What's there | How to read |
-|-|-|-|
-| `logs/host.log` (or systemd journal) | Host pretty logs | `tail -f logs/host.log` |
-| `logs/host.jsonl` | Host JSONL (one line per event) | `jq 'select(.level >= 50)' logs/host.jsonl` |
-| `logs/worker-events.jsonl` | Lifecycle audit | `ncf history` |
-| `data/v2-sessions/<ag>/<sess>/turns.jsonl` | Per-turn audit | `ncf turns <worker>` |
-| `docker logs <container>` | Container stdout/stderr | `ncf logs <worker> --follow` |
-| `data/worker-usage.json` | Shim's per-folder accumulator | `curl http://localhost:3003/usage` (when shim is up) |
+| Surface                                    | What's there                    | How to read                                          |
+| ------------------------------------------ | ------------------------------- | ---------------------------------------------------- |
+| `logs/host.log` (or systemd journal)       | Host pretty logs                | `tail -f logs/host.log`                              |
+| `logs/host.jsonl`                          | Host JSONL (one line per event) | `jq 'select(.level >= 50)' logs/host.jsonl`          |
+| `logs/worker-events.jsonl`                 | Lifecycle audit                 | `ncf history`                                        |
+| `data/v2-sessions/<ag>/<sess>/turns.jsonl` | Per-turn audit                  | `ncf turns <worker>`                                 |
+| `logs/shim-traces/<folder>.jsonl`          | Per-request shim req/resp       | `ncf trace <worker>`                                 |
+| `docker logs <container>`                  | Container stdout/stderr         | `ncf logs <worker> --follow`                         |
+| `data/worker-usage.json`                   | Shim's per-folder accumulator   | `curl http://localhost:3003/usage` (when shim is up) |
 
 ## Tracing one request
 
@@ -111,11 +140,12 @@ Or, simpler: run `ncf logs <worker> --follow` while you send the message, and yo
 
 ## Files
 
-| File | Role |
-|-|-|
-| `src/modules/fleet/events.ts` | Worker event log |
-| `container/agent-runner/src/audit-log.ts` | Per-turn audit writer |
-| `src/router.ts`, `src/delivery.ts` | Trace id logging on host critical path |
-| `container/agent-runner/src/poll-loop.ts` | Trace id logging in container |
-| `container/agent-runner/src/mcp-tools/introspect.ts` | `get_backend`, `get_usage`, `get_models` MCP tools |
-| `scripts/ncf.ts` | `history`, `turns`, `logs`, `session` commands |
+| File                                                 | Role                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------- |
+| `src/modules/fleet/events.ts`                        | Worker event log                                        |
+| `container/agent-runner/src/audit-log.ts`            | Per-turn audit writer                                   |
+| `src/router.ts`, `src/delivery.ts`                   | Trace id logging on host critical path                  |
+| `container/agent-runner/src/poll-loop.ts`            | Trace id logging in container                           |
+| `container/agent-runner/src/mcp-tools/introspect.ts` | `get_backend`, `get_usage`, `get_models` MCP tools      |
+| `scripts/ncf.ts`                                     | `history`, `turns`, `trace`, `logs`, `session` commands |
+| `tools/anthropic-shim.ts`                            | Inference proxy + shim-traces.jsonl writer              |

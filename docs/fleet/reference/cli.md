@@ -109,26 +109,41 @@ ncf turns foo --slow 5000           # turns over five seconds
 ncf turns foo --json | jq
 ```
 
+### `ncf trace <name> [--limit N] [--full] [--errors-only] [--json]`
+
+Read `logs/shim-traces/<folder>.jsonl` — one entry per `/v1/messages` call through the shim, with the full request body and an Anthropic-shape final response. Use this when a worker isn't responding and you need to see what it actually sent the model and what came back.
+
+```bash
+ncf trace foo                       # last 5 entries, summarised
+ncf trace foo --limit 1             # most recent only
+ncf trace foo --full                # don't truncate any field
+ncf trace foo --errors-only         # only non-2xx + transport errors
+ncf trace foo --json | jq           # raw JSONL
+```
+
+Only covers traffic that flows through the shim — neuralwatt-backed workers, plus anthropic-backed ones if their `ANTHROPIC_BASE_URL` points at the shim. A claude-direct worker that talks straight to `api.anthropic.com` won't appear here. Disable globally with `SHIM_TRACES=0`; relocate with `SHIM_TRACES_DIR=/some/path`.
+
 ### `ncf rebuild`
 
 Wraps `container/build.sh`. Rebuilds the base image, layers your personal Dockerfile if present, retags `:latest`.
 
 ## Cheat sheet
 
-| Task | Command |
-|-|-|
-| Health check | `ncf status` |
-| Diagnostic dump | `ncf debug` |
-| Make a worker | `ncf create <name>` |
-| Switch backend | `ncf switch <name> <backend> [model]` |
-| Restart worker | `ncf restart <name>` |
-| Reset session | `ncf restart <name> --fresh` |
-| Image rebuild | `ncf rebuild` |
-| Watch live logs | `ncf logs <name> --follow` |
-| Slow-turn audit | `ncf turns <name> --slow 5000` |
-| Lifecycle audit | `ncf history` |
-| Cleanup orphans | `ncf reap-orphans --confirm` |
-| Send a probe | `ncf inject --wait <name> "ping"` |
+| Task                      | Command                               |
+| ------------------------- | ------------------------------------- |
+| Health check              | `ncf status`                          |
+| Diagnostic dump           | `ncf debug`                           |
+| Make a worker             | `ncf create <name>`                   |
+| Switch backend            | `ncf switch <name> <backend> [model]` |
+| Restart worker            | `ncf restart <name>`                  |
+| Reset session             | `ncf restart <name> --fresh`          |
+| Image rebuild             | `ncf rebuild`                         |
+| Watch live logs           | `ncf logs <name> --follow`            |
+| Slow-turn audit           | `ncf turns <name> --slow 5000`        |
+| Inspect last API exchange | `ncf trace <name> --limit 1 --full`   |
+| Lifecycle audit           | `ncf history`                         |
+| Cleanup orphans           | `ncf reap-orphans --confirm`          |
+| Send a probe              | `ncf inject --wait <name> "ping"`     |
 
 ## After code changes
 

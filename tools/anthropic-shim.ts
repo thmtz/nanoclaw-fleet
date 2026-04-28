@@ -22,9 +22,10 @@ import fs from 'fs';
 import path from 'path';
 
 const PORT = Number(process.env.SHIM_PORT || '3003');
-const NEURALWATT_BASE = (
-  process.env.NEURALWATT_BASE_URL || 'https://api.neuralwatt.com/v1'
-).replace(/\/$/, '');
+const TRACES_DIR = process.env.SHIM_TRACES_DIR || 'logs/shim-traces';
+const TRACES_DISABLED = process.env.SHIM_TRACES === '0';
+fs.mkdirSync(TRACES_DIR, { recursive: true });
+const NEURALWATT_BASE = (process.env.NEURALWATT_BASE_URL || 'https://api.neuralwatt.com/v1').replace(/\/$/, '');
 const NEURALWATT_URL = `${NEURALWATT_BASE}/chat/completions`;
 const NEURALWATT_API_KEY = process.env.NEURALWATT_API_KEY || '';
 const WORKER_API_KEY_PREFIX = 'sk-ant-worker-';
@@ -48,8 +49,7 @@ function detectCredentialProxyUrl(): string {
   return 'http://127.0.0.1:3001';
 }
 const CREDENTIAL_PROXY_URL = detectCredentialProxyUrl();
-const CONFIG_PATH =
-  process.env.BACKEND_CONFIG_PATH || 'data/worker-backends.json';
+const CONFIG_PATH = process.env.BACKEND_CONFIG_PATH || 'data/worker-backends.json';
 
 // ── Config ─────────────────────────────────────────────────────
 
@@ -212,10 +212,7 @@ const NEURALWATT_MODEL_MAP: Record<string, string> = {
 };
 const DEFAULT_NEURALWATT_MODEL = 'Qwen/Qwen3.5-397B-A17B-FP8';
 
-function resolveNeuralwattModel(
-  anthropicModel: string,
-  configModel?: string,
-): string {
+function resolveNeuralwattModel(anthropicModel: string, configModel?: string): string {
   if (configModel) return configModel;
   return NEURALWATT_MODEL_MAP[anthropicModel] || DEFAULT_NEURALWATT_MODEL;
 }
@@ -226,10 +223,7 @@ function anthropicToOpenAI(body: any, model: string) {
   const messages: any[] = [];
 
   if (body.system) {
-    const systemText =
-      typeof body.system === 'string'
-        ? body.system
-        : body.system.map((b: any) => b.text).join('\n');
+    const systemText = typeof body.system === 'string' ? body.system : body.system.map((b: any) => b.text).join('\n');
     messages.push({ role: 'system', content: systemText });
   }
 
@@ -255,9 +249,7 @@ function anthropicToOpenAI(body: any, model: string) {
       if (toolCalls.length > 0) m.tool_calls = toolCalls;
       messages.push(m);
     } else if (msg.role === 'user') {
-      const toolResults = msg.content.filter(
-        (b: any) => b.type === 'tool_result',
-      );
+      const toolResults = msg.content.filter((b: any) => b.type === 'tool_result');
       if (toolResults.length > 0) {
         for (const tr of toolResults) {
           const resultContent =
@@ -315,16 +307,13 @@ function openAIToAnthropic(resp: any, requestedModel: string) {
   const message = choice?.message;
   const contentBlocks: any[] = [];
 
-  const reasoning =
-    message?.reasoning_content ||
-    message?.provider_specific_fields?.reasoning_content;
+  const reasoning = message?.reasoning_content || message?.provider_specific_fields?.reasoning_content;
   if (reasoning) {
     contentBlocks.push({ type: 'thinking', thinking: reasoning });
   }
 
   if (message?.tool_calls?.length) {
-    if (message.content)
-      contentBlocks.push({ type: 'text', text: message.content });
+    if (message.content) contentBlocks.push({ type: 'text', text: message.content });
     for (const tc of message.tool_calls) {
       contentBlocks.push({
         type: 'tool_use',
@@ -365,11 +354,7 @@ function openAIToAnthropic(resp: any, requestedModel: string) {
 
 // ── Anthropic pass-through (to credential proxy) ───────────────
 
-async function forwardToAnthropic(
-  request: Request,
-  body: Buffer,
-  rewrittenUrl?: URL,
-): Promise<Response> {
+async function forwardToAnthropic(request: Request, body: Buffer, rewrittenUrl?: URL): Promise<Response> {
   const url = rewrittenUrl || new URL(request.url);
   const targetUrl = `${CREDENTIAL_PROXY_URL}${url.pathname}${url.search}`;
 
@@ -390,6 +375,197 @@ async function forwardToAnthropic(
   });
 }
 
+// Anthropic pass-through with trace. Buffers the response body so we can
+// log it; cost is one extra in-memory copy per request. SSE responses
+// (stream=true) come back as the same Anthropic SSE bytes the SDK already
+// parses, so we re-serve them verbatim — but parse them ourselves to
+// reconstruct the final message shape for the trace log.
+async function traceAnthropic(
+  request: Request,
+  bodyBuffer: Buffer,
+  url: URL,
+  workerFolder: string,
+  startMs: number,
+): Promise<Response> {
+  const reqJson = safeJson(bodyBuffer);
+  const isStream = reqJson?.stream === true;
+  const targetUrl = `${CREDENTIAL_PROXY_URL}${url.pathname}${url.search}`;
+  const headers = new Headers(request.headers);
+  headers.delete('host');
+
+  let resp: Response;
+  try {
+    resp = await fetch(targetUrl, { method: request.method, headers, body: bodyBuffer });
+  } catch (err: any) {
+    appendTrace({
+      ts: new Date().toISOString(),
+      worker: workerFolder,
+      backend: 'anthropic',
+      model_in: reqJson?.model,
+      method: request.method,
+      path: url.pathname,
+      status: 0,
+      stream: isStream,
+      latency_ms: Date.now() - startMs,
+      req_size: bodyBuffer.length,
+      resp_size: 0,
+      req_body: reqJson,
+      resp_body: null,
+      error: err.message,
+    });
+    throw err;
+  }
+
+  const respBuf = Buffer.from(await resp.arrayBuffer());
+  let parsedResp: any = null;
+  let stopReason: string | null = null;
+  let inTok: number | null = null;
+  let outTok: number | null = null;
+
+  if (isStream) {
+    parsedResp = assembleAnthropicSse(respBuf.toString('utf-8'));
+    stopReason = parsedResp.stop_reason;
+    inTok = parsedResp.usage?.input_tokens ?? null;
+    outTok = parsedResp.usage?.output_tokens ?? null;
+  } else {
+    parsedResp = safeJson(respBuf);
+    stopReason = parsedResp?.stop_reason ?? null;
+    inTok = parsedResp?.usage?.input_tokens ?? null;
+    outTok = parsedResp?.usage?.output_tokens ?? null;
+  }
+
+  appendTrace({
+    ts: new Date().toISOString(),
+    worker: workerFolder,
+    backend: 'anthropic',
+    model_in: reqJson?.model,
+    model_out: reqJson?.model,
+    method: request.method,
+    path: url.pathname,
+    status: resp.status,
+    stream: isStream,
+    latency_ms: Date.now() - startMs,
+    req_size: bodyBuffer.length,
+    resp_size: respBuf.length,
+    stop_reason: stopReason,
+    input_tokens: inTok,
+    output_tokens: outTok,
+    req_body: reqJson,
+    resp_body: parsedResp,
+    error: resp.ok ? null : `upstream ${resp.status}`,
+  });
+
+  return new Response(respBuf, { status: resp.status, headers: resp.headers });
+}
+
+// ── Trace logging ──────────────────────────────────────────────
+//
+// One JSONL file per worker at logs/shim-traces/<folder>.jsonl. Each line
+// is a single /v1/messages POST: full request body, full assembled response,
+// status, latency, tokens. Used by `ncf trace <worker>` for "why is this
+// worker stuck?" debugging — turns.jsonl shows IF something hung, this
+// shows WHAT the agent sent and WHAT came back.
+//
+// No size cap at write time. If files grow large, delete them — they're
+// purely diagnostic. Disable entirely with SHIM_TRACES=0.
+
+interface ShimTraceEntry {
+  ts: string;
+  worker: string;
+  backend: 'anthropic' | 'neuralwatt';
+  model_in?: string;
+  model_out?: string;
+  method: string;
+  path: string;
+  status: number;
+  stream: boolean;
+  latency_ms: number;
+  req_size: number;
+  resp_size: number;
+  stop_reason?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  req_body?: unknown;
+  resp_body?: unknown;
+  error?: string | null;
+}
+
+function appendTrace(entry: ShimTraceEntry): void {
+  if (TRACES_DISABLED) return;
+  if (!entry.worker) return;
+  const file = path.join(TRACES_DIR, `${entry.worker}.jsonl`);
+  try {
+    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+  } catch (err: any) {
+    console.error(`[proxy:trace] write failed: ${err.message}`);
+  }
+}
+
+function safeJson(buf: Buffer): any {
+  try {
+    return JSON.parse(buf.toString('utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+// Best-effort assembly of an Anthropic SSE response body into a single
+// final-shape message. Reads the streamed event/data lines, accumulates
+// content_block_delta text/thinking/input_json into matching blocks,
+// pulls stop_reason and usage from message_delta. If parsing fails on any
+// chunk, that chunk is skipped — the trace still gets whatever we could
+// reconstruct, plus the raw SSE text in `_raw` for forensic use.
+function assembleAnthropicSse(raw: string): any {
+  const blocks: any[] = [];
+  let stopReason: string | null = null;
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    let evt: any;
+    try {
+      evt = JSON.parse(line.slice(6));
+    } catch {
+      continue;
+    }
+    if (evt.type === 'content_block_start') {
+      blocks[evt.index] = { ...evt.content_block };
+      if (evt.content_block?.type === 'tool_use') blocks[evt.index].input = '';
+    } else if (evt.type === 'content_block_delta') {
+      const b = blocks[evt.index];
+      if (!b) continue;
+      const d = evt.delta;
+      if (d?.type === 'text_delta') b.text = (b.text ?? '') + (d.text ?? '');
+      else if (d?.type === 'thinking_delta') b.thinking = (b.thinking ?? '') + (d.thinking ?? '');
+      else if (d?.type === 'input_json_delta') b.input = (b.input ?? '') + (d.partial_json ?? '');
+    } else if (evt.type === 'message_delta') {
+      if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
+      if (evt.usage?.output_tokens != null) outputTokens = evt.usage.output_tokens;
+    } else if (evt.type === 'message_start') {
+      if (evt.message?.usage?.input_tokens != null) inputTokens = evt.message.usage.input_tokens;
+    }
+  }
+  // Tool-use input arrived as JSON-string fragments; parse the final accumulated string.
+  for (const b of blocks) {
+    if (b?.type === 'tool_use' && typeof b.input === 'string') {
+      try {
+        b.input = JSON.parse(b.input || '{}');
+      } catch {
+        /* leave as-is */
+      }
+    }
+  }
+  return {
+    type: 'message',
+    role: 'assistant',
+    content: blocks.filter(Boolean),
+    stop_reason: stopReason,
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+  };
+}
+
 // ── Server ─────────────────────────────────────────────────────
 
 const server = Bun.serve({
@@ -397,10 +573,7 @@ const server = Bun.serve({
   // Catch unhandled errors — never return Bun's default HTML error page.
   error(err) {
     console.error(`[proxy] Unhandled error: ${err.message}`);
-    return Response.json(
-      { type: 'error', error: { type: 'server_error', message: err.message } },
-      { status: 500 },
-    );
+    return Response.json({ type: 'error', error: { type: 'server_error', message: err.message } }, { status: 500 });
   },
   async fetch(request) {
     const url = new URL(request.url);
@@ -416,7 +589,11 @@ const server = Bun.serve({
       url.pathname.startsWith('/api/') ||
       url.pathname.startsWith('/v1/organizations') ||
       url.pathname.startsWith('/v1/sessions') ||
-      (request.method === 'GET' && !url.pathname.startsWith('/w/') && !url.pathname.startsWith('/usage') && !url.pathname.startsWith('/health') && !url.pathname.startsWith('/models'))
+      (request.method === 'GET' &&
+        !url.pathname.startsWith('/w/') &&
+        !url.pathname.startsWith('/usage') &&
+        !url.pathname.startsWith('/health') &&
+        !url.pathname.startsWith('/models'))
     ) {
       return Response.json({});
     }
@@ -437,9 +614,7 @@ const server = Bun.serve({
     }
     // Resolve a fuzzy model name to the best matching model ID
     if (url.pathname.startsWith('/models/resolve/')) {
-      const query = decodeURIComponent(
-        url.pathname.slice('/models/resolve/'.length),
-      ).toLowerCase();
+      const query = decodeURIComponent(url.pathname.slice('/models/resolve/'.length)).toLowerCase();
       await refreshModelsCache();
       if (!modelsCache?.length) {
         return Response.json({ error: 'no models available' }, { status: 503 });
@@ -448,11 +623,8 @@ const server = Bun.serve({
       const exact = modelsCache.find((m) => m.toLowerCase() === query);
       if (exact) return Response.json({ model: exact, match: 'exact' });
       // Contains match (e.g., "kimi-k2.5-fast" matches "kimi-k2.5-fast")
-      const contains = modelsCache.filter((m) =>
-        m.toLowerCase().includes(query),
-      );
-      if (contains.length === 1)
-        return Response.json({ model: contains[0], match: 'contains' });
+      const contains = modelsCache.filter((m) => m.toLowerCase().includes(query));
+      if (contains.length === 1) return Response.json({ model: contains[0], match: 'contains' });
       // Fuzzy: split query into parts, score by how many parts match
       const parts = query.split(/[-_/.]+/);
       const scored = modelsCache
@@ -470,10 +642,7 @@ const server = Bun.serve({
           candidates: scored.slice(0, 5).map((s) => s.model),
         });
       }
-      return Response.json(
-        { error: `no match for "${query}"`, available: modelsCache },
-        { status: 404 },
-      );
+      return Response.json({ error: `no match for "${query}"`, available: modelsCache }, { status: 404 });
     }
     // List available Neuralwatt models (queries API, cached 5 min)
     if (url.pathname === '/models') {
@@ -492,21 +661,17 @@ const server = Bun.serve({
 
     // Worker config lookup endpoint (workers can read their own config)
     // Access via /w/<folder>/worker-config or /worker-config with x-api-key
-    if (
-      url.pathname === '/worker-config' ||
-      url.pathname.endsWith('/worker-config')
-    ) {
+    if (url.pathname === '/worker-config' || url.pathname.endsWith('/worker-config')) {
       const pathMatch = url.pathname.match(/^\/w\/([^/]+)\//);
       const folder = pathMatch ? pathMatch[1] : '';
       const config = getWorkerConfig(folder);
       const model =
-        config.backend === 'neuralwatt'
-          ? resolveNeuralwattModel('', config.model)
-          : 'claude (via anthropic)';
+        config.backend === 'neuralwatt' ? resolveNeuralwattModel('', config.model) : 'claude (via anthropic)';
       return Response.json({ ...config, resolved_model: model });
     }
 
     // Global error handler: never return HTML, always JSON.
+    const startMs = Date.now();
     try {
       // Read request body once
       const bodyBuffer = Buffer.from(await request.arrayBuffer());
@@ -520,9 +685,16 @@ const server = Bun.serve({
         url.pathname = workerMatch[2];
       }
       const workerConfig = getWorkerConfig(workerFolder);
+      const isMessagesPost = url.pathname === '/v1/messages' && request.method === 'POST';
 
-      // Anthropic backend: pass through to credential proxy
+      // Anthropic backend: pass through to credential proxy. Wrap /v1/messages
+      // POSTs so we can record the full req/resp pair into shim-traces.jsonl;
+      // other endpoints (oauth, profile, models) are noisy and not useful for
+      // worker-stuck debugging.
       if (workerConfig.backend === 'anthropic') {
+        if (isMessagesPost) {
+          return await traceAnthropic(request, bodyBuffer, url, workerFolder, startMs);
+        }
         return forwardToAnthropic(request, bodyBuffer, url);
       }
 
@@ -534,10 +706,7 @@ const server = Bun.serve({
 
       {
         const anthropicBody = JSON.parse(bodyBuffer.toString());
-        const nwModel = resolveNeuralwattModel(
-          anthropicBody.model,
-          workerConfig.model,
-        );
+        const nwModel = resolveNeuralwattModel(anthropicBody.model, workerConfig.model);
         const openaiReq = anthropicToOpenAI(anthropicBody, nwModel);
 
         const reqBodySize = JSON.stringify(openaiReq).length;
@@ -555,9 +724,7 @@ const server = Bun.serve({
           console.log(
             `[proxy:debug] Messages: ${openaiReq.messages.map((m: any) => `${m.role}:${(m.content || '').length}chars`).join(', ')}`,
           );
-          console.log(
-            `[proxy:debug] Anthropic max_tokens: ${anthropicBody.max_tokens}`,
-          );
+          console.log(`[proxy:debug] Anthropic max_tokens: ${anthropicBody.max_tokens}`);
         }
 
         // Streaming: translate OpenAI SSE → Anthropic SSE on the fly.
@@ -576,6 +743,23 @@ const server = Bun.serve({
           if (!resp.ok) {
             const err = await resp.text();
             console.error(`[proxy] Neuralwatt stream error: ${resp.status}`);
+            appendTrace({
+              ts: new Date().toISOString(),
+              worker: workerFolder,
+              backend: 'neuralwatt',
+              model_in: anthropicBody.model,
+              model_out: nwModel,
+              method: 'POST',
+              path: '/v1/messages',
+              status: resp.status,
+              stream: true,
+              latency_ms: Date.now() - startMs,
+              req_size: bodyBuffer.length,
+              resp_size: err.length,
+              req_body: anthropicBody,
+              resp_body: { error_text: err },
+              error: `upstream ${resp.status}`,
+            });
             return Response.json(
               {
                 type: 'error',
@@ -593,11 +777,7 @@ const server = Bun.serve({
               const emit = (event: string, data: any) => {
                 if (streamClosed) return;
                 try {
-                  controller.enqueue(
-                    encoder.encode(
-                      `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
-                    ),
-                  );
+                  controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
                 } catch {
                   streamClosed = true;
                 }
@@ -625,10 +805,12 @@ const server = Bun.serve({
               let stopReason = 'end_turn';
               let usage: any = {};
               let energy: any = undefined;
-              let toolCallAccum: Record<
-                number,
-                { id: string; name: string; args: string }
-              > = {};
+              let toolCallAccum: Record<number, { id: string; name: string; args: string }> = {};
+              // Trace accumulators — reconstruct final Anthropic message
+              // shape for the trace log without re-parsing the SSE we
+              // already emit.
+              let traceText = '';
+              let traceThinking = '';
 
               const reader = resp.body!.getReader();
               const decoder = new TextDecoder();
@@ -678,6 +860,7 @@ const server = Bun.serve({
 
                     // Reasoning/thinking
                     if (delta.reasoning != null) {
+                      traceThinking += delta.reasoning;
                       if (!inThinking) {
                         inThinking = true;
                         emit('content_block_start', {
@@ -698,6 +881,7 @@ const server = Bun.serve({
 
                     // Text content (skip null — API sends null during tool calls)
                     if (delta.content != null && delta.content !== '') {
+                      traceText += delta.content;
                       if (inThinking) {
                         emit('content_block_stop', {
                           type: 'content_block_stop',
@@ -775,10 +959,8 @@ const server = Bun.serve({
 
                     // Finish reason
                     if (choice?.finish_reason) {
-                      if (choice.finish_reason === 'tool_calls')
-                        stopReason = 'tool_use';
-                      else if (choice.finish_reason === 'length')
-                        stopReason = 'max_tokens';
+                      if (choice.finish_reason === 'tool_calls') stopReason = 'tool_use';
+                      else if (choice.finish_reason === 'length') stopReason = 'max_tokens';
                       else stopReason = 'end_turn';
                     }
                   }
@@ -806,8 +988,68 @@ const server = Bun.serve({
                 console.log(
                   `[proxy] → stream ${stopReason} (${usage.completion_tokens || '?'} out, ${usage.prompt_tokens || '?'} in)`,
                 );
+
+                // Trace: assemble the final Anthropic-shape message from
+                // accumulators and log alongside the request.
+                const traceContent: any[] = [];
+                if (traceThinking) traceContent.push({ type: 'thinking', thinking: traceThinking });
+                if (traceText) traceContent.push({ type: 'text', text: traceText });
+                for (const tc of Object.values(toolCallAccum)) {
+                  let parsedInput: any = tc.args;
+                  try {
+                    parsedInput = JSON.parse(tc.args || '{}');
+                  } catch {
+                    /* keep string */
+                  }
+                  traceContent.push({ type: 'tool_use', id: tc.id, name: tc.name, input: parsedInput });
+                }
+                appendTrace({
+                  ts: new Date().toISOString(),
+                  worker: workerFolder,
+                  backend: 'neuralwatt',
+                  model_in: anthropicBody.model,
+                  model_out: nwModel,
+                  method: 'POST',
+                  path: '/v1/messages',
+                  status: 200,
+                  stream: true,
+                  latency_ms: Date.now() - startMs,
+                  req_size: bodyBuffer.length,
+                  resp_size: traceText.length + traceThinking.length,
+                  stop_reason: stopReason,
+                  input_tokens: usage.prompt_tokens ?? null,
+                  output_tokens: usage.completion_tokens ?? null,
+                  req_body: anthropicBody,
+                  resp_body: {
+                    id: msgId,
+                    type: 'message',
+                    role: 'assistant',
+                    model: anthropicBody.model,
+                    content: traceContent,
+                    stop_reason: stopReason,
+                    usage: { input_tokens: usage.prompt_tokens ?? 0, output_tokens: usage.completion_tokens ?? 0 },
+                  },
+                  error: null,
+                });
               } catch (err: any) {
                 console.error(`[proxy] Stream error: ${err.message}`);
+                appendTrace({
+                  ts: new Date().toISOString(),
+                  worker: workerFolder,
+                  backend: 'neuralwatt',
+                  model_in: anthropicBody.model,
+                  model_out: nwModel,
+                  method: 'POST',
+                  path: '/v1/messages',
+                  status: 0,
+                  stream: true,
+                  latency_ms: Date.now() - startMs,
+                  req_size: bodyBuffer.length,
+                  resp_size: 0,
+                  req_body: anthropicBody,
+                  resp_body: null,
+                  error: err.message,
+                });
               } finally {
                 if (!streamClosed) {
                   try {
@@ -841,6 +1083,23 @@ const server = Bun.serve({
         if (!resp.ok) {
           const err = await resp.text();
           console.error(`[proxy] Neuralwatt error: ${resp.status} ${err}`);
+          appendTrace({
+            ts: new Date().toISOString(),
+            worker: workerFolder,
+            backend: 'neuralwatt',
+            model_in: anthropicBody.model,
+            model_out: nwModel,
+            method: 'POST',
+            path: '/v1/messages',
+            status: resp.status,
+            stream: false,
+            latency_ms: Date.now() - startMs,
+            req_size: bodyBuffer.length,
+            resp_size: err.length,
+            req_body: anthropicBody,
+            resp_body: { error_text: err },
+            error: `upstream ${resp.status}`,
+          });
           return Response.json(
             {
               type: 'error',
@@ -851,10 +1110,7 @@ const server = Bun.serve({
         }
 
         const openaiResp = await resp.json();
-        const anthropicResp = openAIToAnthropic(
-          openaiResp,
-          anthropicBody.model,
-        );
+        const anthropicResp = openAIToAnthropic(openaiResp, anthropicBody.model);
 
         // Track usage + energy per worker
         recordUsage(workerFolder, openaiResp.usage, openaiResp.energy);
@@ -863,13 +1119,30 @@ const server = Bun.serve({
           `[proxy] → ${anthropicResp.stop_reason} (${anthropicResp.usage.output_tokens} out, ${openaiResp.usage?.prompt_tokens || '?'} in)`,
         );
         if (DEBUG) {
-          console.log(
-            `[proxy:debug] Raw usage: ${JSON.stringify(openaiResp.usage)}`,
-          );
-          console.log(
-            `[proxy:debug] Raw energy: ${JSON.stringify(openaiResp.energy)}`,
-          );
+          console.log(`[proxy:debug] Raw usage: ${JSON.stringify(openaiResp.usage)}`);
+          console.log(`[proxy:debug] Raw energy: ${JSON.stringify(openaiResp.energy)}`);
         }
+
+        appendTrace({
+          ts: new Date().toISOString(),
+          worker: workerFolder,
+          backend: 'neuralwatt',
+          model_in: anthropicBody.model,
+          model_out: nwModel,
+          method: 'POST',
+          path: '/v1/messages',
+          status: 200,
+          stream: false,
+          latency_ms: Date.now() - startMs,
+          req_size: bodyBuffer.length,
+          resp_size: JSON.stringify(anthropicResp).length,
+          stop_reason: anthropicResp.stop_reason,
+          input_tokens: openaiResp.usage?.prompt_tokens ?? null,
+          output_tokens: openaiResp.usage?.completion_tokens ?? null,
+          req_body: anthropicBody,
+          resp_body: anthropicResp,
+          error: null,
+        });
 
         return Response.json(anthropicResp);
       }
