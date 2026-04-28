@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Adapter } from 'chat';
 
-import { createChatSdkBridge, splitForLimit } from './chat-sdk-bridge.js';
+import {
+  createChatSdkBridge,
+  fetchAttachmentFromUrl,
+  shouldFetchAttachment,
+  splitForLimit,
+} from './chat-sdk-bridge.js';
 
 function stubAdapter(partial: Partial<Adapter>): Adapter {
   return { name: 'stub', ...partial } as unknown as Adapter;
@@ -76,5 +81,81 @@ describe('createChatSdkBridge', () => {
       supportsThreads: true,
     });
     expect(typeof bridge.subscribe).toBe('function');
+  });
+});
+
+describe('shouldFetchAttachment', () => {
+  it('fetches text/* mime types', () => {
+    expect(shouldFetchAttachment({ mimeType: 'text/plain' })).toBe(true);
+    expect(shouldFetchAttachment({ mimeType: 'text/markdown' })).toBe(true);
+    expect(shouldFetchAttachment({ mimeType: 'TEXT/CSV' })).toBe(true);
+  });
+
+  it('fetches structured-data mime types', () => {
+    expect(shouldFetchAttachment({ mimeType: 'application/json' })).toBe(true);
+    expect(shouldFetchAttachment({ mimeType: 'application/xml' })).toBe(true);
+    expect(shouldFetchAttachment({ mimeType: 'application/x-yaml' })).toBe(true);
+  });
+
+  it('fetches attachments with no mimeType (Discord paste-as-txt drops content_type)', () => {
+    // The motivating case for this whole feature: a user pastes a wall of
+    // text into Discord and the client auto-uploads it as a .txt file.
+    // Discord sometimes omits content_type on those, leaving us with
+    // attachments that have only url/name/size. We want to download those.
+    expect(shouldFetchAttachment({})).toBe(true);
+    expect(shouldFetchAttachment({ mimeType: '' })).toBe(true);
+  });
+
+  it('skips images / video / audio (already surfaced via URL in formatter)', () => {
+    expect(shouldFetchAttachment({ mimeType: 'image/png' })).toBe(false);
+    expect(shouldFetchAttachment({ mimeType: 'video/mp4' })).toBe(false);
+    expect(shouldFetchAttachment({ mimeType: 'audio/mpeg' })).toBe(false);
+    expect(shouldFetchAttachment({ mimeType: 'application/pdf' })).toBe(false);
+  });
+
+  it('skips when declared size exceeds the cap', () => {
+    expect(shouldFetchAttachment({ mimeType: 'text/plain', size: 100 * 1024 * 1024 })).toBe(false);
+  });
+});
+
+describe('fetchAttachmentFromUrl', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('returns the body for a successful fetch under the size cap', async () => {
+    globalThis.fetch = (async () => {
+      return new Response('hello world', { status: 200, headers: { 'content-length': '11' } });
+    }) as typeof fetch;
+    const buf = await fetchAttachmentFromUrl('https://example.test/file.txt', 11);
+    expect(buf).not.toBeNull();
+    expect(buf!.toString('utf-8')).toBe('hello world');
+  });
+
+  it('returns null when declaredSize blows past the cap (no fetch issued)', async () => {
+    let fetched = false;
+    globalThis.fetch = (async () => {
+      fetched = true;
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    const buf = await fetchAttachmentFromUrl('https://example.test/huge', 50 * 1024 * 1024);
+    expect(buf).toBeNull();
+    expect(fetched).toBe(false);
+  });
+
+  it('returns null when content-length blows past the cap', async () => {
+    globalThis.fetch = (async () => {
+      return new Response('', { status: 200, headers: { 'content-length': String(50 * 1024 * 1024) } });
+    }) as typeof fetch;
+    const buf = await fetchAttachmentFromUrl('https://example.test/huge');
+    expect(buf).toBeNull();
+  });
+
+  it('throws on non-2xx so the caller can log + skip', async () => {
+    globalThis.fetch = (async () => {
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    await expect(fetchAttachmentFromUrl('https://example.test/missing')).rejects.toThrow(/HTTP 404/);
   });
 });
