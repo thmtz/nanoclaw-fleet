@@ -93,4 +93,12 @@ export type ProviderEvent =
    * event (tool call, thinking, partial message, anything) so the
    * poll-loop's idle timer stays honest during long tool runs.
    */
-  | { type: 'activity' };
+  | { type: 'activity' }
+  /**
+   * Emitted whenever the agent issues a tool_use, exposing the tool name
+   * to the poll loop. Used by `dispatchResultText` to know whether
+   * `send_message` already delivered a reply this turn — when it did,
+   * the final turn text gets suppressed automatically (the host stops
+   * leaning on the agent to remember to wrap in `<internal>...</internal>`).
+   */
+  | { type: 'tool_use'; tool_name: string };
