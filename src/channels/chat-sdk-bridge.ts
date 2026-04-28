@@ -33,6 +33,54 @@ interface GatewayAdapter extends Adapter {
   ): Promise<Response>;
 }
 
+/**
+ * Cap on URL-fetched attachment size. Anything bigger is silently skipped —
+ * the entry still flows through with `url` for the formatter to surface, but
+ * `data` is not populated and the host won't extract it to inbox.
+ *
+ * 5MB covers the realistic "user pasted a wall of text → Discord auto-uploaded
+ * as .txt" case (Discord caps non-Nitro attachments at 25MB, but the long-text
+ * paste rarely exceeds a few hundred KB) plus small images. Override via
+ * BRIDGE_ATTACHMENT_MAX_BYTES.
+ */
+const ATTACHMENT_MAX_BYTES = Number(process.env.BRIDGE_ATTACHMENT_MAX_BYTES ?? 5 * 1024 * 1024);
+
+/**
+ * Allowlist for the URL-fetch fallback. We only download attachments the
+ * agent has a real chance of reading — text paste, structured-data files,
+ * and unknown-type files (Discord sometimes omits content_type for
+ * paste-as-txt). Images / video / audio already display in chat with their
+ * URL surfaced to the agent, so refetching them just wastes RAM and disk.
+ */
+export function shouldFetchAttachment(entry: { mimeType?: string; type?: string; size?: number }): boolean {
+  if (entry.size != null && entry.size > ATTACHMENT_MAX_BYTES) return false;
+  const mime = (entry.mimeType ?? '').toLowerCase();
+  if (!mime) return true; // Discord paste-as-txt often arrives without content_type
+  if (mime.startsWith('text/')) return true;
+  if (mime === 'application/json' || mime === 'application/xml' || mime === 'application/x-yaml') return true;
+  return false;
+}
+
+export async function fetchAttachmentFromUrl(url: string, declaredSize?: number): Promise<Buffer | null> {
+  if (declaredSize != null && declaredSize > ATTACHMENT_MAX_BYTES) {
+    return null;
+  }
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  // Honour the size cap even if declaredSize was unset or the server lied.
+  const contentLength = Number(resp.headers.get('content-length') ?? 0);
+  if (contentLength > ATTACHMENT_MAX_BYTES) {
+    return null;
+  }
+  const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.byteLength > ATTACHMENT_MAX_BYTES) {
+    return null;
+  }
+  return buf;
+}
+
 /** Reply context extracted from a platform's raw message. */
 export interface ReplyContext {
   text: string;
@@ -133,7 +181,20 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serialized = message.toJSON() as Record<string, any>;
 
-    // Download attachment data before serialization loses fetchData()
+    // Download attachment data before serialization loses fetchData(). Two
+    // paths cover the chat-sdk fleet:
+    //
+    //   1. Adapters that expose an `att.fetchData()` callback (legacy /
+    //      Slack-style) — call it.
+    //   2. Adapters that only expose `att.url` (Discord 4.26 maps
+    //      message.attachments to {type, url, name, mimeType, size} with no
+    //      fetchData). Without a fallback, Discord paste-as-txt attachments
+    //      reach the worker as a URL the agent can't fetch from inside its
+    //      sandbox, so the content is invisible. Fall back to fetching the
+    //      URL ourselves.
+    //
+    // Size + type guarded — Discord URLs are unsigned-public CDN links and
+    // no auth is required, but we don't want to OOM on a 100MB upload.
     if (message.attachments && message.attachments.length > 0) {
       const enriched = [];
       for (const att of message.attachments) {
@@ -145,13 +206,21 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           size: att.size,
           width: (att as unknown as Record<string, unknown>).width,
           height: (att as unknown as Record<string, unknown>).height,
+          url: (att as unknown as Record<string, unknown>).url,
         };
         if (att.fetchData) {
           try {
             const buffer = await att.fetchData();
             entry.data = buffer.toString('base64');
           } catch (err) {
-            log.warn('Failed to download attachment', { type: att.type, err });
+            log.warn('Failed to download attachment via fetchData', { type: att.type, err });
+          }
+        } else if (typeof entry.url === 'string' && shouldFetchAttachment(entry)) {
+          try {
+            const buffer = await fetchAttachmentFromUrl(entry.url, att.size);
+            if (buffer) entry.data = buffer.toString('base64');
+          } catch (err) {
+            log.warn('Failed to download attachment via url', { type: att.type, name: att.name, err });
           }
         }
         enriched.push(entry);
