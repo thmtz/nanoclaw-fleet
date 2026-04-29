@@ -446,15 +446,17 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
  * This preserves the simple case of one user on one channel — the agent
  * doesn't need to know about wrapping syntax at all.
  *
- * `send_message` auto-suppress: when the agent issued any
- * `mcp__nanoclaw__send_message` tool_use this turn (tracked in the poll
- * loop via the `tool_use` ProviderEvent), the final turn text is treated
- * as redundant and dropped — send_message already delivered the reply
- * to chat. This relieves the agent of the burden of remembering to wrap
- * its closing line in `<internal>...</internal>` for de-duplication.
- * Multi-destination output (`<message to="...">` blocks) still dispatches
- * normally regardless, since those address agents/channels other than
- * the one send_message hit.
+ * De-duplication when `send_message` ran: the agent is instructed (in
+ * `core.instructions.md`) to wrap closing chatter in `<internal>...
+ * </internal>` after using send_message so the trailing text is stripped
+ * to empty here. We don't auto-drop trailing text whenever send_message
+ * ran — that mistakes substantive end-of-turn summaries ("Here's the PR:
+ * #2829, summary follows…") for "Done!" duplicates and silently eats them.
+ * v1 behavior: trust the agent's wrap; surface anything that isn't wrapped.
+ *
+ * The salvage path below catches the post-compaction failure mode where
+ * the agent emits a stand-alone `<internal>` block with no send_message —
+ * we'd otherwise go silent.
  */
 function dispatchResultText(text: string, routing: RoutingContext, opts: { sendMessageToolUseCount: number }): void {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
@@ -498,21 +500,6 @@ function dispatchResultText(text: string, routing: RoutingContext, opts: { sendM
   if (!stripped && opts.sendMessageToolUseCount === 0) {
     const unwrapped = rawScratchpad.replace(/<\/?internal>/g, '').trim();
     if (unwrapped) scratchpad = unwrapped;
-  }
-
-  // send_message ran this turn → final text is a duplicate / wrap-up;
-  // drop it. This is the canonical path for ack-then-work flows: agent
-  // calls send_message early, does its tool work, lets its closing
-  // statement fall through here, formatter suppresses it. No
-  // `<internal>` wrap required from the agent.
-  if (sent === 0 && opts.sendMessageToolUseCount > 0) {
-    if (scratchpad) {
-      log(
-        `[scratchpad] auto-suppressed (send_message ran ${opts.sendMessageToolUseCount}x this turn): ` +
-          `${scratchpad.slice(0, 200)}${scratchpad.length > 200 ? '…' : ''}`,
-      );
-    }
-    return;
   }
 
   // Single-destination shortcut: the agent wrote plain text — send to

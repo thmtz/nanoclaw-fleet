@@ -82,11 +82,13 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
-  it('auto-suppresses final turn text when send_message tool_use ran this turn', async () => {
-    // Agent ran send_message early (the canonical ack-then-work flow), then
-    // its closing scratchpad ("<internal>done</internal>") falls through.
-    // dispatchResultText must drop the final text so the user doesn't see
-    // a duplicate or template-junk line. The MCP-side send_message itself
+  it('drops trailing text when the agent wrapped it in <internal> and send_message ran', async () => {
+    // Canonical ack-then-work: agent sent the substantive reply via
+    // send_message, then closed with `<internal>done</internal>`. Stripping
+    // the wrapper leaves "" → nothing lands in outbound (correct: the
+    // reply already went via send_message). Salvage doesn't fire here
+    // because send_message ran (we shouldn't re-surface the wrapped text
+    // as if it were the missing reply). The MCP-side send_message itself
     // is a no-op in MockProvider, so the only thing that *would* land in
     // outbound is the scratchpad — assert nothing lands.
     insertMessage(
@@ -109,6 +111,35 @@ describe('poll loop integration', () => {
     controller.abort();
 
     expect(getUndeliveredMessages()).toHaveLength(0);
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('delivers substantive trailing text even when send_message ran earlier (no auto-suppress)', async () => {
+    // models-endpoint regression: agent calls send_message early ("On it…"),
+    // does the work, then writes a substantive summary as the trailing
+    // turn-result text. The previous auto-suppress-when-send_message-ran
+    // logic dropped these summaries. We now deliver them — the agent is
+    // expected to explicitly wrap closing chatter in <internal> when it
+    // wants suppression (see core.instructions.md).
+    insertMessage(
+      'm1',
+      { sender: 'Alice', text: 'check the pricing_tbd models' },
+      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
+    );
+
+    const summary = 'PR #2829 is up. Migration 173 covers all three base models (K2.5, MiniMax, Devstral).';
+    const provider = new MockProvider({}, () => summary, ['mcp__nanoclaw__send_message']);
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 1500);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe(summary);
 
     await loopPromise.catch(() => {});
   });
