@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 
 import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
+import { writeMessageOut } from '../db/messages-out.js';
+import { getSessionRouting } from '../db/session-routing.js';
 import { registerProvider } from './provider-registry.js';
 import type {
   AgentProvider,
@@ -196,10 +199,44 @@ const postToolUseHook: HookCallback = async () => {
   return { continue: true };
 };
 
+/**
+ * Post a Discord notice to the user's channel before compaction begins.
+ * Compaction can take several seconds; without this the user sees the
+ * agent go silent mid-turn with no signal that anything's happening.
+ *
+ * Mirrors v1's `sendCompactionNotice` (container/agent-runner/src/index.ts
+ * in the v1-old tree) — same wording, but writes to the v2 outbound DB
+ * instead of the v1 IPC file drop.
+ */
+export function sendCompactionNotice(trigger: string): void {
+  try {
+    const routing = getSessionRouting();
+    if (!routing.channel_type || !routing.platform_id) {
+      log('Skipping compaction notice — no session routing');
+      return;
+    }
+    writeMessageOut({
+      id: randomUUID(),
+      kind: 'chat',
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
+      content: JSON.stringify({
+        text: `⏳ Compacting context (${trigger})… I'll be back in a moment.`,
+      }),
+    });
+    log(`Sent compaction notice (trigger=${trigger})`);
+  } catch (err) {
+    log(`Failed to send compaction notice: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input) => {
     const preCompact = input as PreCompactHookInput;
     const { transcript_path: transcriptPath, session_id: sessionId } = preCompact;
+
+    sendCompactionNotice(preCompact.trigger || 'auto');
 
     if (!transcriptPath || !fs.existsSync(transcriptPath)) {
       log('No transcript found for archiving');
@@ -397,9 +434,16 @@ export class ClaudeProvider implements AgentProvider {
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'rate_limit_event') {
           yield { type: 'error', message: 'Rate limit', retryable: false, classification: 'quota' };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
+          // compact_boundary is a mid-stream system event — the SDK keeps
+          // streaming the agent's actual response after compaction. Yielding
+          // `result` here (as we used to) caused the poll-loop to treat the
+          // turn as done, mark messages completed, and dispatch
+          // "Context compacted (X tokens)." as if it were the agent's reply.
+          // The user's pre-compact "I'll be back" notice now comes from the
+          // PreCompact hook; this branch is informational only.
           const meta = (message as { compact_metadata?: { pre_tokens?: number } }).compact_metadata;
           const detail = meta?.pre_tokens ? ` (${meta.pre_tokens.toLocaleString()} tokens compacted)` : '';
-          yield { type: 'result', text: `Context compacted${detail}.`, usage: undefined };
+          yield { type: 'progress', message: `Context compacted${detail}.` };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
           const tn = message as { summary?: string };
           yield { type: 'progress', message: tn.summary || 'Task notification' };
