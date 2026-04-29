@@ -18,6 +18,8 @@ If you are a fresh install (you ran `git clone`, not `git pull`) and there are n
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/`. Fleet-specific architecture and guides live in [`docs/fleet/`](docs/fleet/).
 
+> **Naming:** **NC** = upstream `qwibitai/nanoclaw`. **NCF** = NanoClaw-Fleet, this fork (`thmtz/nanoclaw-fleet`), which adds the fleet-manager features on top of NC. When something is "NCF-only" it lives in this fork; "NC" or "upstream" means it's in qwibitai's repo too.
+
 ## Fork workflow
 
 This is `thmtz/nanoclaw-fleet` — a fleet-manager fork on top of `qwibitai/nanoclaw` v2. The fleet additions live alongside the upstream code; both should follow the same rules.
