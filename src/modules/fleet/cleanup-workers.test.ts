@@ -189,15 +189,15 @@ describe('cleanup_workers', () => {
     makeWorker('ag-alpha', 'alpha');
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.includes('docker ps')) {
-        return 'nanoclaw-v2-alpha-1234567890\nnanoclaw-v2-ghost-9876543210\n';
+        return 'nanoclaw-v2-alpha-1700000000000\nnanoclaw-v2-ghost-1700000000999\n';
       }
       return '';
     });
 
     const report = await runCleanup({ dryRun: false });
-    expect(report.orphanContainers).toEqual(['nanoclaw-v2-ghost-9876543210']);
+    expect(report.orphanContainers).toEqual(['nanoclaw-v2-ghost-1700000000999']);
     expect(mockExecSync).toHaveBeenCalledWith(
-      'docker rm -f nanoclaw-v2-ghost-9876543210',
+      'docker rm -f nanoclaw-v2-ghost-1700000000999',
       expect.objectContaining({ stdio: expect.any(Array) }),
     );
   });
@@ -205,7 +205,7 @@ describe('cleanup_workers', () => {
   it('correctly parses container names with hyphens in the folder', async () => {
     makeWorker('ag-foo', 'foo-bar-baz');
     mockExecSync.mockImplementation((cmd: string) => {
-      if (cmd.includes('docker ps')) return 'nanoclaw-v2-foo-bar-baz-1234567890\n';
+      if (cmd.includes('docker ps')) return 'nanoclaw-v2-foo-bar-baz-1700000000000\n';
       return '';
     });
 
@@ -218,13 +218,13 @@ describe('cleanup_workers', () => {
     wireDiscordChannel('ag-alpha', 'chan-alpha');
     mockListDiscordChannels.mockResolvedValue([{ id: 'chan-orphan', name: 'worker-ghost', type: 0, parent_id: null }]);
     mockExecSync.mockImplementation((cmd: string) => {
-      if (cmd.includes('docker ps')) return 'nanoclaw-v2-ghost-9876543210\n';
+      if (cmd.includes('docker ps')) return 'nanoclaw-v2-ghost-1700000000999\n';
       return '';
     });
 
     const report = await runCleanup({ dryRun: true });
     expect(report.orphanChannels).toHaveLength(1);
-    expect(report.orphanContainers).toEqual(['nanoclaw-v2-ghost-9876543210']);
+    expect(report.orphanContainers).toEqual(['nanoclaw-v2-ghost-1700000000999']);
     expect(mockDeleteDiscordChannel).not.toHaveBeenCalled();
     // Should not have called `docker rm -f`.
     const rmCalls = mockExecSync.mock.calls.filter((c) => String(c[0]).startsWith('docker rm'));
