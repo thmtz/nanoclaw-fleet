@@ -14,7 +14,7 @@ import path from 'path';
 
 const EVENTS_FILE = path.resolve(process.cwd(), 'logs', 'worker-events.jsonl');
 
-export type WorkerEventKind = 'created' | 'destroyed' | 'backend_switched' | 'resumed' | 'forked';
+export type WorkerEventKind = 'created' | 'destroyed' | 'backend_switched' | 'resumed';
 
 export interface WorkerEvent {
   timestamp: string;

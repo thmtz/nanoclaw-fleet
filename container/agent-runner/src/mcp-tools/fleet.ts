@@ -165,43 +165,6 @@ export const switchBackend: McpToolDefinition = {
   },
 };
 
-export const forkWorker: McpToolDefinition = {
-  tool: {
-    name: 'fork_worker',
-    description:
-      "Fork an existing worker into a new agent group with its own Discord channel. The fork inherits the source's workspace files, CLAUDE.local.md, container.json (backend/model), and prior message history, but starts a fresh SDK conversation so it runs independently from the source. Useful for branching at a point in a conversation to explore two paths in parallel. Pass `source: 'self'` to fork the calling agent itself. Fire-and-forget.",
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        source: {
-          type: 'string',
-          description: "Source worker name (or 'self' to fork the master/calling agent)",
-        },
-        name: { type: 'string', description: 'Name for the fork (becomes its channel + folder + destination name)' },
-      },
-      required: ['source', 'name'],
-    },
-  },
-  async handler(args) {
-    const source = args.source as string;
-    const name = args.name as string;
-    if (!source || !name) return err('source and name are required');
-    const id = generateId();
-    writeMessageOut({
-      id,
-      kind: 'system',
-      content: JSON.stringify({
-        action: 'fork_worker',
-        requestId: id,
-        source,
-        name,
-      }),
-    });
-    log(`fork_worker: ${id} → "${source}" → "${name}"`);
-    return ok(`Forking "${source}" into new worker "${name}". You will be notified when it is ready.`);
-  },
-};
-
 export const listWorkers: McpToolDefinition = {
   tool: {
     name: 'list_workers',
@@ -223,4 +186,4 @@ export const listWorkers: McpToolDefinition = {
   },
 };
 
-registerTools([createWorker, destroyWorker, switchBackend, forkWorker, listWorkers]);
+registerTools([createWorker, destroyWorker, switchBackend, listWorkers]);
