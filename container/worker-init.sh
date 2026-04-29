@@ -76,6 +76,16 @@ if [ "$REPO_COUNT" -gt 0 ] 2>/dev/null; then
     GITHUB_TOKEN=$(cat "$NANOCLAW_GITHUB_TOKEN_PATH")
   fi
 
+  # Trust OneCLI's CA when its proxy is intercepting our HTTPS clones.
+  # OneCLI mounts a combined bundle (system CAs + its self-signed cert) at
+  # SSL_CERT_FILE for node/deno, but git uses its own bundle and ignores
+  # SSL_CERT_FILE — point GIT_SSL_CAINFO at the same file so HTTPS clones
+  # to github.com (and anywhere else proxied through OneCLI) verify
+  # cleanly. No-op when OneCLI isn't applied (SSL_CERT_FILE unset).
+  if [ -n "$SSL_CERT_FILE" ] && [ -f "$SSL_CERT_FILE" ]; then
+    export GIT_SSL_CAINFO="$SSL_CERT_FILE"
+  fi
+
   cloned=0
   skipped=0
   for i in $(seq 0 $((REPO_COUNT - 1))); do
@@ -92,9 +102,20 @@ if [ "$REPO_COUNT" -gt 0 ] 2>/dev/null; then
       continue
     fi
 
-    # Rewrite git@github.com:org/repo.git → https://<token>@github.com/org/repo.git
+    # Prefer SSH when an SSH key is available (set up earlier from
+    # /workspace/extra/host-ssh). Only rewrite git@github.com:org/repo.git
+    # → https://<token>@github.com/org/repo.git when SSH ISN'T usable
+    # (no key, or fallback environment).
+    #
+    # Why: under OneCLI the container has HTTPS_PROXY pointing at the
+    # OneCLI gateway, which terminates HTTPS connections (so it can
+    # inject vault credentials). But the URL-embedded basic-auth token
+    # (`https://<token>@github.com/...`) doesn't survive the proxy
+    # gracefully — git ends up prompting for a password. SSH on port 22
+    # bypasses HTTPS_PROXY entirely. Falls back to the HTTPS rewrite
+    # only when SSH is genuinely unavailable.
     CLONE_URL="$URL"
-    if [ -n "$GITHUB_TOKEN" ] && [[ "$URL" == git@github.com:* ]]; then
+    if [ ! -f ~/.ssh/id_ed25519 ] && [ -n "$GITHUB_TOKEN" ] && [[ "$URL" == git@github.com:* ]]; then
       REPO_PATH="${URL#git@github.com:}"
       REPO_PATH="${REPO_PATH%.git}"
       CLONE_URL="https://${GITHUB_TOKEN}@github.com/${REPO_PATH}.git"

@@ -91,6 +91,20 @@ ncf destroy e2e-nw
 
 **Both backends matter.** The OneCLI HTTPS_PROXY breaks shim routing for neuralwatt workers if `NO_PROXY` isn't set — testing only Claude misses this entirely. (Regression baked in 2026-04-29; see commit history for `fix/neuralwatt-noproxy`.)
 
+### 4b. Worker init clones (catches OneCLI / proxy / cert breakage)
+
+The lifecycle test verifies "worker can reply" but not "worker-init.sh exited cleanly with all repos cloned." Several worker behaviors depend on cloned repos (the agent walking `/workspace/<repo>/` to answer "look at this issue"). When OneCLI's HTTPS_PROXY intercepts the HTTPS clones and git doesn't trust the proxy's CA, clones silently fail — the worker still spawns, still replies, but every "look at the inference_frontend repo" task hangs while the agent tries to clone on demand from inside the container.
+
+After creating any fresh worker (one whose workspace dir is brand new, not a resume from archive), check the init log:
+
+```bash
+ncf logs <worker> | grep -E "WARNING.*clone failed|repos \(cloned="
+```
+
+Expected: a single `repos (cloned=N skipped=M)` line, no `WARNING: clone failed` lines. If clone failed lines appear, capture the `fatal:` reason (`server certificate verification failed`, `host key verification failed`, `Permission denied`, etc.) — that's the actual blocker.
+
+(Regression baked in 2026-04-29 when OneCLI was activated; see `fix/git-trust-onecli-ca`. The proxy intercepts HTTPS clones but git uses its own CA bundle. `GIT_SSL_CAINFO` is now set in `worker-init.sh` when `SSL_CERT_FILE` is present.)
+
 ### 5. Auth path (verify the source of credentials matches expectation)
 
 After the host restart, look at the host log for the LAST worker spawn:
