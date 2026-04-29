@@ -99,6 +99,41 @@ export function pickOauthToken(input: { envToken: string | undefined; liveToken:
   return { token: undefined, source: 'none' };
 }
 
+/**
+ * Read the user's `container_credentials` list from
+ * `~/.config/nanoclaw/config.json`. Each entry maps a file path to an env
+ * var name that gets injected into every spawned container.
+ *
+ * Returns `[]` when the config file is missing, malformed, or the field
+ * is absent — credential injection is opt-in. Bad entries (missing
+ * fields) are skipped with a warning rather than throwing.
+ *
+ * Exported only for tests — read at every spawn so rotations + new
+ * entries take effect without a host restart.
+ */
+export function readContainerCredentials(): Array<{ env: string; path: string }> {
+  const cfgPath = path.join(os.homedir(), '.config', 'nanoclaw', 'config.json');
+  if (!fs.existsSync(cfgPath)) return [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as {
+      container_credentials?: Array<{ env?: string; path?: string }>;
+    };
+    const list = raw.container_credentials ?? [];
+    const out: Array<{ env: string; path: string }> = [];
+    for (const entry of list) {
+      if (!entry?.env || !entry?.path) {
+        log.warn('container_credentials entry missing env or path — skipping', { entry });
+        continue;
+      }
+      out.push({ env: entry.env, path: entry.path });
+    }
+    return out;
+  } catch (err) {
+    log.warn('container_credentials parse failed', { cfgPath, err: String(err) });
+    return [];
+  }
+}
+
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
 
@@ -551,6 +586,30 @@ async function buildContainerArgs(
       }
     } catch (err) {
       log.warn('Could not read NANOCLAW_GITHUB_TOKEN_PATH', { ghPath, err: String(err) });
+    }
+  }
+
+  // Personal `container_credentials`: file→env injection for tokens the
+  // user wants every container to have. Generic version of the
+  // NANOCLAW_GITHUB_TOKEN_PATH special-case above; lets users add tokens
+  // (BETTERSTACK_API_TOKEN, FIREWORKS_API_KEY, …) by editing their
+  // `~/.config/nanoclaw/config.json` instead of adding code here.
+  //
+  // Schema:
+  //   { "container_credentials": [ { "env": "NAME", "path": "~/.config/.../api_key" }, ... ] }
+  //
+  // Each entry is read at spawn time so rotated values take effect on
+  // next container restart. Missing files skip silently. Empty file
+  // contents (whitespace-only) skip too — avoids injecting a blank
+  // env var that the consuming tool would treat as "set."
+  for (const cred of readContainerCredentials()) {
+    const resolved = cred.path.startsWith('~/') ? path.join(process.env.HOME ?? '', cred.path.slice(2)) : cred.path;
+    if (!fs.existsSync(resolved)) continue;
+    try {
+      const value = fs.readFileSync(resolved, 'utf-8').trim();
+      if (value) args.push('-e', `${cred.env}=${value}`);
+    } catch (err) {
+      log.warn('container_credentials read failed', { env: cred.env, path: resolved, err: String(err) });
     }
   }
 

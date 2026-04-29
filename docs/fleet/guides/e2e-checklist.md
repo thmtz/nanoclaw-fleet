@@ -105,6 +105,18 @@ Expected: a single `repos (cloned=N skipped=M)` line, no `WARNING: clone failed`
 
 (Regression baked in 2026-04-29 when OneCLI was activated; see `fix/git-trust-onecli-ca`. The proxy intercepts HTTPS clones but git uses its own CA bundle. `GIT_SSL_CAINFO` is now set in `worker-init.sh` when `SSL_CERT_FILE` is present.)
 
+### 4c. `container_credentials` injection (env vars from `~/.config/nanoclaw/config.json`)
+
+If the user has any `container_credentials` entries in `~/.config/nanoclaw/config.json` (file→env injection — see `docs/fleet/guides/personal-config.md`), every spawned container should have those env vars set. Easy to forget when adding new tokens — the doc says they're injected, but the only way to verify is to look inside a container.
+
+```bash
+# After any new container_credentials entry is added, restart the host
+# and spawn a worker. Then:
+docker exec <container> env | grep -E "BETTERSTACK|FIREWORKS|TOGETHER|SYNTHETIC|<your_new_var>"
+```
+
+Each entry's env var should be present. Missing = either the source file at `path` doesn't exist (silent skip — check `ls <path>`) or the host needs a restart to pick up the config change.
+
 ### 5. Auth path (verify the source of credentials matches expectation)
 
 After the host restart, look at the host log for the LAST worker spawn:
