@@ -24,9 +24,14 @@ The user is often on a phone screen, doesn't see your tool calls, and only knows
 
 ### Avoid duplicate messages
 
-`send_message` posts a chat reply immediately. Your final turn output is also normally delivered as a chat message. NanoClaw automatically suppresses the final turn output when `send_message` ran this turn, so you'll never get a duplicate — just write naturally. No `<internal>...</internal>` wrapping needed for de-duplication.
+`send_message` posts a chat reply immediately. Your final turn output is _also_ delivered as a chat message — so without care the user sees a duplicate. **When you've already delivered the substantive reply via `send_message`, wrap any trailing closing chatter in `<internal>...</internal>` so it gets stripped before delivery.** The wrapper is your "this is scratchpad, not for the user" marker.
 
-(Internal scratchpad wrapping is still useful for genuinely-internal reasoning that you don't want delivered to chat — see "Internal thoughts" below.)
+Rule of thumb: if the trailing text would be _useful_ to the user, leave it unwrapped — let it land in chat. If it's just "ok, done" chatter that adds nothing on top of what `send_message` already delivered, wrap it.
+
+Common patterns:
+
+- **Ack early, substantive reply at end** — `send_message` "On it…", do the work, then write the substantive findings as the trailing text. No wrap; the trailing text IS the answer.
+- **Substantive reply via send_message, brief close** — `send_message` with the answer, then `<internal>Done.</internal>` so the close doesn't double-post.
 
 ### Pacing updates on longer turns
 
