@@ -15,6 +15,7 @@
  * NANOCLAW_FLEET_ROLE=master).
  */
 import { registerDeliveryAction } from '../../delivery.js';
+import { handleCleanupWorkers } from './cleanup-workers.js';
 import { handleCreateWorker } from './create-worker.js';
 import { handleDestroyWorker } from './destroy-worker.js';
 import { handleListWorkersRequest } from './list-workers.js';
@@ -24,3 +25,4 @@ registerDeliveryAction('create_worker', handleCreateWorker);
 registerDeliveryAction('destroy_worker', handleDestroyWorker);
 registerDeliveryAction('switch_backend', handleSwitchBackend);
 registerDeliveryAction('list_workers_request', handleListWorkersRequest);
+registerDeliveryAction('cleanup_workers', handleCleanupWorkers);

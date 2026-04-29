@@ -186,4 +186,33 @@ export const listWorkers: McpToolDefinition = {
   },
 };
 
-registerTools([createWorker, destroyWorker, switchBackend, listWorkers]);
+export const cleanupWorkers: McpToolDefinition = {
+  tool: {
+    name: 'cleanup_workers',
+    description:
+      'Reconcile fleet state and clean up orphans: orphan Discord channels (no agent_group) and orphan containers (no active agent_group) are auto-cleaned; orphan workers (active agent_group with missing Discord channel) are reported back to you so you can decide. Pass dry_run=true to preview without changes.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        dry_run: { type: 'boolean', description: 'Report only, no changes. Defaults to false.' },
+      },
+    },
+  },
+  async handler(args) {
+    const dryRun = args.dry_run === true;
+    const id = generateId();
+    writeMessageOut({
+      id,
+      kind: 'system',
+      content: JSON.stringify({ action: 'cleanup_workers', requestId: id, dry_run: dryRun }),
+    });
+    log(`cleanup_workers: ${id} (dry_run=${dryRun})`);
+    return ok(
+      dryRun
+        ? 'Cleanup dry-run requested. The host will reply with the reconciliation report.'
+        : 'Cleanup requested. The host will reply with what was cleaned + any orphan workers needing your decision.',
+    );
+  },
+};
+
+registerTools([createWorker, destroyWorker, switchBackend, listWorkers, cleanupWorkers]);
