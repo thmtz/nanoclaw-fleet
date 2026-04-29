@@ -66,6 +66,16 @@ Read the relevant doc before working on a subsystem. Each one is short and focus
 
 For the upstream v2 baseline (entity model, two-DB session split, channel adapters, providers, isolation), see [`docs/`](docs/).
 
+## Before declaring NCF "ready" / "go try it"
+
+**Mandatory gate** before telling the user the fleet is ready, deployment is live, or "go try it" — any time after host code, container code, credentials, OneCLI, proxy, or `.env` changes (or after a host restart):
+
+1. **Run the e2e checklist:** [`docs/fleet/guides/e2e-checklist.md`](docs/fleet/guides/e2e-checklist.md). Every section in order. The checklist starts with `./scripts/smoke.sh` which exercises both Claude and neuralwatt backends end-to-end via Discord — that one script catches most regressions.
+2. **If you find a behavior that's broken and not on the checklist:** add it to the checklist BEFORE fixing the bug. The PR that fixes the bug includes the new checklist item that would have caught it. The checklist must accumulate every behavior that has ever been found broken — that's the entire point.
+3. **If you skip the checklist** and the user finds something broken when they "go try it," that's a process failure, not a coding bug. The checklist exists so you don't have to remember which paths to exercise.
+
+If you can't run a check (e.g. the user is using Discord interactively and you can't drive it from the CLI), say so explicitly — don't claim ready on the strength of unit tests alone.
+
 ## After making changes
 
 After implementing a feature or fix, do all three before declaring done.
