@@ -75,6 +75,30 @@ function readLiveClaudeOauthToken(): string | undefined {
   }
 }
 
+/**
+ * Pick which OAuth token to bake into the container env, with v1 parity:
+ * `.env.CLAUDE_CODE_OAUTH_TOKEN` (long-lived `claude setup-token`, valid for
+ * months) wins over `~/.claude/.credentials.json` (Claude Code's
+ * auto-rotating session token, ~1hr lifetime). The container env is frozen
+ * at spawn time — never refreshed — so freezing in the rotating token
+ * guarantees a 401 on the next rotation. v1 didn't hit this because v1
+ * ran a credential proxy that read `.env` per request; in v2 OneCLI is
+ * meant to fill that role, but when OneCLI isn't applied this fallback
+ * freezes the token, so we must pick the long-lived source.
+ *
+ * Exported so the precedence is locked down by a unit test
+ * (`container-runner.test.ts`). Bare-`undefined` inputs return
+ * `{ token: undefined, source: 'none' }` so callers can `if (token)` cleanly.
+ */
+export function pickOauthToken(input: { envToken: string | undefined; liveToken: string | undefined }): {
+  token: string | undefined;
+  source: '.env' | 'credentials.json' | 'none';
+} {
+  if (input.envToken) return { token: input.envToken, source: '.env' };
+  if (input.liveToken) return { token: input.liveToken, source: 'credentials.json' };
+  return { token: undefined, source: 'none' };
+}
+
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
 
@@ -571,20 +595,11 @@ async function buildContainerArgs(
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
     ]);
-    // Prefer the long-lived OAuth token from `.env` (`claude setup-token`,
-    // valid for months) over the short-lived one in
-    // ~/.claude/.credentials.json (Claude Code's interactive session token,
-    // rotates every ~hour). The container env is frozen at spawn time and
-    // not refreshed for the life of the container; if we baked in the
-    // rotating token, every worker would 401 within hours of the next
-    // rotation. Workers in v1 didn't hit this because v1 ran a credential
-    // proxy on the host that injected `.env` per request; in v2 OneCLI is
-    // meant to fill that role, but when OneCLI isn't applied this fallback
-    // freezes the token, so we must pick the long-lived source. Falls back
-    // to the live credentials file if `.env.CLAUDE_CODE_OAUTH_TOKEN` is
-    // unset (best-effort short-lived auth beats no auth).
     const liveOauth = readLiveClaudeOauthToken();
-    const oauth = fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN ?? liveOauth;
+    const { token: oauth, source: oauthSource } = pickOauthToken({
+      envToken: fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN,
+      liveToken: liveOauth,
+    });
     const preferOauth = !!oauth;
     for (const key of [
       'ANTHROPIC_API_KEY',
@@ -603,7 +618,7 @@ async function buildContainerArgs(
     log.info('Env credential fallback applied', {
       containerName,
       preferOauth,
-      oauthSource: fallbackEnv.CLAUDE_CODE_OAUTH_TOKEN ? '.env' : liveOauth ? 'credentials.json' : 'none',
+      oauthSource,
     });
   }
 
