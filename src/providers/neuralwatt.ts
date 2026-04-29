@@ -46,7 +46,19 @@ registerProviderContainerConfig('neuralwatt', (ctx) => {
   const explicitBase = block.base_url ?? ctx.hostEnv.NW_SHIM_URL ?? ctx.hostEnv.ANTHROPIC_BASE_URL;
   const baseUrl = explicitBase ?? `${DEFAULT_BASE_URL}/w/${ctx.agentGroupFolder}`;
 
-  const env: Record<string, string> = { ANTHROPIC_BASE_URL: baseUrl };
+  // NO_PROXY for the host shim. When OneCLI is active the container has
+  // HTTPS_PROXY pointing at the OneCLI gateway, which intercepts ALL
+  // outbound HTTPS — including the shim call to host.docker.internal:3003.
+  // OneCLI returns "empty reply" for the un-allowlisted destination and
+  // the SDK retries forever. Bypassing the proxy for host.docker.internal
+  // (and loopback) lets the SDK reach the shim directly. Public API calls
+  // (api.anthropic.com etc.) still go through OneCLI for credential
+  // injection. Without OneCLI active these vars are no-ops.
+  const env: Record<string, string> = {
+    ANTHROPIC_BASE_URL: baseUrl,
+    NO_PROXY: 'host.docker.internal,localhost,127.0.0.1',
+    no_proxy: 'host.docker.internal,localhost,127.0.0.1',
+  };
   if (block.model) env.ANTHROPIC_MODEL = block.model;
   return { env };
 });
