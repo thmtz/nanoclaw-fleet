@@ -45,11 +45,14 @@ interface CleanupOptions {
 }
 
 /**
- * Container-name parser: `nanoclaw-v2-<folder>-<timestamp>`. Folder may
- * itself contain hyphens, so we anchor on the trailing numeric timestamp.
- * Matches `src/container-runner.ts:176`.
+ * Container-name parser: `nanoclaw-v2-<folder>-<Date.now()>`. Folder may
+ * contain hyphens AND digits (e.g. `model-dev-2024`), so we anchor on a
+ * 13-digit ms-epoch timestamp suffix rather than `\d+`. A loose `\d+`
+ * would eat the trailing `-2024` as the timestamp and mis-identify the
+ * folder as `model-dev`, potentially marking an active container as
+ * orphan (or vice-versa). Matches `src/container-runner.ts:176`.
  */
-const CONTAINER_NAME_RE = /^nanoclaw-v2-(.+)-\d+$/;
+const CONTAINER_NAME_RE = /^nanoclaw-v2-(.+)-(\d{13})$/;
 
 export async function handleCleanupWorkers(content: Record<string, unknown>, session: Session): Promise<void> {
   const sourceGroup = getAgentGroup(session.agent_group_id);
