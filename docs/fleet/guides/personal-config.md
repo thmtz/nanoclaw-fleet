@@ -72,21 +72,19 @@ The composer inlines each file as a separate fragment. Behaviour is identical to
     }
   ],
   "tools": ["uv tool install /workspace/group/your-tool --force"],
-  "mounts": [
-    { "hostPath": "~/.ssh", "containerPath": "host-ssh", "readonly": true }
-  ],
+  "mounts": [{ "hostPath": "~/.ssh", "containerPath": "host-ssh", "readonly": true }],
   "ports": ["8080:8080"],
   "skills_repo": "your-skills-repo-name"
 }
 ```
 
-| Field | Purpose |
-|-|-|
-| `repos` | Cloned on first boot. SSH URLs rewritten to HTTPS using `NANOCLAW_GITHUB_TOKEN` if available. `postClone` runs from the cloned dir. |
-| `tools` | Shell commands run during init. Idempotent. |
-| `mounts` | Host paths mounted into the container. Validated against the allowlist. |
-| `ports` | Docker port mappings (`host:container`). |
-| `skills_repo` | Name of one of the cloned repos whose `.claude/skills/` is symlinked into the agent. |
+| Field         | Purpose                                                                                                                             |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `repos`       | Cloned on first boot. SSH URLs rewritten to HTTPS using `NANOCLAW_GITHUB_TOKEN` if available. `postClone` runs from the cloned dir. |
+| `tools`       | Shell commands run during init. Idempotent.                                                                                         |
+| `mounts`      | Host paths mounted into the container. Validated against the allowlist.                                                             |
+| `ports`       | Docker port mappings (`host:container`).                                                                                            |
+| `skills_repo` | Name of one of the cloned repos whose `.claude/skills/` is symlinked into the agent.                                                |
 
 Profile changes take effect on the next worker spawn. Existing workers re-apply the profile on resume.
 
@@ -99,8 +97,8 @@ For full schema and boot details, see [architecture/worker-profile.md](../archit
 ```json
 {
   "allowedRoots": [
-    {"path": "~/.ssh", "allowReadWrite": false, "description": "SSH keys (read-only)"},
-    {"path": "~/.config/gpuctl", "allowReadWrite": true, "description": "gpuctl CLI config"}
+    { "path": "~/.ssh", "allowReadWrite": false, "description": "SSH keys (read-only)" },
+    { "path": "~/.config/gpuctl", "allowReadWrite": true, "description": "gpuctl CLI config" }
   ],
   "blockedPatterns": []
 }
@@ -131,14 +129,14 @@ USER node
 
 ## Where to put what
 
-| Lives where | Why |
-|-|-|
-| Source code, container image base, default skills, MCP tools | Repo |
-| Repo-shared instructions (`instructions/`) | Repo |
-| Channel adapters (skills) | Repo (per `channels` skill branch) |
-| Personal instructions, worker profile, mount allowlist | `~/.config/nanoclaw/` |
-| Personal Docker layers | `~/.config/nanoclaw/Dockerfile` |
-| Tokens, secrets, paths | `.env` (in repo, gitignored) and OneCLI vault |
+| Lives where                                                  | Why                                           |
+| ------------------------------------------------------------ | --------------------------------------------- |
+| Source code, container image base, default skills, MCP tools | Repo                                          |
+| Repo-shared instructions (`instructions/`)                   | Repo                                          |
+| Channel adapters (skills)                                    | Repo (per `channels` skill branch)            |
+| Personal instructions, worker profile, mount allowlist       | `~/.config/nanoclaw/`                         |
+| Personal Docker layers                                       | `~/.config/nanoclaw/Dockerfile`               |
+| Tokens, secrets, paths                                       | `.env` (in repo, gitignored) and OneCLI vault |
 
 ## Getting started
 
@@ -155,6 +153,30 @@ Edit `worker-profiles/default.json` to point at your repos. Edit `instructions/g
 ./container/build.sh                # only if you changed the Dockerfile
 systemctl --user restart nanoclaw   # picks up instruction and profile changes
 ```
+
+## Container credentials (env vars from files)
+
+`~/.config/nanoclaw/config.json` accepts a `container_credentials` array that injects env vars into every spawned worker by reading values from files at spawn time. Use this for tokens the agent's tooling reads from the environment (e.g. CLIs that look at `BETTERSTACK_API_TOKEN`, `FIREWORKS_API_KEY`).
+
+```json
+{
+  "include_files": ["~/.claude/CLAUDE.md"],
+  "container_credentials": [
+    { "env": "BETTERSTACK_API_TOKEN", "path": "~/.config/betterstack/api_key" },
+    { "env": "FIREWORKS_API_KEY", "path": "~/.config/fireworks/api_key" }
+  ]
+}
+```
+
+Behaviour:
+
+- Each entry's `path` is read on every container spawn — rotated tokens take effect on next worker restart, no host restart needed.
+- Missing files skip silently (entries are opt-in).
+- Empty / whitespace-only contents skip too (avoids injecting a blank `KEY=` that consumers treat as "set").
+- `~/` expansion is supported in `path`.
+- The token value never lands on disk inside the container — only in the process env.
+
+This is the generic version of the older `NANOCLAW_GITHUB_TOKEN_PATH` env knob — that still works for backwards compatibility; new credentials go in `container_credentials`.
 
 ## See also
 
