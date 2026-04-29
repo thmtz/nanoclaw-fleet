@@ -79,6 +79,22 @@ export async function createDiscordChannel(
 }
 
 /**
+ * List all text channels in the configured guild. Returns id + name + parent
+ * so the caller can filter (e.g. by category) and reconcile against
+ * `messaging_groups.platform_id`.
+ */
+export async function listDiscordChannels(
+  cfg: DiscordChannelConfig,
+): Promise<Array<{ id: string; name: string; type: number; parent_id: string | null }>> {
+  const res = await discordFetch(cfg, `/guilds/${cfg.guildId}/channels`);
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Discord list channels failed: ${res.status} ${txt}`);
+  }
+  return (await res.json()) as Array<{ id: string; name: string; type: number; parent_id: string | null }>;
+}
+
+/**
  * Delete a Discord channel by ID. Idempotent in the sense that we log and
  * swallow 404 (channel already gone) so destroy can retry safely.
  */
