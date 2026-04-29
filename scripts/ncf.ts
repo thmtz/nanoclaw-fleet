@@ -35,7 +35,6 @@ Usage:
   ncf create <name> [--backend <b>] [--model <m>] [--instructions <text>] [--fresh]
   ncf destroy <name> [--keep-channel]
   ncf switch <name> <backend> [model]
-  ncf fork <source> <fork_name>
   ncf logs <name> [--follow]
   ncf session <name>
   ncf inject <name> <msg> [--wait] [--timeout <sec>]
@@ -287,15 +286,6 @@ function cmdSwitch(args: string[]): void {
     process.exit(1);
   }
   writeSystemAction('switch_backend', { name, backend, model: model ?? null });
-}
-
-function cmdFork(args: string[]): void {
-  const [source, name] = args;
-  if (!source || !name) {
-    console.error('usage: ncf fork <source> <fork_name>');
-    process.exit(1);
-  }
-  writeSystemAction('fork_worker', { source, name });
 }
 
 function cmdLogs(args: string[]): void {
@@ -916,8 +906,6 @@ function main(): void {
       return cmdDestroy(rest);
     case 'switch':
       return cmdSwitch(rest);
-    case 'fork':
-      return cmdFork(rest);
     case 'logs':
       return cmdLogs(rest);
     case 'session':
