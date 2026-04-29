@@ -18,6 +18,15 @@
  * Gating: this module is only imported by the barrel when
  * NANOCLAW_FLEET_ROLE=master is set on the container. Non-master containers
  * never see these tools.
+ *
+ * Communication discipline (master agent): when offering or executing any
+ * lifecycle action below, state plainly what survives and what's lost. Don't
+ * use "kill" / "fresh" / "wipe" without context — those words have all
+ * caused user confusion. Prefer explicit phrasing:
+ *   - "stop the container; conversation history and workspace preserved"
+ *   - "reset the conversation; workspace files preserved, agent forgets prior turns"
+ *   - "archive the worker; recoverable via create_worker with the same name"
+ *   - "permanently delete workspace + history; not recoverable"
  */
 import { writeMessageOut } from '../db/messages-out.js';
 import { registerTools } from './server.js';
@@ -95,7 +104,7 @@ export const destroyWorker: McpToolDefinition = {
   tool: {
     name: 'destroy_worker',
     description:
-      'Destroy a fleet worker. Stops the container, archives the agent group (workspace and conversation preserved), and deletes its Discord channel by default. Fire-and-forget.',
+      'Archive a fleet worker (the user-facing word is "destroy" but archive is what actually happens). Stops the container, archives the agent_group, and deletes its Discord channel by default. **Workspace files and conversation history are PRESERVED on disk and recoverable** — calling create_worker with the same name later resumes the worker with full context. Use this for "stop using this worker for now" or "I might come back to it." Fire-and-forget. When offering this action, tell the user it is recoverable.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -123,7 +132,9 @@ export const destroyWorker: McpToolDefinition = {
       }),
     });
     log(`destroy_worker: ${id} → "${name}"`);
-    return ok(`Destroying worker "${name}". You will be notified when done.`);
+    return ok(
+      `Archiving worker "${name}" (workspace + history preserved; recoverable via create_worker). You will be notified when done.`,
+    );
   },
 };
 
