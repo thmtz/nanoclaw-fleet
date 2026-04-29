@@ -31,6 +31,21 @@ This is `thmtz/nanoclaw-fleet` — a fleet-manager fork on top of `qwibitai/nano
 - **Hooks.** Husky installs `.husky/` hooks automatically on `pnpm install` (via the `prepare` script). `pre-commit` formats staged files with Prettier and re-stages them; `pre-push` runs `format:check`, host + container `tsc`, and host `vitest run`. Don't skip with `--no-verify` unless you know exactly why.
 - **Restart discipline.** Don't restart the running NanoClaw service (`systemctl --user restart nanoclaw`, `launchctl kickstart`, `kill`-ing the host process) or kill running worker containers without explicit user confirmation. Workers are real long-running sessions; a restart kills active conversations and any pending turns. If a code or config change _would_ require a restart to take effect, finish the change, mention that a restart is needed, and ask before doing it.
 
+## Worker lifecycle vocabulary
+
+The words "kill", "restart", "destroy", "fresh", and "wipe" get used loosely and have caused real confusion in this session — agents proposing to "kill the workers" when they meant "stop the containers, history preserved." **Before offering or executing any worker-lifecycle action, state plainly what survives and what's lost.** Don't say "kill" without context.
+
+The four real actions:
+
+| Action             | Command                                  | Survives                                                                                                                     | Lost                                                                  |
+| ------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Stop container     | `ncf restart <n>`                        | everything (workspace, SDK session, channel, agent_group); container respawns on next message with full conversation context | nothing                                                               |
+| Reset conversation | `ncf restart <n> --fresh`                | workspace files, channel, agent_group                                                                                        | SDK session pointer — agent forgets prior turns                       |
+| Archive worker     | `ncf destroy <n>`                        | workspace + SDK session (recoverable via `ncf create <n>`)                                                                   | running container, Discord channel by default; agent_group → archived |
+| Permanent wipe     | `ncf create <n> --fresh` (after destroy) | nothing                                                                                                                      | archived workspace + history permanently gone                         |
+
+When phrasing offers, prefer the explicit action name and consequences over the verb shorthand. "Want me to stop the 4 worker containers? Conversation history and workspaces are preserved; they respawn fresh on next message." beats "Want me to kill the workers?"
+
 ## Documentation routing
 
 Read the relevant doc before working on a subsystem. Each one is short and focused.
