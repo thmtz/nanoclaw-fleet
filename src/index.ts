@@ -71,6 +71,16 @@ async function main(): Promise<void> {
   // 1b. One-time filesystem cutover — idempotent, no-op after first run.
   migrateGroupsToClaudeLocal();
 
+  // 1c. Re-apply the user's worker profile to every active worker's
+  // container.json. Lets profile edits in
+  // ~/.config/nanoclaw/worker-profiles/default.json (added repos, bumped
+  // tools, tightened mounts) propagate to existing workers on the next
+  // host restart, without needing to destroy + recreate each worker.
+  // No-op if no profile is defined. Mirrors v1 fleet's syncWorkerProfiles
+  // (FORK-SPEC §7.4).
+  const { syncWorkerProfiles } = await import('./modules/fleet/profile-sync.js');
+  syncWorkerProfiles();
+
   // 2. Container runtime
   ensureContainerRuntimeRunning();
   cleanupOrphans();
