@@ -1,11 +1,17 @@
 /**
- * Pure formatter tests for the fleet dashboard. The DB-backed
- * `getFleetSummary()` is exercised by `fleet.test.ts`; this file covers
- * `formatFleetSummary()` against hand-built `FleetSummary` fixtures.
+ * Pure formatter + parser tests. DB-backed `getFleetSummary()` is
+ * exercised by `fleet.test.ts`; this file covers `formatFleetSummary()`
+ * and `readRunningUptimes()` in isolation.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
-import { formatFleetSummary, type FleetSummary } from './list-workers.js';
+const mockExecSync = vi.fn();
+vi.mock('child_process', () => ({
+  execSync: (...args: unknown[]) => mockExecSync(...args),
+}));
+
+const { formatFleetSummary, readRunningUptimes } = await import('./list-workers.js');
+type FleetSummary = import('./list-workers.js').FleetSummary;
 
 describe('formatFleetSummary', () => {
   it('renders empty fleet with master line + "no workers" prompt', () => {
@@ -156,5 +162,46 @@ describe('formatFleetSummary', () => {
     const out = formatFleetSummary(s);
     expect(out).not.toContain('**Master**');
     expect(out).toContain('No fleet workers');
+  });
+});
+
+describe('readRunningUptimes', () => {
+  it('parses folder→uptime pairs from "Up X" status strings', () => {
+    mockExecSync.mockReturnValueOnce(
+      ['nanoclaw-v2-alpha-1700000000000|Up 2 hours', 'nanoclaw-v2-beta-bar-1700000001000|Up 5 minutes'].join('\n'),
+    );
+    const map = readRunningUptimes();
+    expect(map.get('alpha')).toBe('2 hours');
+    expect(map.get('beta-bar')).toBe('5 minutes');
+  });
+
+  it('preserves healthcheck suffixes after stripping "Up "', () => {
+    mockExecSync.mockReturnValueOnce('nanoclaw-v2-alpha-1700000000000|Up 2 hours (unhealthy)');
+    expect(readRunningUptimes().get('alpha')).toBe('2 hours (unhealthy)');
+  });
+
+  it('skips lines that do not match the container-name regex', () => {
+    mockExecSync.mockReturnValueOnce(
+      [
+        'unrelated-container|Up 1 hour',
+        'nanoclaw-v1-old-format|Up 1 hour',
+        'nanoclaw-v2-good-1700000000000|Up 3 minutes',
+      ].join('\n'),
+    );
+    const map = readRunningUptimes();
+    expect(map.size).toBe(1);
+    expect(map.get('good')).toBe('3 minutes');
+  });
+
+  it('returns empty map when docker fails (e.g., daemon down)', () => {
+    mockExecSync.mockImplementationOnce(() => {
+      throw new Error('Cannot connect to the Docker daemon');
+    });
+    expect(readRunningUptimes().size).toBe(0);
+  });
+
+  it('returns empty map when no containers are running', () => {
+    mockExecSync.mockReturnValueOnce('');
+    expect(readRunningUptimes().size).toBe(0);
   });
 });

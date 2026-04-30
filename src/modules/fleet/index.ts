@@ -26,3 +26,8 @@ registerDeliveryAction('destroy_worker', handleDestroyWorker);
 registerDeliveryAction('switch_backend', handleSwitchBackend);
 registerDeliveryAction('list_workers_request', handleListWorkersRequest);
 registerDeliveryAction('cleanup_workers', handleCleanupWorkers);
+
+// Note: `profile-sync` is intentionally absent — it's not a delivery
+// action (no inbound MCP tool). It's a startup hook called directly from
+// `src/index.ts` after migrations, so profile edits propagate to existing
+// workers on host restart. See `profile-sync.ts`.
