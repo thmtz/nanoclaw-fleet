@@ -458,6 +458,18 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
  * the agent emits a stand-alone `<internal>` block with no send_message —
  * we'd otherwise go silent.
  */
+/**
+ * Suffix appended to salvage-path output. The salvage path surfaces an
+ * agent's wrapped-only output when no `send_message` ran — it prevents
+ * silence, but the recovered content has often been a meta-claim like
+ * "Done — answered the question" with no actual answer (post-compaction
+ * confusion bug, observed 2026-04-30 across multiple workers). Without a
+ * suffix the user reads the meta-claim as a deliberate reply and trusts
+ * the agent. With a suffix the user knows to verify.
+ */
+const SALVAGE_WARNING_SUFFIX =
+  '⚠️ _scratchpad recovery — this came from the agent\'s internal monologue, not a deliberate `send_message`. If it reads like a vague claim ("done", "answered", "flagged") without the actual content, ask again._';
+
 function dispatchResultText(text: string, routing: RoutingContext, opts: { sendMessageToolUseCount: number }): void {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
@@ -496,10 +508,22 @@ function dispatchResultText(text: string, routing: RoutingContext, opts: { sendM
   // silently — silence reads as "agent broken"; even a weird-looking
   // ack ("Acknowledged via send_message.") signals the user can ask
   // for the substantive answer.
+  //
+  // Append a warning suffix when this fires. We've seen agents emit
+  // wrapped meta-claims post-compaction ("Done — answered the X
+  // question") that the salvage surfaces verbatim; without the suffix
+  // the user reads it as a deliberate reply and trusts the claim. The
+  // suffix lets them recover quickly: noisy > misleading. User
+  // preference per discussion 2026-04-30: "bias towards more noisy
+  // output instead of overly quiet."
   let scratchpad = stripped;
+  let salvaged = false;
   if (!stripped && opts.sendMessageToolUseCount === 0) {
     const unwrapped = rawScratchpad.replace(/<\/?internal>/g, '').trim();
-    if (unwrapped) scratchpad = unwrapped;
+    if (unwrapped) {
+      scratchpad = unwrapped;
+      salvaged = true;
+    }
   }
 
   // Single-destination shortcut: the agent wrote plain text — send to
@@ -511,6 +535,7 @@ function dispatchResultText(text: string, routing: RoutingContext, opts: { sendM
   // Discord replies back to the CLI transport instead of Discord, and
   // the real user got silence.
   if (sent === 0 && scratchpad) {
+    const surfaced = salvaged ? `${scratchpad}\n\n${SALVAGE_WARNING_SUFFIX}` : scratchpad;
     const sessionRouting = getSessionRouting();
     const channelType = sessionRouting.channel_type ?? routing.channelType;
     const platformId = sessionRouting.platform_id ?? routing.platformId;
@@ -523,13 +548,13 @@ function dispatchResultText(text: string, routing: RoutingContext, opts: { sendM
         platform_id: platformId,
         channel_type: channelType,
         thread_id: threadId,
-        content: JSON.stringify({ text: scratchpad }),
+        content: JSON.stringify({ text: surfaced }),
       });
       return;
     }
     const all = getAllDestinations();
     if (all.length === 1) {
-      sendToDestination(all[0], scratchpad, routing);
+      sendToDestination(all[0], surfaced, routing);
       return;
     }
   }
