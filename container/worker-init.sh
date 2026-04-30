@@ -135,12 +135,27 @@ if [ "$REPO_COUNT" -gt 0 ] 2>/dev/null; then
 fi
 
 # ── Install skills from skills_repo ─────────────────────────────────────
+# Two layouts are supported:
+#   1. <repo>/.claude/skills/<name>/SKILL.md  — the "Claude Code conventional"
+#      layout where a repo packages skills under a `.claude/skills/` subtree
+#   2. <repo>/<name>/SKILL.md                 — repo where each top-level
+#      directory IS a skill (e.g. neuralwatt-claude-skills). Detection: a
+#      subdir contains a SKILL.md file.
+# Broken symlinks (a symlink whose target isn't visible inside the
+# container — happens when the host has `~/.claude/skills/<x>` symlinked
+# at a path the container can't see) are skipped silently.
 SKILLS_REPO=$(bun -e "const p=$PROFILE_JSON; process.stdout.write(p.skills_repo ?? '');" 2>/dev/null)
-if [ -n "$SKILLS_REPO" ] && [ -d "$WORKSPACE/$SKILLS_REPO/.claude/skills" ]; then
+if [ -n "$SKILLS_REPO" ] && [ -d "$WORKSPACE/$SKILLS_REPO" ]; then
   mkdir -p "$SKILLS_DIR"
+  if [ -d "$WORKSPACE/$SKILLS_REPO/.claude/skills" ]; then
+    SKILLS_SRC="$WORKSPACE/$SKILLS_REPO/.claude/skills"
+  else
+    SKILLS_SRC="$WORKSPACE/$SKILLS_REPO"
+  fi
   count=0
-  for sd in "$WORKSPACE/$SKILLS_REPO/.claude/skills"/*/; do
-    [ -d "$sd" ] || continue
+  for sd in "$SKILLS_SRC"/*/; do
+    [ -d "$sd" ] || continue                       # skip broken symlinks
+    [ -f "$sd/SKILL.md" ] || continue              # skill-shaped only
     sname=$(basename "$sd")
     [[ "$sname" == .* ]] && continue
     if [ ! -e "$SKILLS_DIR/$sname" ]; then
@@ -152,11 +167,17 @@ if [ -n "$SKILLS_REPO" ] && [ -d "$WORKSPACE/$SKILLS_REPO/.claude/skills" ]; the
 fi
 
 # ── Host-skills mount (optional) ────────────────────────────────────────
+# Same broken-symlink guard as above — host-skills mounts `~/.claude/skills/`
+# from the host, but if any of those entries are themselves symlinks
+# pointing OUTSIDE the mount (a common pattern: `~/.claude/skills/foo`
+# is a symlink into `~/git/team-skills/foo/`), they appear as broken
+# symlinks inside the container. The `[ -d "$sd" ]` test fails for
+# broken symlinks, so they're skipped.
 if [ -d "/workspace/extra/host-skills" ]; then
   mkdir -p "$SKILLS_DIR"
   count=0
   for sd in /workspace/extra/host-skills/*/; do
-    [ -d "$sd" ] || continue
+    [ -d "$sd" ] || continue                       # skip broken symlinks
     sname=$(basename "$sd")
     [[ "$sname" == .* ]] && continue
     if [ ! -e "$SKILLS_DIR/$sname" ]; then

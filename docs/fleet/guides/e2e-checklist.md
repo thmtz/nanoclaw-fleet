@@ -117,6 +117,31 @@ docker exec <container> env | grep -E "BETTERSTACK|FIREWORKS|TOGETHER|SYNTHETIC|
 
 Each entry's env var should be present. Missing = either the source file at `path` doesn't exist (silent skip — check `ls <path>`) or the host needs a restart to pick up the config change.
 
+### 4d. Team skills available to the agent (`skills_repo` + host-skills)
+
+Worker profile lists a `skills_repo` (typically `neuralwatt-claude-skills`) whose contents should be auto-discoverable by the agent. The chain is fragile — the repo must be cloned successfully, and `worker-init.sh` must find the skill layout. Manifestation when this breaks: agent says `"I don't have /review-and-submit"` even though it's in the team repo.
+
+```bash
+# After spawning a fresh worker, count expected vs visible skills
+docker exec <container> ls /home/node/.claude/skills | wc -l
+docker exec <container> ls /workspace/extra/host-skills | wc -l
+docker exec <container> ls /workspace/<skills_repo>/ 2>/dev/null
+```
+
+Spot-check a known team skill:
+
+```bash
+docker exec <container> ls /home/node/.claude/skills/review-and-submit
+```
+
+If missing: check `ncf logs <worker>` for the worker-init `skills: linked N from <repo>` line. Common causes:
+
+- The `skills_repo` clone failed (check the clone log lines — see section 4b)
+- The repo doesn't follow either layout (`.claude/skills/<name>/SKILL.md` or `<name>/SKILL.md`)
+- A `~/.claude/skills/<name>` entry on the host is a symlink pointing OUTSIDE the mount (the mount carries the symlink but not its target — broken symlink in container, gets skipped silently)
+
+(Regression seen 2026-04-30: NWCS skills missing from `better` and others because (a) the SSH→HTTPS rewrite broke the clone — fixed in PR #105 — and (b) `worker-init.sh` only checked `<repo>/.claude/skills/`, missing repos that put skills at the root. Both addressed in `fix/nwcs-skills-layout`.)
+
 ### 5. Auth path (verify the source of credentials matches expectation)
 
 After the host restart, look at the host log for the LAST worker spawn:

@@ -20,19 +20,19 @@ interface WorkerProfile {
   mounts?: Array<{ hostPath: string; containerPath: string; readonly?: boolean }>;
   ports?: string[];
   skills_repo?: string;
-  init_script?: string;        // alternative init script name
-  claude_md?: string;          // alternative CLAUDE.md template
+  init_script?: string; // alternative init script name
+  claude_md?: string; // alternative CLAUDE.md template
 }
 ```
 
-| Field | Purpose |
-|-|-|
-| `repos` | Cloned on first boot. SSH URLs are rewritten to HTTPS using `NANOCLAW_GITHUB_TOKEN` if available. `postClone` runs after each clone. |
-| `tools` | Shell commands run during init (e.g. `uv tool install /workspace/group/your-tool --force`). Idempotent. |
-| `mounts` | Host paths bind-mounted into the container. Validated against `~/.config/nanoclaw/mount-allowlist.json`. |
-| `ports` | Port mappings (`8080:8080`) passed to docker run. |
-| `skills_repo` | Name of one of the cloned repos whose `.claude/skills/` should be symlinked into the agent's skill path. |
-| `env` | Extra env vars merged into the container spawn (per-worker, on top of provider env). |
+| Field         | Purpose                                                                                                                                                                                                                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repos`       | Cloned on first boot. SSH URLs are rewritten to HTTPS using `NANOCLAW_GITHUB_TOKEN` if available. `postClone` runs after each clone.                                                                                                                                                     |
+| `tools`       | Shell commands run during init (e.g. `uv tool install /workspace/group/your-tool --force`). Idempotent.                                                                                                                                                                                  |
+| `mounts`      | Host paths bind-mounted into the container. Validated against `~/.config/nanoclaw/mount-allowlist.json`.                                                                                                                                                                                 |
+| `ports`       | Port mappings (`8080:8080`) passed to docker run.                                                                                                                                                                                                                                        |
+| `skills_repo` | Name of one of the cloned repos whose skills should be symlinked into the agent's skill path. Two layouts auto-detected: `<repo>/.claude/skills/<name>/SKILL.md` (Claude Code convention) or `<repo>/<name>/SKILL.md` (each top-level dir IS a skill — e.g. `neuralwatt-claude-skills`). |
+| `env`         | Extra env vars merged into the container spawn (per-worker, on top of provider env).                                                                                                                                                                                                     |
 
 ## Loading
 
@@ -74,8 +74,8 @@ Profile mounts go through `validateAdditionalMounts()` (`src/modules/mount-secur
 ```json
 {
   "allowedRoots": [
-    {"path": "~/.ssh", "allowReadWrite": false, "description": "SSH keys (read-only)"},
-    {"path": "~/.config/gpuctl", "allowReadWrite": true, "description": "gpuctl CLI config"}
+    { "path": "~/.ssh", "allowReadWrite": false, "description": "SSH keys (read-only)" },
+    { "path": "~/.config/gpuctl", "allowReadWrite": true, "description": "gpuctl CLI config" }
   ],
   "blockedPatterns": []
 }
@@ -91,10 +91,10 @@ The allowlist is read once at host startup. New entries require a restart.
 
 ## Files
 
-| File | Role |
-|-|-|
-| `src/modules/fleet/worker-profile.ts` | `loadWorkerProfile`, `applyProfileToContainerConfig`, schema |
-| `container/worker-init.sh` | Boot script (clones, tools, skills) |
-| `src/modules/mount-security/index.ts` | Allowlist validation |
-| `examples/worker-profiles/example.json` | Reference template |
+| File                                       | Role                                                           |
+| ------------------------------------------ | -------------------------------------------------------------- |
+| `src/modules/fleet/worker-profile.ts`      | `loadWorkerProfile`, `applyProfileToContainerConfig`, schema   |
+| `container/worker-init.sh`                 | Boot script (clones, tools, skills)                            |
+| `src/modules/mount-security/index.ts`      | Allowlist validation                                           |
+| `examples/worker-profiles/example.json`    | Reference template                                             |
 | `examples/worker-profiles/init.sh.example` | Reference init script (for forks that need a fully custom one) |
