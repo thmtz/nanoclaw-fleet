@@ -19,7 +19,7 @@ import { getAllAgentGroups } from '../../db/agent-groups.js';
 import { getMessagingGroupsByAgentGroup } from '../../db/messaging-groups.js';
 import { getSessionsByAgentGroup } from '../../db/sessions.js';
 import type { Session } from '../../types.js';
-import { notifyAgent } from './lib.js';
+import { CONTAINER_NAME_RE, notifyAgent } from './lib.js';
 
 export interface WorkerSummary {
   name: string;
@@ -50,13 +50,10 @@ export interface FleetSummary {
 /**
  * Read all running `nanoclaw-v2-*` containers and build a folder→uptime map
  * in one shot. Single docker call for the whole fleet — caller doesn't
- * loop over `docker inspect`. Container name format is
- * `nanoclaw-v2-<folder>-<13-digit-timestamp>` (matches container-runner +
- * cleanup-workers regex). Status format is Docker's "Up 2 hours" / "Up 5
- * minutes" — we keep it as-is and strip the "Up " prefix in the formatter.
+ * loop over `docker inspect`. Status format is Docker's "Up 2 hours" /
+ * "Up 5 minutes" — kept as-is and the "Up " prefix is stripped in the
+ * formatter.
  */
-const NAME_RE = /^nanoclaw-v2-(.+)-(\d{13})$/;
-
 function readRunningUptimes(): Map<string, string> {
   const map = new Map<string, string>();
   try {
@@ -67,7 +64,7 @@ function readRunningUptimes(): Map<string, string> {
     if (!out) return map;
     for (const line of out.split('\n')) {
       const [name, status] = line.split('|');
-      const m = name?.match(NAME_RE);
+      const m = name?.match(CONTAINER_NAME_RE);
       if (!m) continue;
       const folder = m[1];
       // Status is e.g. "Up 2 hours" or "Up 5 minutes". Strip the "Up "
@@ -141,6 +138,23 @@ export function listWorkers(): WorkerSummary[] {
   return getFleetSummary().workers;
 }
 
+function workerIcon(w: WorkerSummary): string {
+  if (w.status === 'archived') return '🗄️';
+  if (w.container_status === 'running') return '🟢';
+  return '⚫';
+}
+
+function formatModel(w: { backend: string | null; model: string | null }): string {
+  return `\`${w.model ?? w.backend ?? '—'}\``;
+}
+
+function formatWorkerState(w: WorkerSummary): string {
+  if (w.status === 'archived') return 'archived';
+  if (w.container_uptime) return `up ${w.container_uptime}`;
+  if (w.container_status === 'idle') return 'idle';
+  return 'stopped';
+}
+
 /**
  * Discord-formatted dashboard. Master state on top, workers below as a
  * bullet list with status emoji + uptime. Closes with a one-line summary.
@@ -164,17 +178,7 @@ export function formatFleetSummary(s: FleetSummary): string {
 
   lines.push('## 🤖 Workers');
   for (const w of s.workers) {
-    const icon = w.status === 'archived' ? '🗄️' : w.container_status === 'running' ? '🟢' : '⚫';
-    const modelStr = w.model ? `\`${w.model}\`` : `\`${w.backend ?? '—'}\``;
-    const stateStr =
-      w.status === 'archived'
-        ? 'archived'
-        : w.container_uptime
-          ? `up ${w.container_uptime}`
-          : w.container_status === 'idle'
-            ? 'idle'
-            : 'stopped';
-    lines.push(`- ${icon} **${w.name}** · ${modelStr} · ${stateStr}`);
+    lines.push(`- ${workerIcon(w)} **${w.name}** · ${formatModel(w)} · ${formatWorkerState(w)}`);
   }
 
   // Summary footer.

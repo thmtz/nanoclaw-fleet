@@ -3,6 +3,18 @@
  *
  * Used by create-worker, destroy-worker, switch-backend, list-workers.
  */
+
+/**
+ * Container-name parser: `nanoclaw-v2-<folder>-<Date.now()>`. Folder may
+ * contain hyphens AND digits, so we anchor on the trailing 13-digit
+ * ms-epoch timestamp rather than `\d+`. Loose `\d+` would eat a folder
+ * suffix like `-2024` as the timestamp and mis-identify the folder.
+ *
+ * Anchored to the actual spawn naming in `container-runner.ts:176`.
+ * Used by `cleanup_workers` (orphan detection) and `list_workers`
+ * (uptime lookup) — keep them in sync.
+ */
+export const CONTAINER_NAME_RE = /^nanoclaw-v2-(.+)-(\d{13})$/;
 import fs from 'fs';
 import path from 'path';
 
