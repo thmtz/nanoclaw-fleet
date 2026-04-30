@@ -35,8 +35,17 @@ export function syncWorkerProfiles(): ProfileSyncResult {
   const profile = loadWorkerProfile();
 
   // No-op when there's no user profile — leaves workers on their
-  // create-time config rather than wiping anything.
-  if (!profile.repos?.length && !profile.tools?.length && !profile.mounts?.length && !profile.env) {
+  // create-time config rather than wiping anything. `skills_repo` counts
+  // as content too: a profile that only points at a skills repo is still
+  // meaningful and should trigger a sync (otherwise edits to which repo
+  // skills come from would silently never propagate to existing workers).
+  if (
+    !profile.repos?.length &&
+    !profile.tools?.length &&
+    !profile.mounts?.length &&
+    !profile.env &&
+    !profile.skills_repo
+  ) {
     log.info('Profile sync: no profile defined (or empty), skipping');
     return result;
   }

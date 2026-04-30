@@ -86,11 +86,23 @@ export function getFleetSummary(): FleetSummary {
   const all = getAllAgentGroups();
   const uptimes = readRunningUptimes();
 
+  // "Most alive" session selection — running > idle > stopped — used for
+  // both master and workers so the dashboard reports the running session
+  // when one exists rather than whichever the DB happens to return first.
+  const byAliveness = (s: { container_status: string }): number =>
+    s.container_status === 'running' ? 2 : s.container_status === 'idle' ? 1 : 0;
+  const pickPrimarySession = (
+    agentGroupId: string,
+  ): { container_status: string; last_active?: string | null } | undefined => {
+    const sessions = [...getSessionsByAgentGroup(agentGroupId)];
+    sessions.sort((a, b) => byAliveness(b) - byAliveness(a));
+    return sessions[0];
+  };
+
   const masterAg = all.find((g) => g.fleet_role === 'master' && (g.status ?? 'active') === 'active');
   let master: MasterSummary | null = null;
   if (masterAg) {
-    const sessions = getSessionsByAgentGroup(masterAg.id);
-    const primary = sessions[0];
+    const primary = pickPrimarySession(masterAg.id);
     master = {
       name: masterAg.name,
       backend: masterAg.fleet_backend ?? masterAg.agent_provider ?? null,
@@ -103,12 +115,7 @@ export function getFleetSummary(): FleetSummary {
   const workers: WorkerSummary[] = all
     .filter((g) => g.fleet_role === 'worker')
     .map((g) => {
-      const sessions = getSessionsByAgentGroup(g.id);
-      // Pick the "most alive" session — running > idle > stopped — for display.
-      const byAliveness = (s: { container_status: string }): number =>
-        s.container_status === 'running' ? 2 : s.container_status === 'idle' ? 1 : 0;
-      sessions.sort((a, b) => byAliveness(b) - byAliveness(a));
-      const primary = sessions[0];
+      const primary = pickPrimarySession(g.id);
       const mgs = getMessagingGroupsByAgentGroup(g.id);
       return {
         name: g.name,
