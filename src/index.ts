@@ -15,6 +15,8 @@ import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, st
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { startOutboundWakeServer, stopOutboundWakeServer } from './outbound-wake.js';
 import { startStatusPin, stopStatusPin } from './modules/status-pin/index.js';
+import { startResourceMonitor, stopResourceMonitor } from './modules/resource-monitor/index.js';
+import { getActiveContainerCount } from './container-runner.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 
@@ -214,6 +216,11 @@ async function main(): Promise<void> {
   // delivery adapter so it can post/edit through Discord.
   startStatusPin();
 
+  // 5d. Resource monitor — polls memory/disk/container-count and posts
+  // hysteresis-driven alerts to #master when thresholds are crossed.
+  // Self-skips when no master is registered (alerts go to logs only).
+  startResourceMonitor({ getActiveContainers: getActiveContainerCount });
+
   // 6. Start host sweep
   startHostSweep();
   log.info('Host sweep started');
@@ -234,6 +241,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDeliveryPolls();
   stopHostSweep();
   stopStatusPin();
+  stopResourceMonitor();
   await stopOutboundWakeServer();
   await teardownChannelAdapters();
   process.exit(0);
