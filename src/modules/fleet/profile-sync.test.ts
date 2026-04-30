@@ -57,6 +57,18 @@ describe('syncWorkerProfiles', () => {
     expect(result.unchanged).toEqual([]);
   });
 
+  it('triggers sync when only skills_repo is set (regression)', () => {
+    makeWorker('alpha');
+    mockLoadProfile.mockReturnValue({ skills_repo: 'neuralwatt-claude-skills' });
+    const result = syncWorkerProfiles();
+    // Without the skills_repo guard in the empty-profile check this would
+    // silently skip — the "only skills_repo" profile is real and the sync
+    // must run so existing workers pick up the new skills source.
+    expect(result.updated).toEqual(['alpha']);
+    const cfg = JSON.parse(fs.readFileSync(path.join(TEST_DIR, 'groups', 'alpha', 'container.json'), 'utf-8'));
+    expect(cfg.fleetProfile.skills_repo).toBe('neuralwatt-claude-skills');
+  });
+
   it('updates a worker whose container.json lacks the current profile', () => {
     makeWorker('alpha');
     mockLoadProfile.mockReturnValue({
