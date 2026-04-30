@@ -142,6 +142,17 @@ If missing: check `ncf logs <worker>` for the worker-init `skills: linked N from
 
 (Regression seen 2026-04-30: NWCS skills missing from `better` and others because (a) the SSH→HTTPS rewrite broke the clone — fixed in PR #105 — and (b) `worker-init.sh` only checked `<repo>/.claude/skills/`, missing repos that put skills at the root. Both addressed in `fix/nwcs-skills-layout`.)
 
+### 4e. Resource monitor (host-side background polling for memory/disk/container alerts)
+
+The resource monitor runs every 5 minutes and posts to #master when memory ≥80%, disk ≥80%, or active containers ≥80% of `MAX_CONCURRENT_CONTAINERS`. Hysteresis: alert once on crossing, clear once on dropping below 70% (60% for containers).
+
+```bash
+# Verify the monitor started in host startup logs
+grep -i "Resource monitor started" logs/nanoclaw.log | tail -2
+```
+
+If you can't easily induce a real resource crunch, the threshold logic is exercised by `src/modules/resource-monitor/index.test.ts` (4 cases for crossings, hysteresis, multi-metric ticks). For a real-world spot check, watch `logs/nanoclaw.log` for `Resource alert` entries during heavy use.
+
 ### 5. Auth path (verify the source of credentials matches expectation)
 
 After the host restart, look at the host log for the LAST worker spawn:
