@@ -79,7 +79,13 @@ async function main(): Promise<void> {
   // No-op if no profile is defined. Mirrors v1 fleet's syncWorkerProfiles
   // (FORK-SPEC §7.4).
   const { syncWorkerProfiles } = await import('./modules/fleet/profile-sync.js');
-  syncWorkerProfiles();
+  const profileSyncResult = syncWorkerProfiles();
+  if (profileSyncResult.errors.length > 0) {
+    log.warn('Profile sync had errors at startup', {
+      errors: profileSyncResult.errors,
+      updated: profileSyncResult.updated.length,
+    });
+  }
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();

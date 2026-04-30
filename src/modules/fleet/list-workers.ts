@@ -54,7 +54,7 @@ export interface FleetSummary {
  * "Up 5 minutes" — kept as-is and the "Up " prefix is stripped in the
  * formatter.
  */
-function readRunningUptimes(): Map<string, string> {
+export function readRunningUptimes(): Map<string, string> {
   const map = new Map<string, string>();
   try {
     const out = execSync(`docker ps --filter name=nanoclaw-v2- --format '{{.Names}}|{{.Status}}'`, {
@@ -164,9 +164,8 @@ export function formatFleetSummary(s: FleetSummary): string {
   const lines: string[] = [];
 
   if (s.master) {
-    const modelStr = s.master.model ? `\`${s.master.model}\`` : `\`${s.master.backend ?? 'claude'}\``;
     const uptimeStr = s.master.container_uptime ? `up ${s.master.container_uptime}` : s.master.container_status;
-    lines.push(`**Master** · ${modelStr} · ${uptimeStr}`);
+    lines.push(`**Master** · ${formatModel(s.master)} · ${uptimeStr}`);
     lines.push('');
   }
 
