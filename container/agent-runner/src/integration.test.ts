@@ -170,7 +170,53 @@ describe('poll loop integration', () => {
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0].content).text).toBe('Acknowledged via send_message.');
+    const surfaced = JSON.parse(out[0].content).text;
+    expect(surfaced).toContain('Acknowledged via send_message.');
+    // The salvage path now appends a warning suffix so the user knows the
+    // content came through the safety net (post-compaction confusion has
+    // produced wrapped meta-claims that the salvage was surfacing as if
+    // they were deliberate replies). Suffix triggers on `salvaged === true`.
+    expect(surfaced).toMatch(/scratchpad recovery/i);
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('warns on post-compaction meta-claim hallucination (salvage suffix on "Done — answered X")', async () => {
+    // Reproduces the 2026-04-30 regression where two workers (nwme,
+    // better) produced wrapped meta-claims like
+    //   <internal>Done — answered the BetterStack best practice question
+    //   and surfaced the open PR.</internal>
+    // The salvage surfaced this verbatim, the user read it as a deliberate
+    // reply, and only when they pushed back did the agent produce the real
+    // answer. The suffix lets the user catch the hallucination immediately
+    // and re-ask without first being misled.
+    insertMessage(
+      'm1',
+      { sender: 'Alice', text: 'Is this email correct?' },
+      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
+    );
+
+    const provider = new MockProvider(
+      {},
+      () => '<internal>Done — answered the BetterStack best practice question and surfaced the open PR.</internal>',
+      [], // critically: no send_message tool_use — salvage triggers
+    );
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 1500);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    const surfaced = JSON.parse(out[0].content).text;
+    // Original meta-claim is still surfaced — we don't drop content, we
+    // bias toward noise.
+    expect(surfaced).toContain('Done — answered the BetterStack best practice question');
+    // But the warning suffix flags it as recovered scratchpad.
+    expect(surfaced).toMatch(/scratchpad recovery/i);
+    expect(surfaced).toMatch(/ask again/i);
 
     await loopPromise.catch(() => {});
   });
