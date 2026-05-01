@@ -33,6 +33,30 @@ export interface WriteMessageOut {
 }
 
 /**
+ * Per-turn count of immediate chat deliveries the agent has produced via
+ * MCP tools (send_message, send_file, ask_user_question, list_workers
+ * dashboards, etc.). The poll loop reads this at result-event time and
+ * drops the trailing turn-text when it's > 0 — the agent already replied
+ * via tool, so the trailing text would be a duplicate. Reset at each new
+ * batch boundary via resetChatDeliveryCount().
+ *
+ * v1 parity: revives `groupsSentMessage` / `didGroupSendMessage` from
+ * v1's src/ipc.ts — host tracks "did the agent reply this turn?" so the
+ * agent never has to reason about turn boundaries (which broke
+ * post-compaction when the agent's summary made it think a prior turn's
+ * send_message was "this turn").
+ */
+let chatDeliveryCount = 0;
+
+export function getChatDeliveryCount(): number {
+  return chatDeliveryCount;
+}
+
+export function resetChatDeliveryCount(): void {
+  chatDeliveryCount = 0;
+}
+
+/**
  * Write a new outbound message, auto-assigning an odd seq number.
  * Container uses odd seq (1, 3, 5...), host uses even (2, 4, 6...).
  *
@@ -73,6 +97,14 @@ export function writeMessageOut(msg: WriteMessageOut): number {
       $content: msg.content,
     });
 
+  // Track immediate chat deliveries so the poll loop can suppress the
+  // trailing turn-text when the agent already replied via tool. Skip
+  // scheduled messages (deliver_after set) — those land in the future
+  // and don't satisfy the current turn's reply obligation.
+  if (!msg.deliver_after && (msg.kind === 'chat' || msg.kind === 'chat-sdk')) {
+    chatDeliveryCount++;
+  }
+
   // Best-effort wake so the host delivers immediately instead of waiting
   // for the next 1s poll tick. Dropped wakes are benign — the poll catches
   // the row on the next tick. Scheduled messages (deliver_after in the
@@ -109,9 +141,7 @@ export function getMessageIdBySeq(seq: number): string | null {
   const inbound = getInboundDb();
 
   // Inbound messages: ID is already the platform message ID
-  const inRow = inbound.prepare('SELECT id FROM messages_in WHERE seq = ?').get(seq) as
-    | { id: string }
-    | undefined;
+  const inRow = inbound.prepare('SELECT id FROM messages_in WHERE seq = ?').get(seq) as { id: string } | undefined;
   if (inRow) return inRow.id;
 
   // Outbound messages: look up platform message ID from delivered table

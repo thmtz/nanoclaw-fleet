@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
-import { getUndeliveredMessages } from './db/messages-out.js';
+import { getUndeliveredMessages, writeMessageOut } from './db/messages-out.js';
 import { getPendingMessages } from './db/messages-in.js';
 import { MockProvider } from './providers/mock.js';
 import { runPollLoop } from './poll-loop.js';
@@ -82,71 +82,70 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
-  it('drops trailing text when the agent wrapped it in <internal> and send_message ran', async () => {
-    // Canonical ack-then-work: agent sent the substantive reply via
-    // send_message, then closed with `<internal>done</internal>`. Stripping
-    // the wrapper leaves "" → nothing lands in outbound (correct: the
-    // reply already went via send_message). Salvage doesn't fire here
-    // because send_message ran (we shouldn't re-surface the wrapped text
-    // as if it were the missing reply). The MCP-side send_message itself
-    // is a no-op in MockProvider, so the only thing that *would* land in
-    // outbound is the scratchpad — assert nothing lands.
-    insertMessage(
-      'm1',
-      { sender: 'Alice', text: 'Do the thing' },
-      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
-    );
-
-    const provider = new MockProvider(
-      {},
-      () => '<internal>Sent reply via send_message. No further output needed.</internal>',
-      ['mcp__nanoclaw__send_message'],
-    );
-
-    const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
-
-    // Wait for the result event by waiting for the message to be ack'd.
-    await waitFor(() => getPendingMessages().length === 0, 1500);
-    controller.abort();
-
-    expect(getUndeliveredMessages()).toHaveLength(0);
-
-    await loopPromise.catch(() => {});
-  });
-
-  it('delivers substantive trailing text even when send_message ran earlier (no auto-suppress)', async () => {
-    // models-endpoint regression: agent calls send_message early ("On it…"),
-    // does the work, then writes a substantive summary as the trailing
-    // turn-result text. The previous auto-suppress-when-send_message-ran
-    // logic dropped these summaries. We now deliver them — the agent is
-    // expected to explicitly wrap closing chatter in <internal> when it
-    // wants suppression (see core.instructions.md).
+  it('drops trailing text whenever the agent already delivered chat via tool this turn', async () => {
+    // v1 design: host tracks "did the agent deliver this turn?" via a
+    // chat-delivery counter incremented inside writeMessageOut. If yes,
+    // the trailing turn-text is dropped — substantive or not, wrapped
+    // or not. The agent is instructed to call send_message for anything
+    // it wants delivered; trailing turn-text is scratchpad.
+    //
+    // Why not the previous "agent self-wraps in <internal>" design: it
+    // broke after Claude SDK auto-compaction, where the compacted summary
+    // made the agent think a prior turn's send_message was "this turn"
+    // and wrap the new reply too. The user got bare scratchpad
+    // ("Reply delivered via send_message.") instead of an answer.
+    //
+    // We invoke writeMessageOut directly from inside the responseFactory
+    // to simulate the delivery the real send_message MCP tool would have
+    // produced — that's what the suppression keys off.
     insertMessage(
       'm1',
       { sender: 'Alice', text: 'check the pricing_tbd models' },
       { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
     );
 
-    const summary = 'PR #2829 is up. Migration 173 covers all three base models (K2.5, MiniMax, Devstral).';
-    const provider = new MockProvider({}, () => summary, ['mcp__nanoclaw__send_message']);
+    const summary = 'PR #2829 is up. Migration 173 covers all three base models.';
+    const provider = new MockProvider({}, () => {
+      // Simulate the real send_message tool firing during the turn.
+      writeMessageOut({
+        id: 'tool-delivered-1',
+        kind: 'chat',
+        platform_id: 'chan-1',
+        channel_type: 'discord',
+        thread_id: 'thread-1',
+        content: JSON.stringify({ text: 'On it — checking now…' }),
+      });
+      return summary;
+    });
 
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
 
+    // Wait until the early ack lands in outbound — that guarantees the
+    // mock provider's responseFactory ran (and wrote the ack via tool)
+    // and dispatchResultText fired (deciding what to do with trailing
+    // text). Polling pending status alone is racy: it flips when the
+    // loop marks 'processing', not when the result event completes.
     await waitFor(() => getUndeliveredMessages().length > 0, 1500);
+    // Give dispatchResultText one tick to write the trailing text if it
+    // was going to (it shouldn't, but we want to assert that, not race
+    // it).
+    await sleep(50);
     controller.abort();
 
+    // Exactly one delivery — the early ack. The substantive summary as
+    // trailing turn-text was dropped. The agent is expected to call
+    // send_message a second time for the summary.
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0].content).text).toBe(summary);
+    expect(JSON.parse(out[0].content).text).toBe('On it — checking now…');
 
     await loopPromise.catch(() => {});
   });
 
-  it('salvages internal-only output when no send_message ran (rather than going silent)', async () => {
+  it('salvages internal-only output when no chat delivery ran (rather than going silent)', async () => {
     // Bug PR #93 surfaced: agent emits ONLY <internal>...</internal> with no
-    // send_message tool_use. Old behavior stripped the wrapper, leaving
+    // chat delivery via tool. Old behavior stripped the wrapper, leaving
     // empty text, leaving the user with silence. New behavior unwraps the
     // <internal> block and surfaces the text — weird-looking but not
     // silent, so the user can see the agent's broken state and ask again.
@@ -156,11 +155,7 @@ describe('poll loop integration', () => {
       { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
     );
 
-    const provider = new MockProvider(
-      {},
-      () => '<internal>Acknowledged via send_message.</internal>',
-      [], // no tool_use this turn
-    );
+    const provider = new MockProvider({}, () => '<internal>Acknowledged via send_message.</internal>');
 
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
@@ -199,7 +194,7 @@ describe('poll loop integration', () => {
     const provider = new MockProvider(
       {},
       () => '<internal>Done — answered the BetterStack best practice question and surfaced the open PR.</internal>',
-      [], // critically: no send_message tool_use — salvage triggers
+      // critically: no chat delivery via tool this turn — salvage triggers
     );
 
     const controller = new AbortController();
