@@ -355,9 +355,14 @@ export class ClaudeProvider implements AgentProvider {
     this.assistantName = options.assistantName;
     this.mcpServers = options.mcpServers ?? {};
     this.additionalDirectories = options.additionalDirectories;
+    // Default first, host-supplied env wins. Lets the host override
+    // CLAUDE_CODE_AUTO_COMPACT_WINDOW per-worker (resolved from the
+    // worker's model in src/compact-window.ts) without touching this
+    // constant. Pre-fix the spread order was inverted, so the hardcoded
+    // 165k always won regardless of what the host passed.
     this.env = {
-      ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+      ...(options.env ?? {}),
     };
   }
 

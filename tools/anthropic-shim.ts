@@ -71,6 +71,11 @@ interface WorkerUsage {
 }
 
 const USAGE_PATH = process.env.USAGE_PATH || 'data/worker-usage.json';
+// Cache of upstream model context limits — host reads this to pick the
+// auto-compact window per worker. Refreshed on the same 5-min cadence as
+// modelsCache below; written atomically so the host always sees a complete
+// JSON object.
+const MODEL_LIMITS_PATH = process.env.MODEL_LIMITS_PATH || 'data/model-limits.json';
 
 let workerUsage: Record<string, WorkerUsage> = {};
 
@@ -163,6 +168,25 @@ loadUsage();
 let modelsCache: string[] | null = null;
 let modelsCacheTime = 0;
 
+function writeModelLimits(
+  entries: Array<{ id: string; max_model_len?: number; metadata?: { limits?: { max_context_length?: number } } }>,
+): void {
+  const limits: Record<string, number> = {};
+  for (const m of entries) {
+    const lim = m.metadata?.limits?.max_context_length ?? m.max_model_len;
+    if (typeof lim === 'number' && lim > 0) limits[m.id] = lim;
+  }
+  if (Object.keys(limits).length === 0) return;
+  try {
+    fs.mkdirSync(path.dirname(MODEL_LIMITS_PATH), { recursive: true });
+    const tmp = `${MODEL_LIMITS_PATH}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(limits, null, 2));
+    fs.renameSync(tmp, MODEL_LIMITS_PATH);
+  } catch (err) {
+    console.error(`[shim] Failed to write model-limits cache: ${err}`);
+  }
+}
+
 async function refreshModelsCache(): Promise<void> {
   const now = Date.now();
   if (modelsCache && now - modelsCacheTime < 5 * 60 * 1000) return;
@@ -172,8 +196,10 @@ async function refreshModelsCache(): Promise<void> {
     });
     if (resp.ok) {
       const data = await resp.json();
-      modelsCache = (data as any).data?.map((m: any) => m.id) || [];
+      const entries = (data as any).data || [];
+      modelsCache = entries.map((m: any) => m.id) || [];
       modelsCacheTime = now;
+      writeModelLimits(entries);
     }
   } catch {
     /* ignore */
