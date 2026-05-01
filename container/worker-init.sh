@@ -65,16 +65,12 @@ fi
 # ── Clone repos ──────────────────────────────────────────────────────────
 # Iterate profile.repos[] = [{url, postClone}, ...]. Clone into /workspace
 # which is the worker's workspace root (bind-mounted to the host). SSH
-# URLs are rewritten to HTTPS if NANOCLAW_GITHUB_TOKEN_PATH is set.
+# URLs are rewritten to HTTPS using $GH_TOKEN (or $GITHUB_TOKEN as
+# fallback) when SSH isn't available — both env vars come from the
+# host's container_credentials (see ~/.config/nanoclaw/config.json).
 REPO_COUNT=$(bun -e "const p=$PROFILE_JSON; process.stdout.write(String((p.repos??[]).length));" 2>/dev/null || echo "0")
 if [ "$REPO_COUNT" -gt 0 ] 2>/dev/null; then
-  # Accept both forms: NANOCLAW_GITHUB_TOKEN (literal, preferred —
-  # container-runner reads the file host-side and passes the value) or
-  # NANOCLAW_GITHUB_TOKEN_PATH (file inside the container).
-  GITHUB_TOKEN="${NANOCLAW_GITHUB_TOKEN:-}"
-  if [ -z "$GITHUB_TOKEN" ] && [ -n "$NANOCLAW_GITHUB_TOKEN_PATH" ] && [ -f "$NANOCLAW_GITHUB_TOKEN_PATH" ]; then
-    GITHUB_TOKEN=$(cat "$NANOCLAW_GITHUB_TOKEN_PATH")
-  fi
+  GITHUB_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
   # Trust OneCLI's CA when its proxy is intercepting our HTTPS clones.
   # OneCLI mounts a combined bundle (system CAs + its self-signed cert) at

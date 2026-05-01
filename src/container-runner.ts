@@ -570,45 +570,18 @@ async function buildContainerArgs(
   // logging attribution.
   args.push('-e', `NANOCLAW_PROVIDER=${provider}`);
 
-  // GitHub token. Read the file at spawn time and pass the literal token
-  // as env — avoids mounting the host's .config/github directory and
-  // keeps the token out of any surface that gets persisted in container
-  // images or logs. Set NANOCLAW_GITHUB_TOKEN_PATH in .env to enable;
-  // absent is fine.
-  //
-  // Three names, all the same value:
-  //   - NANOCLAW_GITHUB_TOKEN — read by worker-init.sh for HTTPS clone
-  //     rewrites when SSH isn't available.
-  //   - GH_TOKEN — what the GitHub CLI (`gh`) checks first.
-  //   - GITHUB_TOKEN — fallback for `gh` and a long tail of other tools
-  //     (Octokit, gh-auth scripts, GitHub Actions runners, etc.).
-  // Setting all three at the docker-run level guarantees they survive
-  // the `bash worker-init.sh; exec bun ...` command shape — exports
-  // inside worker-init.sh would not, since bash runs in a child shell
-  // whose env doesn't propagate back to the parent's exec.
-  const ghEnv = readEnvFile(['NANOCLAW_GITHUB_TOKEN_PATH']);
-  const ghPath = ghEnv.NANOCLAW_GITHUB_TOKEN_PATH;
-  if (ghPath) {
-    try {
-      const resolved = ghPath.startsWith('~/') ? path.join(process.env.HOME ?? '', ghPath.slice(2)) : ghPath;
-      if (fs.existsSync(resolved)) {
-        const token = fs.readFileSync(resolved, 'utf-8').trim();
-        if (token) {
-          args.push('-e', `NANOCLAW_GITHUB_TOKEN=${token}`);
-          args.push('-e', `GH_TOKEN=${token}`);
-          args.push('-e', `GITHUB_TOKEN=${token}`);
-        }
-      }
-    } catch (err) {
-      log.warn('Could not read NANOCLAW_GITHUB_TOKEN_PATH', { ghPath, err: String(err) });
-    }
-  }
-
   // Personal `container_credentials`: file→env injection for tokens the
-  // user wants every container to have. Generic version of the
-  // NANOCLAW_GITHUB_TOKEN_PATH special-case above; lets users add tokens
-  // (BETTERSTACK_API_TOKEN, FIREWORKS_API_KEY, …) by editing their
+  // user wants every container to have. Lets users add tokens (GH_TOKEN,
+  // BETTERSTACK_API_TOKEN, FIREWORKS_API_KEY, …) by editing their
   // `~/.config/nanoclaw/config.json` instead of adding code here.
+  //
+  // GitHub auth note: the canonical config for `gh` and friends is
+  //   { "env": "GH_TOKEN", "path": "~/.config/github/pat" },
+  //   { "env": "GITHUB_TOKEN", "path": "~/.config/github/pat" }
+  // worker-init.sh uses these for HTTPS clone rewrites too; no separate
+  // NanoClaw-specific env var. Earlier installs had NANOCLAW_GITHUB_TOKEN_PATH
+  // in .env wired to a dedicated code path here — removed; the generic
+  // mechanism covers it.
   //
   // Schema:
   //   { "container_credentials": [ { "env": "NAME", "path": "~/.config/.../api_key" }, ... ] }
