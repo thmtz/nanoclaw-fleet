@@ -18,11 +18,7 @@ The user wants a snapshot of fleet state — master plus every worker, their bac
 
 ## What to do
 
-Call the `mcp__nanoclaw__list_workers` MCP tool. The host runs the query synchronously and posts a formatted dashboard (master state + per-worker bullets + summary footer) to the master's channel as a chat message. Your turn-result text after the call should be wrapped in `<internal>...</internal>` because the dashboard already landed via the MCP tool path — anything you write afterwards is duplicate chatter.
-
-```
-<internal>Status dashboard delivered via list_workers.</internal>
-```
+Call the `mcp__nanoclaw__list_workers` MCP tool. The host runs the query synchronously and posts a formatted dashboard (master state + per-worker bullets + summary footer) to the master's channel as a chat message. The dashboard delivery itself counts as your reply — the host drops your trailing turn-text automatically. Just end the turn after the tool call; nothing else to do.
 
 That's the entire skill.
 

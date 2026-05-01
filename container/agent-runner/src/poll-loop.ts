@@ -1,6 +1,6 @@
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
-import { writeMessageOut } from './db/messages-out.js';
+import { writeMessageOut, getChatDeliveryCount, resetChatDeliveryCount } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { logTurn } from './audit-log.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
@@ -346,12 +346,13 @@ async function processQuery(
   const traceId = initialBatchIds.join(',');
   const tStart = Date.now();
   let firstEventAt: number | null = null;
-  // Count of mcp__nanoclaw__send_message tool_use events in the current
-  // turn. Reset on every result so each turn's count stands alone.
-  // dispatchResultText reads this to decide whether the final turn text
-  // is a duplicate of a real reply already delivered via send_message
-  // (drop it) or the only output the agent produced (surface it).
-  let sendMessageToolUseCount = 0;
+  // Per-turn chat-delivery counter is module-level state in messages-out.ts —
+  // every writeMessageOut call with kind 'chat'/'chat-sdk' increments it.
+  // dispatchResultText reads it to decide whether the trailing turn-text is
+  // a duplicate of a real reply already delivered via tool (drop it) or the
+  // only output the agent produced (deliver / salvage it). Reset at turn
+  // start (here) and after every result event below.
+  resetChatDeliveryCount();
   try {
     for await (const event of query.events) {
       if (firstEventAt === null) {
@@ -361,11 +362,7 @@ async function processQuery(
       handleEvent(event, routing);
       touchHeartbeat();
 
-      if (event.type === 'tool_use') {
-        if (event.tool_name === 'mcp__nanoclaw__send_message') {
-          sendMessageToolUseCount++;
-        }
-      } else if (event.type === 'init') {
+      if (event.type === 'init') {
         queryContinuation = event.continuation;
         // Persist immediately so a mid-turn container crash still lets the
         // next wake resume the conversation. Without this, the session id
@@ -399,11 +396,11 @@ async function processQuery(
           stop_reason: usage?.stop_reason ?? null,
         });
         if (event.text) {
-          dispatchResultText(event.text, routing, { sendMessageToolUseCount });
+          dispatchResultText(event.text, routing, { chatDeliveryCount: getChatDeliveryCount() });
         }
         // Reset for the next turn (streaming-input mode pushes follow-up
         // user messages into the same query, each producing its own result).
-        sendMessageToolUseCount = 0;
+        resetChatDeliveryCount();
       }
     }
   } finally {
@@ -443,34 +440,24 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
  * Single-destination shortcut: if the agent has exactly one configured
  * destination AND the output contains zero <message> blocks, the entire
  * cleaned text (with <internal> tags stripped) is sent to that destination.
- * This preserves the simple case of one user on one channel — the agent
- * doesn't need to know about wrapping syntax at all.
  *
- * De-duplication when `send_message` ran: the agent is instructed (in
- * `core.instructions.md`) to wrap closing chatter in `<internal>...
- * </internal>` after using send_message so the trailing text is stripped
- * to empty here. We don't auto-drop trailing text whenever send_message
- * ran — that mistakes substantive end-of-turn summaries ("Here's the PR:
- * #2829, summary follows…") for "Done!" duplicates and silently eats them.
- * v1 behavior: trust the agent's wrap; surface anything that isn't wrapped.
+ * De-duplication: if the agent already delivered chat output via tool this
+ * turn (send_message, send_file, list_workers dashboard, ask_user_question,
+ * …), drop the trailing turn-text. This is v1's behavior — the host tracks
+ * "did the agent reply this turn?" so the agent never has to reason about
+ * turn boundaries. The previous v2 design (agent self-wraps with `<internal>`)
+ * broke after Claude SDK auto-compaction: the compacted summary made the
+ * agent think a prior turn's send_message was "this turn", so it wrapped
+ * the new turn's reply too and the user got a bare scratchpad note instead
+ * of an answer.
  *
- * The salvage path below catches the post-compaction failure mode where
- * the agent emits a stand-alone `<internal>` block with no send_message —
- * we'd otherwise go silent.
- */
-/**
- * Suffix appended to salvage-path output. The salvage path surfaces an
- * agent's wrapped-only output when no `send_message` ran — it prevents
- * silence, but the recovered content has often been a meta-claim like
- * "Done — answered the question" with no actual answer (post-compaction
- * confusion bug, observed 2026-04-30 across multiple workers). Without a
- * suffix the user reads the meta-claim as a deliberate reply and trusts
- * the agent. With a suffix the user knows to verify.
+ * The salvage path below catches the case where the agent emits a stand-alone
+ * `<internal>` block with no chat delivery at all — we'd otherwise go silent.
  */
 const SALVAGE_WARNING_SUFFIX =
   '⚠️ _scratchpad recovery — this came from the agent\'s internal monologue, not a deliberate `send_message`. If it reads like a vague claim ("done", "answered", "flagged") without the actual content, ask again._';
 
-function dispatchResultText(text: string, routing: RoutingContext, opts: { sendMessageToolUseCount: number }): void {
+function dispatchResultText(text: string, routing: RoutingContext, opts: { chatDeliveryCount: number }): void {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
   let match: RegExpExecArray | null;
@@ -501,24 +488,29 @@ function dispatchResultText(text: string, routing: RoutingContext, opts: { sendM
 
   const rawScratchpad = scratchpadParts.join('');
   const stripped = stripInternalTags(rawScratchpad);
-  // Salvage path: if the agent's only output was `<internal>...</internal>`
-  // (so stripping leaves nothing) AND no send_message tool_use covered
-  // the reply, treat the inner content as the actual message. Surfaces
-  // the agent's template / scratchpad text rather than dropping it
-  // silently — silence reads as "agent broken"; even a weird-looking
-  // ack ("Acknowledged via send_message.") signals the user can ask
-  // for the substantive answer.
-  //
-  // Append a warning suffix when this fires. We've seen agents emit
-  // wrapped meta-claims post-compaction ("Done — answered the X
-  // question") that the salvage surfaces verbatim; without the suffix
-  // the user reads it as a deliberate reply and trusts the claim. The
-  // suffix lets them recover quickly: noisy > misleading. User
-  // preference per discussion 2026-04-30: "bias towards more noisy
-  // output instead of overly quiet."
+
+  // v1 design: if the agent already delivered chat output via tool this
+  // turn, drop the trailing turn-text. It's redundant at best and (after
+  // compaction) often just `<internal>Reply delivered.</internal>`-style
+  // hallucination.
+  if (opts.chatDeliveryCount > 0) {
+    if (stripped) {
+      log(
+        `[scratchpad] (suppressed; ${opts.chatDeliveryCount} tool delivery this turn) ${stripped.slice(0, 200)}${stripped.length > 200 ? '…' : ''}`,
+      );
+    }
+    return;
+  }
+
+  // Salvage path: agent never delivered via tool, AND its only output was
+  // wrapped in `<internal>` (so stripping leaves nothing). Unwrap and
+  // surface — silence reads as broken; a weird-looking ack lets the user
+  // see the agent's confused state and re-ask. Suffix flags it so the
+  // user knows to verify rather than trust meta-claims like
+  // "Done — answered the question" verbatim.
   let scratchpad = stripped;
   let salvaged = false;
-  if (!stripped && opts.sendMessageToolUseCount === 0) {
+  if (!stripped) {
     const unwrapped = rawScratchpad.replace(/<\/?internal>/g, '').trim();
     if (unwrapped) {
       scratchpad = unwrapped;

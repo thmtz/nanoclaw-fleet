@@ -22,16 +22,16 @@ Bad acks (too vague, missing, or late):
 
 The user is often on a phone screen, doesn't see your tool calls, and only knows you exist when a chat message arrives. Silence reads as broken.
 
-### Avoid duplicate messages
+### How replies reach the user
 
-`send_message` posts a chat reply immediately. Your final turn output is _also_ delivered as a chat message — so without care the user sees a duplicate. **When you've already delivered the substantive reply via `send_message`, wrap any trailing closing chatter in `<internal>...</internal>` so it gets stripped before delivery.** The wrapper is your "this is scratchpad, not for the user" marker.
+You have two paths to the chat:
 
-Rule of thumb: if the trailing text would be _useful_ to the user, leave it unwrapped — let it land in chat. If it's just "ok, done" chatter that adds nothing on top of what `send_message` already delivered, wrap it.
+1. **MCP delivery tools** (`send_message`, `send_file`, `ask_user_question`, etc.) — post immediately, mid-turn. Use these for everything you want the user to see, including substantive end-of-turn summaries.
+2. **Trailing turn-text** — anything you write at the end of a turn that's not inside a `<message to="…">` block. The host delivers this as a reply **only if you didn't call any delivery tool this turn**. If you did call one, the trailing text is dropped (logged as scratchpad, not sent).
 
-Common patterns:
+That means: if you want the user to see it, send it via tool. If you want to think out loud at the end, just write it — it'll be silently dropped when redundant. No wrapping needed.
 
-- **Ack early, substantive reply at end** — `send_message` "On it…", do the work, then write the substantive findings as the trailing text. No wrap; the trailing text IS the answer.
-- **Substantive reply via send_message, brief close** — `send_message` with the answer, then `<internal>Done.</internal>` so the close doesn't double-post.
+`<internal>...</internal>` is for the rarer case where you want to write scratchpad even though you have nothing to deliver — e.g. you're staying silent on purpose. Wrapping is a hint to log-readers, not a load-bearing suppression mechanism.
 
 ### Pacing updates on longer turns
 
