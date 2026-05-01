@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { closeSessionDb, getInboundDb, initTestSessionDb } from '../db/connection.js';
 import { getUndeliveredMessages } from '../db/messages-out.js';
-import { sendCompactionNotice } from './claude.js';
+import { sendCompactionNotice, sendPostCompactionNotice } from './claude.js';
 
 beforeEach(() => {
   initTestSessionDb();
@@ -55,6 +55,28 @@ describe('sendCompactionNotice', () => {
 
   it('silently skips when session routing is missing', () => {
     sendCompactionNotice('auto');
+    expect(getUndeliveredMessages().length).toBe(0);
+  });
+});
+
+describe('sendPostCompactionNotice', () => {
+  it('writes a "compaction complete" chat message back to the same channel', () => {
+    setSessionRouting('discord', 'channel-123', 'thread-456');
+    sendPostCompactionNotice('auto');
+
+    const out = getUndeliveredMessages();
+    expect(out.length).toBe(1);
+    expect(out[0].kind).toBe('chat');
+    expect(out[0].channel_type).toBe('discord');
+    expect(out[0].platform_id).toBe('channel-123');
+    expect(out[0].thread_id).toBe('thread-456');
+    const content = JSON.parse(out[0].content);
+    expect(content.text).toContain('Compaction complete');
+    expect(content.text).toContain('auto');
+  });
+
+  it('silently skips when session routing is missing', () => {
+    sendPostCompactionNotice('auto');
     expect(getUndeliveredMessages().length).toBe(0);
   });
 });
