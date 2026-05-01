@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query as sdkQuery,
+  type HookCallback,
+  type PostCompactHookInput,
+  type PreCompactHookInput,
+} from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import { writeMessageOut } from '../db/messages-out.js';
@@ -232,6 +237,43 @@ export function sendCompactionNotice(trigger: string): void {
   }
 }
 
+/**
+ * Closes the loop opened by sendCompactionNotice — the user knows the
+ * agent went silent for compaction and is waiting to hear it's back.
+ * The SDK auto-continues the in-flight conversation after compaction
+ * (so any user message that arrived during it is processed normally),
+ * which means this notice + the agent's actual reply land back-to-back.
+ */
+export function sendPostCompactionNotice(trigger: string): void {
+  try {
+    const routing = getSessionRouting();
+    if (!routing.channel_type || !routing.platform_id) {
+      log('Skipping post-compaction notice — no session routing');
+      return;
+    }
+    writeMessageOut({
+      id: randomUUID(),
+      kind: 'chat',
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
+      content: JSON.stringify({
+        text: `✅ Compaction complete (${trigger}). Continuing…`,
+      }),
+      systemNotice: true,
+    });
+    log(`Sent post-compaction notice (trigger=${trigger})`);
+  } catch (err) {
+    log(`Failed to send post-compaction notice: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+const postCompactHook: HookCallback = async (input) => {
+  const postCompact = input as PostCompactHookInput;
+  sendPostCompactionNotice(postCompact.trigger || 'auto');
+  return {};
+};
+
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input) => {
     const preCompact = input as PreCompactHookInput;
@@ -358,6 +400,7 @@ export class ClaudeProvider implements AgentProvider {
           PostToolUse: [{ hooks: [postToolUseHook] }],
           PostToolUseFailure: [{ hooks: [postToolUseHook] }],
           PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
+          PostCompact: [{ hooks: [postCompactHook] }],
         },
       },
     });
