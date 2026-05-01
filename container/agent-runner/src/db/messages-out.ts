@@ -30,6 +30,14 @@ export interface WriteMessageOut {
   channel_type?: string | null;
   thread_id?: string | null;
   content: string;
+  /**
+   * Set true for host-side housekeeping notices (compaction notice, system
+   * alerts) that land in chat but do NOT represent the agent's reply to
+   * the user. Without this, the chat-delivery counter would falsely report
+   * "agent already replied this turn" and dispatchResultText would drop
+   * the agent's actual trailing-text reply. Default false (counts as reply).
+   */
+  systemNotice?: boolean;
 }
 
 /**
@@ -100,8 +108,10 @@ export function writeMessageOut(msg: WriteMessageOut): number {
   // Track immediate chat deliveries so the poll loop can suppress the
   // trailing turn-text when the agent already replied via tool. Skip
   // scheduled messages (deliver_after set) — those land in the future
-  // and don't satisfy the current turn's reply obligation.
-  if (!msg.deliver_after && (msg.kind === 'chat' || msg.kind === 'chat-sdk')) {
+  // and don't satisfy the current turn's reply obligation. Skip system
+  // notices (compaction notice, etc.) — host-side housekeeping that
+  // shouldn't pretend to be the agent's reply.
+  if (!msg.deliver_after && !msg.systemNotice && (msg.kind === 'chat' || msg.kind === 'chat-sdk')) {
     chatDeliveryCount++;
   }
 
