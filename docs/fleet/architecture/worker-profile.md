@@ -27,7 +27,7 @@ interface WorkerProfile {
 
 | Field         | Purpose                                                                                                                                                                                                                                                                                  |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `repos`       | Cloned on first boot. SSH URLs are rewritten to HTTPS using `NANOCLAW_GITHUB_TOKEN` if available. `postClone` runs after each clone.                                                                                                                                                     |
+| `repos`       | Cloned on first boot. SSH URLs are rewritten to HTTPS using `$GH_TOKEN` / `$GITHUB_TOKEN` if available (set via `container_credentials` in `~/.config/nanoclaw/config.json`). `postClone` runs after each clone.                                                                         |
 | `tools`       | Shell commands run during init (e.g. `uv tool install /workspace/group/your-tool --force`). Idempotent.                                                                                                                                                                                  |
 | `mounts`      | Host paths bind-mounted into the container. Validated against `~/.config/nanoclaw/mount-allowlist.json`.                                                                                                                                                                                 |
 | `ports`       | Port mappings (`8080:8080`) passed to docker run.                                                                                                                                                                                                                                        |
@@ -59,7 +59,7 @@ When a destroyed worker is recreated by name, the profile is re-read and re-appl
 
 The container runs `container/worker-init.sh` after the agent runner mounts complete and before the SDK starts. The script:
 
-1. **GitHub token.** Reads `NANOCLAW_GITHUB_TOKEN` (or the file at `NANOCLAW_GITHUB_TOKEN_PATH`) if present. Configures git to use it for `https://github.com`. SSH URLs in `repos[].url` are rewritten to HTTPS so private repos work without SSH keys.
+1. **GitHub token.** Reads `$GH_TOKEN` (falling back to `$GITHUB_TOKEN`) — both injected by host-side `container_credentials` (see [personal-config.md](../guides/personal-config.md)). When SSH isn't usable, SSH URLs in `repos[].url` are rewritten to `https://<token>@github.com/...` so private repos still clone.
 2. **SSH symlink.** If `~/host-ssh` is mounted (e.g. via a worker profile mount), symlinks it to `/home/node/.ssh` so SSH-based clones still work where you want them.
 3. **Repos.** For each `fleetProfile.repos` entry, `git clone` into `/workspace/group/<repo-name>/` if it doesn't already exist. If `postClone` is set, run it from the cloned directory.
 4. **Skills.** If `fleetProfile.skills_repo` matches a cloned repo's name and that repo has a `.claude/skills/` directory, symlink each skill subdirectory into the agent's skill path so the agent runner picks them up.

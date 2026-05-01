@@ -78,13 +78,13 @@ The composer inlines each file as a separate fragment. Behaviour is identical to
 }
 ```
 
-| Field         | Purpose                                                                                                                             |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `repos`       | Cloned on first boot. SSH URLs rewritten to HTTPS using `NANOCLAW_GITHUB_TOKEN` if available. `postClone` runs from the cloned dir. |
-| `tools`       | Shell commands run during init. Idempotent.                                                                                         |
-| `mounts`      | Host paths mounted into the container. Validated against the allowlist.                                                             |
-| `ports`       | Docker port mappings (`host:container`).                                                                                            |
-| `skills_repo` | Name of one of the cloned repos whose `.claude/skills/` is symlinked into the agent.                                                |
+| Field         | Purpose                                                                                                                                 |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `repos`       | Cloned on first boot. SSH URLs rewritten to HTTPS using `$GH_TOKEN`/`$GITHUB_TOKEN` if available. `postClone` runs from the cloned dir. |
+| `tools`       | Shell commands run during init. Idempotent.                                                                                             |
+| `mounts`      | Host paths mounted into the container. Validated against the allowlist.                                                                 |
+| `ports`       | Docker port mappings (`host:container`).                                                                                                |
+| `skills_repo` | Name of one of the cloned repos whose `.claude/skills/` is symlinked into the agent.                                                    |
 
 Profile changes take effect on the next worker spawn. Existing workers re-apply the profile on resume.
 
@@ -176,7 +176,14 @@ Behaviour:
 - `~/` expansion is supported in `path`.
 - The token value never lands on disk inside the container — only in the process env.
 
-This is the generic version of the older `NANOCLAW_GITHUB_TOKEN_PATH` env knob — that still works for backwards compatibility; new credentials go in `container_credentials`.
+This is the only mechanism for injecting per-host credentials into containers. For GitHub specifically, the canonical entries are:
+
+```json
+{ "env": "GH_TOKEN", "path": "~/.config/github/pat" },
+{ "env": "GITHUB_TOKEN", "path": "~/.config/github/pat" }
+```
+
+`GH_TOKEN` is what the GitHub CLI checks first; `GITHUB_TOKEN` is the fallback for `gh` and a long tail of other tools (Octokit, gh-auth scripts, GitHub Actions runners). `worker-init.sh` reads the same env vars for HTTPS clone rewrites when SSH isn't available.
 
 ## See also
 
