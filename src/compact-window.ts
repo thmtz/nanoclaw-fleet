@@ -71,7 +71,13 @@ function loadNeuralwattLimits(limitsPath: string = defaultLimitsPath()): Record<
     const data = JSON.parse(fs.readFileSync(limitsPath, 'utf-8')) as Record<string, number>;
     nwLimitsCache = { mtime: stat.mtimeMs, data };
     return data;
-  } catch {
+  } catch (err) {
+    // Cache regenerates on the shim's next /v1/models refresh, so this
+    // is recoverable — but corruption shouldn't be invisible. Workers
+    // fall through to DEFAULT_FALLBACK_WINDOW until the cache repairs.
+    console.warn(
+      `[compact-window] Failed to read NW limits cache at ${limitsPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return {};
   }
 }
