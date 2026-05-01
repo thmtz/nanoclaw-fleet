@@ -20,6 +20,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
+import { resolveCompactWindow } from './compact-window.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { readEnvFile } from './env.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
@@ -607,6 +608,14 @@ async function buildContainerArgs(
       args.push('-e', `${key}=${value}`);
     }
   }
+
+  // Auto-compact window — resolve from the worker's model so 1M-context
+  // Claude / shorter-context Neuralwatt models compact at sensible
+  // thresholds instead of a one-size-fits-all 165k. See compact-window.ts.
+  const modelForCompact = providerContribution.env?.ANTHROPIC_MODEL;
+  const compactWindow = resolveCompactWindow(modelForCompact);
+  args.push('-e', `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${compactWindow}`);
+  log.info('Resolved auto-compact window', { containerName, model: modelForCompact, window: compactWindow });
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection.
