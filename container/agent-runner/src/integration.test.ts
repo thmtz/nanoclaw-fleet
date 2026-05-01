@@ -143,6 +143,49 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
+  it('system-notice writes (e.g. compaction notice) do NOT count as agent reply', async () => {
+    // Regression guard: pre/post-compaction notices land in chat as
+    // host-side housekeeping (kind 'chat', delivered to the user's
+    // channel) — but they're NOT the agent's reply. Without the
+    // systemNotice flag they'd increment chatDeliveryCount, the
+    // agent's actual trailing-text reply would be dropped, and the
+    // user would see the notice but no real answer.
+    insertMessage(
+      'm1',
+      { sender: 'Alice', text: 'Hi' },
+      { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' },
+    );
+
+    const reply = 'Here is the answer the user actually asked for.';
+    const provider = new MockProvider({}, () => {
+      // Simulate sendCompactionNotice firing mid-turn.
+      writeMessageOut({
+        id: 'compaction-notice-1',
+        kind: 'chat',
+        platform_id: 'chan-1',
+        channel_type: 'discord',
+        thread_id: 'thread-1',
+        content: JSON.stringify({ text: '⏳ Compacting context…' }),
+        systemNotice: true,
+      });
+      return reply;
+    });
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 1500);
+
+    await waitFor(() => getUndeliveredMessages().length >= 2, 1500);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(2);
+    const texts = out.map((m) => JSON.parse(m.content).text);
+    expect(texts).toContain('⏳ Compacting context…');
+    expect(texts).toContain(reply);
+
+    await loopPromise.catch(() => {});
+  });
+
   it('salvages internal-only output when no chat delivery ran (rather than going silent)', async () => {
     // Bug PR #93 surfaced: agent emits ONLY <internal>...</internal> with no
     // chat delivery via tool. Old behavior stripped the wrapper, leaving

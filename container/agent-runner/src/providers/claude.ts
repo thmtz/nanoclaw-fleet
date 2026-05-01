@@ -224,6 +224,7 @@ export function sendCompactionNotice(trigger: string): void {
       content: JSON.stringify({
         text: `⏳ Compacting context (${trigger})… I'll be back in a moment.`,
       }),
+      systemNotice: true,
     });
     log(`Sent compaction notice (trigger=${trigger})`);
   } catch (err) {
