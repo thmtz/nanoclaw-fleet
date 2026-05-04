@@ -81,4 +81,23 @@ describe('resolveModelForBackend', () => {
       name: 'ModelResolutionError',
     });
   });
+
+  // Regression: a hung shim (accepting connections but not responding) used
+  // to block the fleet handler indefinitely. The resolver now applies an
+  // AbortSignal.timeout, and on abort throws ModelResolutionError with a
+  // timeout-flavored message instead of propagating the raw TimeoutError
+  // (which the handler can't categorize).
+  it('throws ModelResolutionError with a timeout message when fetch aborts', async () => {
+    mockFetch(() => {
+      // Simulate what the platform throws when AbortSignal.timeout fires —
+      // skip the real wall-clock wait so the test stays fast.
+      const err = new Error('The operation was aborted due to timeout');
+      err.name = 'TimeoutError';
+      throw err;
+    });
+    await expect(resolveModelForBackend('neuralwatt', 'kimi')).rejects.toMatchObject({
+      name: 'ModelResolutionError',
+      message: expect.stringContaining('did not respond within'),
+    });
+  });
 });

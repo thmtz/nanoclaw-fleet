@@ -24,6 +24,7 @@ import { readEnvFile } from '../../env.js';
 import { log } from '../../log.js';
 
 const DEFAULT_SHIM_HOST_URL = 'http://127.0.0.1:3003';
+const RESOLVE_TIMEOUT_MS = 5000;
 
 export class ModelResolutionError extends Error {
   constructor(message: string) {
@@ -52,11 +53,20 @@ async function resolveNeuralwattModel(model: string): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, '')}/models/resolve/${encodeURIComponent(model)}`;
   let resp: Response;
   try {
-    resp = await fetch(url);
+    // Bounded timeout: model resolution is a local HTTP hop. Without a
+    // timeout, a hung shim (accepting connections but not responding —
+    // distinct from a dead shim, which fails fast with ECONNREFUSED) would
+    // block the calling fleet handler indefinitely, freezing the master
+    // agent's turn with no error to surface.
+    resp = await fetch(url, { signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS) });
   } catch (err) {
+    const reason =
+      err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+        ? `did not respond within ${RESOLVE_TIMEOUT_MS}ms`
+        : `was unreachable (${String(err)})`;
     throw new ModelResolutionError(
-      `Could not reach the Neuralwatt shim at ${baseUrl} to validate model "${model}" (${String(err)}). ` +
-        `Start the shim (systemctl --user start nanoclaw-shim) and retry, or check NW_SHIM_HOST_URL.`,
+      `Neuralwatt shim at ${baseUrl} ${reason} when validating model "${model}". ` +
+        `Check the shim (systemctl --user status nanoclaw-shim) and retry, or check NW_SHIM_HOST_URL.`,
     );
   }
   let body: { model?: string; match?: string; error?: string; candidates?: string[] } = {};
