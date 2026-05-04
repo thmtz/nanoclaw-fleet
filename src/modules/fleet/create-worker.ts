@@ -42,6 +42,7 @@ import { writeDestinations } from '../agent-to-agent/write-destinations.js';
 import { readContainerConfig, writeContainerConfig } from '../../container-config.js';
 import { logWorkerEvent } from './events.js';
 import { generateId, normalizeName, notifyAgent, setFleetBackend } from './lib.js';
+import { ModelResolutionError, resolveModelForBackend } from './model-resolver.js';
 import { provisionDiscordChannel } from './provision.js';
 import { applyProfileToContainerConfig, loadWorkerProfile } from './worker-profile.js';
 import { createDestination as _ensureCreateDestImported } from '../agent-to-agent/db/agent-destinations.js';
@@ -234,6 +235,18 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
     return;
   }
 
+  let resolvedModel: string | undefined;
+  try {
+    resolvedModel = await resolveModelForBackend(backend, model);
+  } catch (err) {
+    if (err instanceof ModelResolutionError) {
+      notifyAgent(session, `create_worker rejected: ${err.message} (no worker created.)`);
+      log.warn('create_worker model resolution failed', { localName, backend, model, err: err.message });
+      return;
+    }
+    throw err;
+  }
+
   const agentGroupId = generateId('ag');
   const now = new Date().toISOString();
 
@@ -245,12 +258,12 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
     created_at: now,
     status: 'active',
     fleet_backend: backend,
-    fleet_model: model ?? null,
+    fleet_model: resolvedModel ?? null,
     fleet_role: 'worker',
   };
   createAgentGroup(newGroup);
   initGroupFilesystem(newGroup, { instructions: instructions ?? undefined });
-  setFleetBackend(localName, backend, model);
+  setFleetBackend(localName, backend, resolvedModel);
 
   // Apply the user's worker profile (repos / tools / mounts / skills) to
   // the new worker's container.json so the next container boot runs
@@ -282,13 +295,13 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
 
   notifyAgent(
     session,
-    `Worker "${localName}" created on ${backend}${model ? ` (${model})` : ''}. ${provision.statusText}. Message it with <message to="${localName}">...</message>.`,
+    `Worker "${localName}" created on ${backend}${resolvedModel ? ` (${resolvedModel})` : ''}. ${provision.statusText}. Message it with <message to="${localName}">...</message>.`,
   );
   log.info('Worker created', {
     agentGroupId,
     localName,
     backend,
-    model,
+    model: resolvedModel,
     messagingGroupId: provision.messagingGroupId,
     parent: sourceGroup.id,
   });
@@ -297,7 +310,7 @@ export async function handleCreateWorker(content: Record<string, unknown>, sessi
     event: 'created',
     worker: localName,
     folder: localName,
-    details: { agentGroupId, backend, model: model ?? null, parent: sourceGroup.folder },
+    details: { agentGroupId, backend, model: resolvedModel ?? null, parent: sourceGroup.folder },
   });
 }
 
@@ -310,14 +323,31 @@ async function resumeWorker(
   const { backend, model } = opts;
   const now = new Date().toISOString();
 
+  let resolvedModel: string | undefined;
+  try {
+    resolvedModel = await resolveModelForBackend(backend, model);
+  } catch (err) {
+    if (err instanceof ModelResolutionError) {
+      notifyAgent(session, `create_worker (resume) rejected: ${err.message} ("${existing.folder}" stays archived.)`);
+      log.warn('resumeWorker model resolution failed', {
+        folder: existing.folder,
+        backend,
+        model,
+        err: err.message,
+      });
+      return;
+    }
+    throw err;
+  }
+
   updateAgentGroup(existing.id, {
     status: 'active',
     agent_provider: backend,
     fleet_backend: backend,
-    fleet_model: model ?? null,
+    fleet_model: resolvedModel ?? null,
     fleet_role: 'worker',
   });
-  setFleetBackend(existing.folder, backend, model);
+  setFleetBackend(existing.folder, backend, resolvedModel);
 
   // Re-apply the current worker profile on resume. The archived worker's
   // container.json was captured before the user may have edited their
@@ -376,14 +406,14 @@ async function resumeWorker(
 
   notifyAgent(
     session,
-    `Worker "${localName}" resumed from archive on ${backend}${model ? ` (${model})` : ''}. ${channelStatus}. Prior sessions and workspace preserved.`,
+    `Worker "${localName}" resumed from archive on ${backend}${resolvedModel ? ` (${resolvedModel})` : ''}. ${channelStatus}. Prior sessions and workspace preserved.`,
   );
-  log.info('Worker resumed', { agentGroupId: existing.id, localName, backend, model });
+  log.info('Worker resumed', { agentGroupId: existing.id, localName, backend, model: resolvedModel });
   logWorkerEvent({
     timestamp: new Date().toISOString(),
     event: 'resumed',
     worker: localName,
     folder: existing.folder,
-    details: { agentGroupId: existing.id, backend, model: model ?? null },
+    details: { agentGroupId: existing.id, backend, model: resolvedModel ?? null },
   });
 }

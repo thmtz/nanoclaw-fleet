@@ -17,6 +17,7 @@ import { log } from '../../log.js';
 import type { Session } from '../../types.js';
 import { logWorkerEvent } from './events.js';
 import { normalizeName, notifyAgent, setFleetBackend } from './lib.js';
+import { ModelResolutionError, resolveModelForBackend } from './model-resolver.js';
 
 export async function handleSwitchBackend(content: Record<string, unknown>, session: Session): Promise<void> {
   const name = content.name as string;
@@ -48,8 +49,24 @@ export async function handleSwitchBackend(content: Record<string, unknown>, sess
     return;
   }
 
-  updateAgentGroup(target.id, { agent_provider: backend, fleet_backend: backend, fleet_model: model ?? null });
-  setFleetBackend(target.folder, backend, model);
+  let resolvedModel: string | undefined;
+  try {
+    resolvedModel = await resolveModelForBackend(backend, model);
+  } catch (err) {
+    if (err instanceof ModelResolutionError) {
+      notifyAgent(session, `switch_backend rejected: ${err.message} (no changes made to "${localName}".)`);
+      log.warn('switch_backend model resolution failed', { localName, backend, model, err: err.message });
+      return;
+    }
+    throw err;
+  }
+
+  updateAgentGroup(target.id, {
+    agent_provider: backend,
+    fleet_backend: backend,
+    fleet_model: resolvedModel ?? null,
+  });
+  setFleetBackend(target.folder, backend, resolvedModel);
 
   // Kill running container so next wake uses new provider env/mounts.
   for (const s of getSessionsByAgentGroup(target.id)) {
@@ -58,14 +75,14 @@ export async function handleSwitchBackend(content: Record<string, unknown>, sess
 
   notifyAgent(
     session,
-    `Worker "${localName}" switched to ${backend}${model ? ` (${model})` : ''}. Container will use the new provider on next message.`,
+    `Worker "${localName}" switched to ${backend}${resolvedModel ? ` (${resolvedModel})` : ''}. Container will use the new provider on next message.`,
   );
-  log.info('Worker backend switched', { agentGroupId: target.id, localName, backend, model });
+  log.info('Worker backend switched', { agentGroupId: target.id, localName, backend, model: resolvedModel });
   logWorkerEvent({
     timestamp: new Date().toISOString(),
     event: 'backend_switched',
     worker: localName,
     folder: target.folder,
-    details: { agentGroupId: target.id, backend, model: model ?? null, fleet_role: target.fleet_role },
+    details: { agentGroupId: target.id, backend, model: resolvedModel ?? null, fleet_role: target.fleet_role },
   });
 }

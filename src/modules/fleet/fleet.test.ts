@@ -50,6 +50,18 @@ vi.mock('./discord-channel.js', () => ({
   createDiscordChannel: vi.fn(),
   deleteDiscordChannel: vi.fn(),
 }));
+// Stub the model resolver — these tests don't have a real shim to talk to.
+// Identity-resolve mirrors a healthy shim returning an exact match. Tests
+// that need a 404/connect-error path can override this per-case.
+vi.mock('./model-resolver.js', () => ({
+  ModelResolutionError: class ModelResolutionError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'ModelResolutionError';
+    }
+  },
+  resolveModelForBackend: vi.fn(async (_backend: string, model: string | undefined) => model),
+}));
 vi.mock('../agent-to-agent/write-destinations.js', () => ({
   writeDestinations: vi.fn(),
 }));
@@ -264,6 +276,36 @@ describe('switch_backend', () => {
     expect(w?.fleet_model).toBe('kimi-k2.5');
     const cfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/epsilon/container.json', 'utf-8'));
     expect(cfg.provider).toBe('neuralwatt');
+  });
+
+  it('persists the canonical model id returned by the resolver, not the user input', async () => {
+    const resolver = await import('./model-resolver.js');
+    await handleCreateWorker({ name: 'epsilon-canon', backend: 'claude' }, makeMasterSession());
+    vi.mocked(resolver.resolveModelForBackend).mockResolvedValueOnce('zai-org/GLM-5.1-FP8');
+    await handleSwitchBackend({ name: 'epsilon-canon', backend: 'neuralwatt', model: 'GLM-5.1' }, makeMasterSession());
+    const w = getAgentGroupByFolder('epsilon-canon');
+    expect(w?.fleet_model).toBe('zai-org/GLM-5.1-FP8');
+    const cfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/epsilon-canon/container.json', 'utf-8'));
+    expect(cfg.providers.neuralwatt.model).toBe('zai-org/GLM-5.1-FP8');
+  });
+
+  it('rejects unresolvable models without touching DB or container.json', async () => {
+    const resolver = await import('./model-resolver.js');
+    await handleCreateWorker({ name: 'epsilon-reject', backend: 'claude', model: 'opus-4.7' }, makeMasterSession());
+    const beforeDb = getAgentGroupByFolder('epsilon-reject');
+    const beforeCfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/epsilon-reject/container.json', 'utf-8'));
+
+    vi.mocked(resolver.resolveModelForBackend).mockRejectedValueOnce(
+      new resolver.ModelResolutionError('Neuralwatt model "bogus" not found.'),
+    );
+    await handleSwitchBackend({ name: 'epsilon-reject', backend: 'neuralwatt', model: 'bogus' }, makeMasterSession());
+
+    const afterDb = getAgentGroupByFolder('epsilon-reject');
+    const afterCfg = JSON.parse(fs.readFileSync(TEST_DIR + '/groups/epsilon-reject/container.json', 'utf-8'));
+    expect(afterDb?.agent_provider).toBe(beforeDb?.agent_provider);
+    expect(afterDb?.fleet_backend).toBe(beforeDb?.fleet_backend);
+    expect(afterDb?.fleet_model).toBe(beforeDb?.fleet_model);
+    expect(afterCfg).toEqual(beforeCfg);
   });
 });
 
