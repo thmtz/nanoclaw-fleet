@@ -80,6 +80,16 @@ The Neuralwatt shim is a separate process from NanoClaw. It reads `data/worker-b
 
 `syncShimBackendConfig()` in `src/modules/fleet/lib.ts` is called from `setFleetBackend` whenever the active backend is Neuralwatt. It reads `NW_SHIM_CONFIG_PATH` from the environment, opens the shim's `worker-backends.json`, and writes/updates the entry for this folder. Best effort — if the file is missing or unwritable, the host logs a warning and continues. Workers run fine without Neuralwatt; the sync only matters when you flip a worker onto the shim.
 
+## Pre-flight model validation
+
+`switch_backend`, `create_worker`, and the resume path all run the requested model through `resolveModelForBackend(backend, model)` (`src/modules/fleet/model-resolver.ts`) before any DB or `container.json` write. For `neuralwatt` this is a `GET <NW_SHIM_HOST_URL>/models/resolve/<query>` against the shim — the shim already does the fuzzy matching and knows the live model catalogue. The canonical id from the shim (e.g. `zai-org/GLM-5.1-FP8` for input `GLM-5.1`) is what gets persisted.
+
+If the shim returns 404 (no match) or 503 (catalogue empty) or the connect fails, the helper throws `ModelResolutionError` and the handler `notifyAgent`s the master with the resolver's message — nothing is persisted. This avoids the failure mode where a bad model id silently lands in `container.json` + `worker-backends.json` and surfaces only later as an SDK "model not available" error inside the worker container, far from where the bad input came in.
+
+`claude` is pass-through. The SDK validates Claude model ids downstream and there's no shim hop where a bad value can poison routing for a container's whole lifetime.
+
+`NW_SHIM_HOST_URL` defaults to `http://127.0.0.1:3003` (the host's view of the shim, distinct from the container's `host.docker.internal:3003`).
+
 ## Runtime model switching
 
 Within Neuralwatt:
@@ -121,17 +131,18 @@ The streaming logic lives in the v1 shim (`tools/anthropic-shim.ts`) and is reus
 
 ## Files
 
-| File | Role |
-|-|-|
-| `src/modules/fleet/lib.ts` | `setFleetBackend`, `syncShimBackendConfig` |
-| `src/providers/claude.ts` | Host-side provider config: emits `ANTHROPIC_MODEL` from container.json |
-| `src/providers/neuralwatt.ts` | Host-side provider config: emits `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` |
-| `src/providers/provider-container-registry.ts` | Registration plumbing |
-| `container/agent-runner/src/providers/claude.ts` | Container-side default provider |
-| `container/agent-runner/src/providers/neuralwatt.ts` | Container-side alias to ClaudeProvider |
-| `tools/anthropic-shim.ts` | The shim itself (v1 fleet, reused) |
-| `data/worker-backends.json` | Shim's per-folder backend/model state |
-| `groups/<folder>/container.json` | Per-agent-group provider config |
+| File                                                 | Role                                                                        |
+| ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| `src/modules/fleet/lib.ts`                           | `setFleetBackend`, `syncShimBackendConfig`                                  |
+| `src/modules/fleet/model-resolver.ts`                | `resolveModelForBackend` (pre-flight model validation against the shim)     |
+| `src/providers/claude.ts`                            | Host-side provider config: emits `ANTHROPIC_MODEL` from container.json      |
+| `src/providers/neuralwatt.ts`                        | Host-side provider config: emits `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` |
+| `src/providers/provider-container-registry.ts`       | Registration plumbing                                                       |
+| `container/agent-runner/src/providers/claude.ts`     | Container-side default provider                                             |
+| `container/agent-runner/src/providers/neuralwatt.ts` | Container-side alias to ClaudeProvider                                      |
+| `tools/anthropic-shim.ts`                            | The shim itself (v1 fleet, reused)                                          |
+| `data/worker-backends.json`                          | Shim's per-folder backend/model state                                       |
+| `groups/<folder>/container.json`                     | Per-agent-group provider config                                             |
 
 ## Limitations
 
