@@ -16,6 +16,7 @@ import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { startOutboundWakeServer, stopOutboundWakeServer } from './outbound-wake.js';
 import { startStatusPin, stopStatusPin } from './modules/status-pin/index.js';
 import { startResourceMonitor, stopResourceMonitor } from './modules/resource-monitor/index.js';
+import { postHostStartupNotice } from './modules/startup-notice/index.js';
 import { getActiveContainerCount } from './container-runner.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
@@ -240,6 +241,11 @@ async function main(): Promise<void> {
   // 6. Start host sweep
   startHostSweep();
   log.info('Host sweep started');
+
+  // 7. Best-effort: post a "host restarted" notice to the master agent's
+  // channel. Gives the user a sign of life and the master agent restart
+  // context for its next turn. No-op when no master is registered.
+  postHostStartupNotice();
 
   log.info('NanoClaw running');
 }

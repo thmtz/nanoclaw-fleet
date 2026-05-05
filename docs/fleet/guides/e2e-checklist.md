@@ -142,6 +142,20 @@ If missing: check `ncf logs <worker>` for the worker-init `skills: linked N from
 
 (Regression seen 2026-04-30: NWCS skills missing from `better` and others because (a) the SSH→HTTPS rewrite broke the clone — fixed in PR #105 — and (b) `worker-init.sh` only checked `<repo>/.claude/skills/`, missing repos that put skills at the root. Both addressed in `fix/nwcs-skills-layout`.)
 
+### 4d-bis. Startup notice (master sees a "host restarted" message after every host boot)
+
+The host posts a one-shot `🚀 NanoClaw host restarted.` chat to the master agent's channel after delivery polls + sweep are up. No-op when there is no master agent group yet, no session, or no messaging group.
+
+```bash
+# Restart the host (with confirmation per CLAUDE.local.md), then check the master channel
+# in Discord — there should be a single new "🚀 NanoClaw host restarted." message.
+
+# Verify in logs the host believed it was posted
+grep -i "Startup notice" logs/nanoclaw.log | tail -3
+# Expect: "Startup notice posted to master" with backend + model fields.
+# "Startup notice skipped (no master target)" only on a fresh install.
+```
+
 ### 4e. Resource monitor (host-side background polling for memory/disk/container alerts)
 
 The resource monitor runs every 5 minutes and posts to #master when memory ≥80%, disk ≥80%, or active containers ≥80% of `MAX_CONCURRENT_CONTAINERS`. Hysteresis: alert once on crossing, clear once on dropping below 70% (60% for containers).
