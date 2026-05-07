@@ -22,12 +22,12 @@ agent_groups (
 
 Defined in `container/agent-runner/src/mcp-tools/fleet.ts`. Each tool emits a system action via the outbound DB rather than calling the host directly; the host's delivery handler does the real work. This keeps the agent runner unaware of host internals and matches v2's existing pattern for `create_agent` and `install_packages`.
 
-| Tool | Args | What happens |
-|-|-|-|
-| `create_worker` | `name`, `backend?`, `model?`, `instructions?` | Provisions a new worker (agent_group + folder + container.json + Discord channel + bidirectional destinations). Master is notified via inbound chat when ready. |
-| `destroy_worker` | `name`, `delete_channel?` | Stops the container, archives the agent_group, optionally deletes the Discord channel. Workspace and SDK session preserved. |
-| `switch_backend` | `name` (or `master`/`self`), `backend`, `model?` | Updates `agent_provider` and `container.json::providers.<backend>`, kills the container; next message uses the new provider. |
-| `list_workers` | none | Host writes a formatted list as a chat message into the master's inbound DB. |
+| Tool             | Args                                             | What happens                                                                                                                                                    |
+| ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_worker`  | `name`, `backend?`, `model?`, `instructions?`    | Provisions a new worker (agent_group + folder + container.json + Discord channel + bidirectional destinations). Master is notified via inbound chat when ready. |
+| `destroy_worker` | `name`, `delete_channel?`                        | Stops the container, archives the agent_group, optionally deletes the Discord channel. Workspace and SDK session preserved.                                     |
+| `switch_backend` | `name` (or `master`/`self`), `backend`, `model?` | Updates `agent_provider` and `container.json::providers.<backend>`, kills the container; next message uses the new provider.                                    |
+| `list_workers`   | none                                             | Host writes a formatted list as a chat message into the master's inbound DB.                                                                                    |
 
 The container side returns immediately with a status string; the actual work happens on the host. The master is told "you'll be notified when done" so it doesn't sit and poll.
 
@@ -66,7 +66,7 @@ The first message in a worker's channel routes through the v2 router:
 1. **Routing.** `src/router.ts` resolves the messaging_group, finds the agent_group, opens the session.
 2. **Inbound write.** Message goes into `data/v2-sessions/<ag>/<sess>/inbound.db`.
 3. **Wake.** Host POSTs `http://host.docker.internal:3100/wake/<sess>`. If the container isn't running, `src/container-runner.ts` spawns one.
-4. **Container spawn.** Bind mounts: `groups/<folder>/` at `/workspace/group/`, the session DBs at known paths, allowlist-validated additional mounts. Env: `ANTHROPIC_BASE_URL` set by the active provider's container-config function, `ANTHROPIC_MODEL` from `container.json::providers.<backend>.model`, `NANOCLAW_PROVIDER` from `agent_provider`, `NANOCLAW_FLEET_ROLE`, plus any worker profile env.
+4. **Container spawn.** Bind mounts: session folder (with inbound/outbound DBs) at `/workspace/`, `groups/<folder>/` at `/workspace/agent/`, allowlist-validated additional mounts at `/workspace/extra/<name>/`. Env: `ANTHROPIC_BASE_URL` set by the active provider's container-config function, `ANTHROPIC_MODEL` from `container.json::providers.<backend>.model`, `NANOCLAW_PROVIDER` from `agent_provider`, `NANOCLAW_FLEET_ROLE`, plus any worker profile env.
 5. **`worker-init.sh`** runs: clones repos, runs `postClone`, links skills, runs profile tools.
 6. **Agent runner starts.** The SDK opens the session (resuming `stored_session_id` if present) and begins polling the inbound DB.
 
@@ -118,16 +118,16 @@ Workspace and SDK session are untouched. Sending a message resumes the SDK's `st
 
 ## Files
 
-| File | Role |
-|-|-|
-| `container/agent-runner/src/mcp-tools/fleet.ts` | MCP tool definitions (create/destroy/switch/list) |
-| `src/modules/fleet/create-worker.ts` | Provision flow |
-| `src/modules/fleet/destroy-worker.ts` | Archive + channel cleanup |
-| `src/modules/fleet/switch-backend.ts` | Backend swap |
-| `src/modules/fleet/list-workers.ts` | List → chat message |
-| `src/modules/fleet/discord-channel.ts` | Discord REST wrapper |
-| `src/modules/fleet/provision.ts` | messaging_groups wiring |
-| `src/modules/fleet/lib.ts` | `setFleetBackend`, `syncShimBackendConfig`, helpers |
-| `src/modules/fleet/events.ts` | `logs/worker-events.jsonl` writer |
-| `src/db/migrations/module-fleet.ts` | Adds `fleet_role`, `status`, `fleet_backend`, `fleet_model` columns |
-| `src/container-runner.ts` | Spawn, env, mounts, crash-loop guard |
+| File                                            | Role                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------- |
+| `container/agent-runner/src/mcp-tools/fleet.ts` | MCP tool definitions (create/destroy/switch/list)                   |
+| `src/modules/fleet/create-worker.ts`            | Provision flow                                                      |
+| `src/modules/fleet/destroy-worker.ts`           | Archive + channel cleanup                                           |
+| `src/modules/fleet/switch-backend.ts`           | Backend swap                                                        |
+| `src/modules/fleet/list-workers.ts`             | List → chat message                                                 |
+| `src/modules/fleet/discord-channel.ts`          | Discord REST wrapper                                                |
+| `src/modules/fleet/provision.ts`                | messaging_groups wiring                                             |
+| `src/modules/fleet/lib.ts`                      | `setFleetBackend`, `syncShimBackendConfig`, helpers                 |
+| `src/modules/fleet/events.ts`                   | `logs/worker-events.jsonl` writer                                   |
+| `src/db/migrations/module-fleet.ts`             | Adds `fleet_role`, `status`, `fleet_backend`, `fleet_model` columns |
+| `src/container-runner.ts`                       | Spawn, env, mounts, crash-loop guard                                |
