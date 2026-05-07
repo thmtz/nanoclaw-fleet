@@ -47,6 +47,14 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitPlanMode',
   'EnterWorktree',
   'ExitWorktree',
+  // Claude Agent Team tools — workers communicate via NanoClaw destinations
+  // (`mcp__nanoclaw__send_message`), not the SDK's inter-agent channel.
+  // `SendMessage` was a footgun: agents confused it with our chat tool and
+  // shipped substantive replies into an SDK-internal teammate inbox that
+  // nobody reads. Disallow the trio to remove the choice.
+  'TeamCreate',
+  'TeamDelete',
+  'SendMessage',
 ];
 
 // Tool allowlist for NanoClaw agent containers
@@ -62,9 +70,6 @@ const TOOL_ALLOWLIST = [
   'Task',
   'TaskOutput',
   'TaskStop',
-  'TeamCreate',
-  'TeamDelete',
-  'SendMessage',
   'TodoWrite',
   'ToolSearch',
   'Skill',
