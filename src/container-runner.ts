@@ -434,7 +434,32 @@ function buildMounts(
     mounts.push({ hostPath: tailscaleSock, containerPath: tailscaleSock, readonly: false });
   }
 
+  // Pre-create host-side mount-point dirs for any mount nested under
+  // /workspace/. Without this, Docker's runc creates them as root when
+  // setting up the bind mounts (the daemon runs in the host namespace), and
+  // a later `purgeArchivedWorker` (`create_worker --fresh` on a recreated
+  // name) hits EACCES trying to rmdir them. Pre-creating as the host user
+  // means Docker reuses our dirs and ownership stays correct.
+  precreateNestedMountTargets(mounts, sessDir);
+
   return mounts;
+}
+
+export function precreateNestedMountTargets(mounts: VolumeMount[], sessDir: string): void {
+  const prefix = '/workspace/';
+  for (const mount of mounts) {
+    if (!mount.containerPath.startsWith(prefix) || mount.containerPath === '/workspace') continue;
+    let hostStat: fs.Stats;
+    try {
+      hostStat = fs.statSync(mount.hostPath);
+    } catch {
+      continue;
+    }
+    if (!hostStat.isDirectory()) continue;
+    const rel = mount.containerPath.slice(prefix.length);
+    const target = path.join(sessDir, rel);
+    fs.mkdirSync(target, { recursive: true });
+  }
 }
 
 /**
