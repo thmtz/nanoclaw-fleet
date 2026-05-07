@@ -7,7 +7,7 @@ import path from 'path';
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { pickOauthToken, readContainerCredentials } from './container-runner.js';
+import { pickOauthToken, precreateNestedMountTargets, readContainerCredentials } from './container-runner.js';
 
 // readContainerCredentials reads `~/.config/nanoclaw/config.json`. Patch
 // HOME to a temp dir so tests don't touch the real user config.
@@ -97,5 +97,79 @@ describe('readContainerCredentials', () => {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, '{not json');
     expect(readContainerCredentials()).toEqual([]);
+  });
+});
+
+describe('precreateNestedMountTargets', () => {
+  // Regression: create_worker --fresh failed with EACCES on rmdir of
+  // <sessdir>/extra/<name> because Docker's runc had created those mount
+  // targets as root. Pre-creating them as the host user keeps ownership
+  // correct so purgeArchivedWorker can clean up.
+  let sessDir: string;
+  let hostSrcDir: string;
+
+  beforeEach(() => {
+    sessDir = path.join(TEST_HOME, 'sessions', 'sess-test');
+    hostSrcDir = path.join(TEST_HOME, 'host-src');
+    fs.mkdirSync(sessDir, { recursive: true });
+    fs.mkdirSync(hostSrcDir, { recursive: true });
+  });
+
+  it('creates host-side mount-points for /workspace/extra/<name> mounts', () => {
+    precreateNestedMountTargets(
+      [{ hostPath: hostSrcDir, containerPath: '/workspace/extra/discord', readonly: false }],
+      sessDir,
+    );
+    expect(fs.existsSync(path.join(sessDir, 'extra', 'discord'))).toBe(true);
+  });
+
+  it('creates host-side mount-points for /workspace/agent', () => {
+    precreateNestedMountTargets(
+      [{ hostPath: hostSrcDir, containerPath: '/workspace/agent', readonly: false }],
+      sessDir,
+    );
+    expect(fs.existsSync(path.join(sessDir, 'agent'))).toBe(true);
+  });
+
+  it('skips the /workspace mount itself (it is the session dir)', () => {
+    precreateNestedMountTargets([{ hostPath: hostSrcDir, containerPath: '/workspace', readonly: false }], sessDir);
+    // The function must not create something silly like <sessDir>/<empty>.
+    expect(fs.readdirSync(sessDir)).toEqual([]);
+  });
+
+  it('skips file mounts (only dirs need a pre-created mount-point)', () => {
+    const hostFile = path.join(TEST_HOME, 'somefile.json');
+    fs.writeFileSync(hostFile, '{}');
+    precreateNestedMountTargets(
+      [{ hostPath: hostFile, containerPath: '/workspace/agent/container.json', readonly: true }],
+      sessDir,
+    );
+    expect(fs.existsSync(path.join(sessDir, 'agent'))).toBe(false);
+  });
+
+  it('skips mounts whose hostPath does not exist', () => {
+    precreateNestedMountTargets(
+      [{ hostPath: path.join(TEST_HOME, 'missing'), containerPath: '/workspace/extra/missing', readonly: false }],
+      sessDir,
+    );
+    expect(fs.existsSync(path.join(sessDir, 'extra'))).toBe(false);
+  });
+
+  it('skips mounts outside /workspace/', () => {
+    precreateNestedMountTargets(
+      [{ hostPath: hostSrcDir, containerPath: '/home/node/.claude', readonly: false }],
+      sessDir,
+    );
+    expect(fs.readdirSync(sessDir)).toEqual([]);
+  });
+
+  it('is idempotent (safe to call when target already exists)', () => {
+    fs.mkdirSync(path.join(sessDir, 'extra', 'discord'), { recursive: true });
+    expect(() =>
+      precreateNestedMountTargets(
+        [{ hostPath: hostSrcDir, containerPath: '/workspace/extra/discord', readonly: false }],
+        sessDir,
+      ),
+    ).not.toThrow();
   });
 });
