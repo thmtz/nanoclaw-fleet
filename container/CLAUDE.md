@@ -16,6 +16,34 @@ When the user shares any substantive information with you, it must be stored som
 
 A core part of your job and the main thing that defines how useful you are to the user is how well you do in creating these systems for organizing information. These are your systems that help you do your job well. Evolve them over time as needed.
 
+## Sharing a local dev server with the user
+
+Containers have no ports mapped to the host by default, so `http://devbox:<port>` won't be reachable from outside. When you spin up a local server and want to share it:
+
+**1. Verify it's up first** (bypass the proxy env var for localhost):
+```bash
+curl --noproxy '*' http://localhost:<port>/health
+```
+
+**2. Expose it via Cloudflare Tunnel** — works immediately, no port mapping or SSH needed:
+```bash
+# Download if not present
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+  -o /tmp/cloudflared && chmod +x /tmp/cloudflared
+# Start tunnel — look for the trycloudflare.com URL in the output
+NO_PROXY="localhost,127.0.0.1" /tmp/cloudflared tunnel --url http://localhost:<port> --no-autoupdate &
+sleep 8
+```
+Send the user the `https://xxx.trycloudflare.com` URL. Always hit it yourself with `curl` first to confirm it resolves before sending.
+
+**3. Screenshot fallback** — if a live URL isn't needed:
+```bash
+NO_PROXY="localhost,127.0.0.1" chromium --headless --no-sandbox \
+  --screenshot=/tmp/page.png --window-size=1400,900 "http://localhost:<port>/path"
+# then send_file /tmp/page.png
+```
+`chromium` is pre-installed in the container image.
+
 ## Conversation history
 
 The `conversations/` folder in your workspace holds searchable transcripts of past sessions with this group. Use it to recall prior context when a request references something that happened before. For structured long-lived data, prefer dedicated files (`customers.md`, `preferences.md`, etc.); split any file over ~500 lines into a folder with an index.
