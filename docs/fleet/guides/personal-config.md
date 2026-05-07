@@ -71,7 +71,7 @@ The composer inlines each file as a separate fragment. Behaviour is identical to
       "postClone": "git config core.hooksPath .githooks"
     }
   ],
-  "tools": ["uv tool install /workspace/group/your-tool --force"],
+  "tools": ["uv tool install /workspace/your-tool --force"],
   "mounts": [{ "hostPath": "~/.ssh", "containerPath": "host-ssh", "readonly": true }],
   "ports": ["8080:8080"],
   "skills_repo": "your-skills-repo-name"
