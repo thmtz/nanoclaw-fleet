@@ -458,7 +458,24 @@ export function precreateNestedMountTargets(mounts: VolumeMount[], sessDir: stri
     if (!hostStat.isDirectory()) continue;
     const rel = mount.containerPath.slice(prefix.length);
     const target = path.join(sessDir, rel);
-    fs.mkdirSync(target, { recursive: true });
+    if (fs.existsSync(target)) continue;
+    // Tolerate EACCES: legacy sessions created before this fix have root-owned
+    // intermediate dirs (e.g. <sessDir>/agent owned by root because Docker
+    // created it). We can't mkdir under them. Log and let Docker handle it
+    // the old way for those sessions — new sessions get the clean path.
+    try {
+      fs.mkdirSync(target, { recursive: true });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') {
+        log.warn('Pre-create mount target denied (legacy root-owned parent?) — Docker will create as root', {
+          target,
+          containerPath: mount.containerPath,
+        });
+        continue;
+      }
+      throw err;
+    }
   }
 }
 

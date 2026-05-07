@@ -172,4 +172,25 @@ describe('precreateNestedMountTargets', () => {
       ),
     ).not.toThrow();
   });
+
+  it('tolerates EACCES on a root-owned parent dir (legacy sessions)', () => {
+    // Simulate a legacy session: <sessDir>/agent exists but is unwritable.
+    // The new precreate must not throw — it should log and continue so the
+    // host doesn't crash on every wake of an old session.
+    const legacyParent = path.join(sessDir, 'agent');
+    fs.mkdirSync(legacyParent, { recursive: true });
+    fs.chmodSync(legacyParent, 0o555); // read+exec, no write
+    try {
+      expect(() =>
+        precreateNestedMountTargets(
+          [{ hostPath: hostSrcDir, containerPath: '/workspace/agent/.claude-fragments', readonly: false }],
+          sessDir,
+        ),
+      ).not.toThrow();
+      // The intermediate dir didn't get the new sub-target — Docker will create it.
+      expect(fs.existsSync(path.join(legacyParent, '.claude-fragments'))).toBe(false);
+    } finally {
+      fs.chmodSync(legacyParent, 0o755); // restore for cleanup
+    }
+  });
 });
